@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://json.schemastore.org/databricks-asset-bundles.json
+# Databricks Asset Bundle configuration for DAO AI Builder
+bundle:
+  name: dao_ai_builder
+
+targets:
+  default:
+    workspace:
+      root_path: "/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}"
+
+resources:
+  apps:
+    dao-ai-builder:
+      name: dao-ai-builder
+      description: Visual configuration studio for dao-ai agent systems
+      source_code_path: .
+      # App resources - allow the app's service principal to access these resources
+      resources:
+        - name: serving-endpoint
+          serving_endpoint:
+            name: databricks-claude-sonnet-4
+            permission: CAN_QUERY
+      # Enable on-behalf-of-user authentication
+      # These scopes allow the app to access Databricks APIs on behalf of the user
+      # Reference: https://learn.microsoft.com/en-us/azure/databricks/dev-tools/databricks-apps/auth#user-authorization
+      user_api_scopes:
+        - sql
+        - serving.serving-endpoints
+        - vectorsearch.vector-search-indexes
+        - files.files
+        - dashboards.genie
+        - catalog.connections
+        - catalog.catalogs:read
+        - catalog.schemas:read
+        - catalog.tables:read
+      permissions:
+        - level: CAN_USE
+          group_name: users

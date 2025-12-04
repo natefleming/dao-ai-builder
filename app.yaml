@@ -1,0 +1,22 @@
+# Databricks Apps runtime configuration
+# Databricks Apps default to port 8000
+command:
+  - gunicorn
+  - --bind
+  - 0.0.0.0:8000
+  - --workers
+  - "2"
+  - --timeout
+  - "120"
+  - app:app
+
+env:
+  - name: STATIC_FOLDER
+    value: static
+  - name: PORT
+    value: "8000"
+  - name: DAO_AI_VERSION
+    value: "0.0.28"
+
+# Note: user_api_scopes are configured in databricks.yml, not here
+# This file is for runtime configuration only
