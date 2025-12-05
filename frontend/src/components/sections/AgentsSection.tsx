@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Plus, Trash2, Bot, Edit2, ChevronDown, ChevronUp, FileText, Sparkles, Loader2 } from 'lucide-react';
 import { useConfigStore } from '@/stores/configStore';
 import Button from '../ui/Button';
@@ -296,6 +296,10 @@ function AgentModal({
     selectedTools: [] as string[],
     selectedGuardrails: [] as string[],
   });
+  
+  // Store initial form data for comparison (to detect changes)
+  const [initialFormData, setInitialFormData] = useState<typeof formData | null>(null);
+  const [initialPromptSource, setInitialPromptSource] = useState<PromptSource>('inline');
 
   const handleGeneratePrompt = async (improveExisting = false) => {
     setIsGeneratingPrompt(true);
@@ -356,8 +360,8 @@ function AgentModal({
     }
   };
 
-  // Reset form when modal opens
-  useState(() => {
+  // Reset form when modal opens or editing agent changes
+  useEffect(() => {
     if (editingAgent) {
       const modelKey = Object.entries(llms).find(
         ([, llm]) => llm.name === editingAgent.model?.name
@@ -379,11 +383,10 @@ function AgentModal({
           promptRef = matchedPromptKey;
         }
       } else {
-        inlinePrompt = editingAgent.prompt || '';
+        inlinePrompt = typeof editingAgent.prompt === 'string' ? editingAgent.prompt : '';
       }
       
-      setPromptSource(detectedPromptSource);
-      setFormData({
+      const newFormData = {
         name: editingAgent.name,
         description: editingAgent.description || '',
         modelKey,
@@ -396,21 +399,29 @@ function AgentModal({
         selectedGuardrails: editingAgent.guardrails?.map((g) =>
           Object.entries(guardrails).find(([, gr]) => gr.name === g.name)?.[0] || ''
         ).filter(Boolean) || [],
-      });
+      };
+      
+      setPromptSource(detectedPromptSource);
+      setFormData(newFormData);
+      setInitialFormData(newFormData);
+      setInitialPromptSource(detectedPromptSource);
     } else {
-      setPromptSource('inline');
-      setFormData({
+      const defaultFormData = {
         name: '',
         description: '',
         modelKey: '',
         promptRef: '',
         prompt: 'You are a helpful assistant.',
         handoffPrompt: '',
-        selectedTools: [],
-        selectedGuardrails: [],
-      });
+        selectedTools: [] as string[],
+        selectedGuardrails: [] as string[],
+      };
+      setPromptSource('inline');
+      setFormData(defaultFormData);
+      setInitialFormData(null); // No initial data for new agents
+      setInitialPromptSource('inline');
     }
-  });
+  }, [editingAgent, editingKey, llms, prompts, tools, guardrails]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -443,6 +454,29 @@ function AgentModal({
     
     onClose();
   };
+
+  // Check if form has changes compared to initial state (only for editing)
+  const hasChanges = useMemo(() => {
+    if (!editingKey || !initialFormData) return true; // Always allow submit for new agents
+    
+    // Compare all form fields
+    if (formData.name !== initialFormData.name) return true;
+    if (formData.description !== initialFormData.description) return true;
+    if (formData.modelKey !== initialFormData.modelKey) return true;
+    if (formData.prompt !== initialFormData.prompt) return true;
+    if (formData.handoffPrompt !== initialFormData.handoffPrompt) return true;
+    if (formData.promptRef !== initialFormData.promptRef) return true;
+    if (promptSource !== initialPromptSource) return true;
+    
+    // Compare arrays (tools and guardrails)
+    if (formData.selectedTools.length !== initialFormData.selectedTools.length) return true;
+    if (!formData.selectedTools.every((t, i) => t === initialFormData.selectedTools[i])) return true;
+    
+    if (formData.selectedGuardrails.length !== initialFormData.selectedGuardrails.length) return true;
+    if (!formData.selectedGuardrails.every((g, i) => g === initialFormData.selectedGuardrails[i])) return true;
+    
+    return false;
+  }, [formData, initialFormData, promptSource, initialPromptSource, editingKey]);
 
   return (
     <Modal
@@ -771,7 +805,10 @@ function AgentModal({
           <Button variant="secondary" type="button" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" disabled={llmOptions.length === 0}>
+          <Button 
+            type="submit" 
+            disabled={llmOptions.length === 0 || (!!editingKey && !hasChanges)}
+          >
             {editingKey ? 'Save Changes' : 'Add Agent'}
           </Button>
         </div>
