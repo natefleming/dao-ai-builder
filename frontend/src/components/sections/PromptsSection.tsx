@@ -1,4 +1,4 @@
-import { useState, useEffect, ChangeEvent } from 'react';
+import { useState, useEffect, ChangeEvent, useMemo } from 'react';
 import { Plus, Trash2, Edit2, FileText, Tag, GitBranch, Hash, RefreshCw, Download, Sparkles, Loader2 } from 'lucide-react';
 import { useConfigStore } from '@/stores/configStore';
 import { useCatalogs, useSchemas, usePrompts, usePromptDetails } from '@/hooks/useDatabricks';
@@ -78,6 +78,14 @@ export default function PromptsSection() {
   const [promptSource, setPromptSource] = useState<PromptSource>('new');
   const [schemaSource, setSchemaSource] = useState<SchemaSource>('reference');
   const [refNameManuallyEdited, setRefNameManuallyEdited] = useState(false);
+  
+  // Global service principal for all prompt registry operations
+  type AuthMode = 'none' | 'configured' | 'manual';
+  const [authMode, setAuthMode] = useState<AuthMode>('none');
+  const [globalServicePrincipal, setGlobalServicePrincipal] = useState<string>('');
+  const [manualClientId, setManualClientId] = useState<string>('');
+  const [manualClientSecret, setManualClientSecret] = useState<string>('');
+  
   const [formData, setFormData] = useState({
     refName: '',
     name: '',
@@ -133,67 +141,175 @@ export default function PromptsSection() {
 
   const prompts = config.prompts || {};
   const configuredSchemas = config.schemas || {};
+  const servicePrincipals = config.service_principals || {};
+  const variables = config.variables || {};
   
   // Fetch catalogs and schemas from Databricks
   const { data: catalogs } = useCatalogs();
   const { data: dbSchemas, loading: schemasLoading } = useSchemas(formData.catalog_name || null);
   
+  // Get the service principal config for prompt registry operations
+  // Memoized to prevent infinite re-renders when passed to usePrompts hook
+  const servicePrincipalConfig = useMemo(() => {
+    // Helper to resolve variable references like "*var_name" from the variables config
+    const resolveVariableRef = (value: unknown): unknown => {
+      if (typeof value !== 'string') return value;
+      if (!value.startsWith('*')) return value;
+      
+      const varName = value.slice(1);
+      const variable = variables[varName];
+      if (!variable) return value; // Can't resolve, return as-is
+      
+      // Return the variable definition so the backend can resolve env/secret refs
+      return variable;
+    };
+    
+    if (authMode === 'configured' && globalServicePrincipal && servicePrincipals[globalServicePrincipal]) {
+      const sp = servicePrincipals[globalServicePrincipal];
+      // Resolve any variable references in client_id and client_secret
+      return {
+        client_id: resolveVariableRef(sp.client_id),
+        client_secret: resolveVariableRef(sp.client_secret),
+      };
+    }
+    if (authMode === 'manual' && manualClientId && manualClientSecret) {
+      return { client_id: manualClientId, client_secret: manualClientSecret };
+    }
+    return null;
+  }, [authMode, globalServicePrincipal, servicePrincipals, variables, manualClientId, manualClientSecret]);
+  
   // Fetch existing prompts from MLflow when catalog and schema are selected
   const { data: existingPrompts, loading: promptsLoading, refetch: refetchPrompts } = usePrompts(
     formData.catalog_name || null,
-    formData.schema_name || null
+    formData.schema_name || null,
+    servicePrincipalConfig
   );
   
   // Fetch prompt details when a prompt is selected
   const { data: promptDetails, loading: detailsLoading } = usePromptDetails(
-    formData.existingPromptFullName || null
+    formData.existingPromptFullName || null,
+    servicePrincipalConfig
   );
   
-  // Build alias options from prompt details
-  const aliasOptions = [
-    { value: '', label: 'No alias (use version or latest)' },
-    ...(promptDetails?.aliases || []).map(alias => ({
-      value: alias,
-      label: alias,
-    })),
-  ];
+  // State for template loading errors
+  const [templateError, setTemplateError] = useState<string | null>(null);
+  
+  // Standard aliases that should always be available
+  const STANDARD_ALIASES = ['latest', 'champion', 'default'];
+  
+  // Build alias options - include standard aliases plus any from the prompt
+  const aliasOptions = useMemo(() => {
+    const existingAliases = promptDetails?.aliases || [];
+    // Combine standard aliases with existing ones (deduplicated)
+    const allAliases = [...new Set([...STANDARD_ALIASES, ...existingAliases])];
+    
+    return [
+      { value: '', label: 'Select an alias...' },
+      ...allAliases.map(alias => ({
+        value: alias,
+        label: alias === 'latest' ? 'latest (most recent version)' :
+               alias === 'champion' ? 'champion (production)' :
+               alias === 'default' ? 'default' :
+               existingAliases.includes(alias) ? alias : `${alias} (may not exist)`,
+      })),
+    ];
+  }, [promptDetails?.aliases]);
 
   // Build version options from prompt details
-  const versionOptions = [
-    { value: '', label: promptDetails?.latest_version ? `Latest (v${promptDetails.latest_version})` : 'Latest' },
-    ...(promptDetails?.versions || []).map(v => ({
-      value: v.version,
-      label: `v${v.version}${v.aliases && v.aliases.length > 0 ? ` (${v.aliases.join(', ')})` : ''}`,
-    })),
-  ];
+  const versionOptions = useMemo(() => {
+    const latestVersion = promptDetails?.latest_version ? parseInt(promptDetails.latest_version) : 0;
+    const versions = promptDetails?.versions || [];
+    
+    // If we have versions from the API, use those
+    if (versions.length > 0) {
+      return [
+        { value: '', label: 'Select a version...' },
+        ...versions.map(v => ({
+          value: v.version,
+          label: `v${v.version}${v.aliases && v.aliases.length > 0 ? ` (${v.aliases.join(', ')})` : ''}`,
+        })),
+      ];
+    }
+    
+    // Otherwise, generate versions 1 to latest
+    if (latestVersion > 0) {
+      const versionList = [];
+      for (let i = latestVersion; i >= 1; i--) {
+        versionList.push({
+          value: String(i),
+          label: `v${i}${i === latestVersion ? ' (latest)' : ''}`,
+        });
+      }
+      return [
+        { value: '', label: 'Select a version...' },
+        ...versionList,
+      ];
+    }
+    
+    return [{ value: '', label: 'No versions available' }];
+  }, [promptDetails?.versions, promptDetails?.latest_version]);
 
   // Load template when version or alias changes
   useEffect(() => {
     if (!formData.existingPromptFullName) return;
     
+    // Get the latest version from promptDetails if available
+    const latestVersion = promptDetails?.latest_version;
+    
     const loadTemplate = async () => {
       setLoadingTemplate(true);
+      setTemplateError(null);
+      
       try {
+        // Use version number instead of alias when possible to avoid alias issues
+        // If no version specified and no alias, default to latest version from promptDetails
+        let versionToUse: string | undefined = formData.version || undefined;
+        let aliasToUse: string | undefined = undefined;
+        
+        if (!versionToUse && !formData.alias && latestVersion) {
+          // Use the latest version number directly
+          versionToUse = latestVersion;
+        } else if (formData.alias && !versionToUse) {
+          aliasToUse = formData.alias;
+        }
+        
         const result = await databricksNativeApi.getPromptTemplate(
           formData.existingPromptFullName,
-          formData.version || undefined,
-          formData.alias || undefined
+          versionToUse,
+          aliasToUse,
+          servicePrincipalConfig  // Pass service principal for authentication
         );
-        if (result?.template) {
+        
+        if (result?.error) {
+          // Handle error from API
+          if (result.alias_not_found) {
+            setTemplateError(`Alias '${formData.alias}' does not exist for this prompt. Try 'latest' or select a specific version.`);
+          } else if (result.version_not_found) {
+            setTemplateError(`Version ${formData.version} does not exist for this prompt.`);
+          } else {
+            setTemplateError(result.error);
+          }
+        } else if (result?.template) {
           setFormData(prev => ({
             ...prev,
             default_template: result.template,
-            version: formData.version || result.version || '',
+            version: result.version || prev.version || '',
           }));
+        } else {
+          setTemplateError('No template returned from server');
         }
-      } catch (error) {
-        console.error('Error loading prompt template:', error);
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : 'Failed to load prompt template';
+        setTemplateError(errorMessage);
+        console.error('[PromptsSection] Error loading prompt template:', error);
       } finally {
         setLoadingTemplate(false);
       }
     };
     
     loadTemplate();
+  // Note: servicePrincipalConfig is stable (memoized), promptDetails?.latest_version triggers reload when details are fetched
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formData.existingPromptFullName, formData.version, formData.alias]);
 
   // Update form when prompt details load
@@ -203,7 +319,10 @@ export default function PromptsSection() {
         ...prev,
         tags: promptDetails.tags || {},
         description: promptDetails.description || prev.description,
-        version: prev.version || promptDetails.latest_version || '',
+        // Don't override version if user already selected one
+        version: prev.version || '',
+        // Set template from details if available
+        default_template: promptDetails.template || prev.default_template,
       }));
     }
   }, [promptDetails, formData.existingPromptFullName]);
@@ -289,6 +408,16 @@ export default function PromptsSection() {
       }
     }
     
+    // If the prompt has a service principal, set it as the global one for this session
+    if (prompt.service_principal) {
+      if (typeof prompt.service_principal === 'string') {
+        const spRef = prompt.service_principal.startsWith('*') 
+          ? prompt.service_principal.slice(1) 
+          : prompt.service_principal;
+        setGlobalServicePrincipal(spRef);
+      }
+    }
+    
     setPromptSource('new'); // When editing, treat as manual entry
     setSchemaSource(detectedSource);
     setRefNameManuallyEdited(true); // When editing, consider refName as manually set
@@ -333,6 +462,11 @@ export default function PromptsSection() {
       alias: formData.alias || undefined,
       version: formData.version ? parseInt(formData.version) : undefined,
       tags: Object.keys(formData.tags).length > 0 ? formData.tags : undefined,
+      service_principal: authMode === 'configured' && globalServicePrincipal 
+        ? `*${globalServicePrincipal}` 
+        : authMode === 'manual' && manualClientId && manualClientSecret
+          ? { client_id: manualClientId, client_secret: manualClientSecret }
+          : undefined,
     };
 
     if (editingKey) {
@@ -366,6 +500,8 @@ export default function PromptsSection() {
     setFormData({ ...formData, tags: newTags });
   };
 
+  const hasServicePrincipals = Object.keys(servicePrincipals).length > 0;
+  
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -381,6 +517,107 @@ export default function PromptsSection() {
           Add Prompt
         </Button>
       </div>
+
+      {/* Prompt Registry Authentication */}
+      <Card className="p-4 space-y-4">
+        <div>
+          <h3 className="text-sm font-medium text-white mb-1">Prompt Registry Authentication</h3>
+          <p className="text-xs text-slate-400">
+            Service principal used for all prompt registry operations (browsing, fetching templates)
+          </p>
+        </div>
+        
+        {/* Auth Mode Toggle */}
+        <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5">
+          <button
+            type="button"
+            onClick={() => { setAuthMode('none'); setGlobalServicePrincipal(''); }}
+            className={`px-3 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
+              authMode === 'none'
+                ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                : 'text-slate-400 border border-transparent hover:text-slate-300'
+            }`}
+          >
+            Default
+          </button>
+          <button
+            type="button"
+            onClick={() => setAuthMode('configured')}
+            className={`px-3 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
+              authMode === 'configured'
+                ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                : 'text-slate-400 border border-transparent hover:text-slate-300'
+            }`}
+          >
+            Configured
+          </button>
+          <button
+            type="button"
+            onClick={() => setAuthMode('manual')}
+            className={`px-3 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
+              authMode === 'manual'
+                ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                : 'text-slate-400 border border-transparent hover:text-slate-300'
+            }`}
+          >
+            Manual
+          </button>
+        </div>
+        
+        {/* Configured Service Principal Selection */}
+        {authMode === 'configured' && (
+          <div className="space-y-2">
+            <select
+              value={globalServicePrincipal}
+              onChange={(e) => setGlobalServicePrincipal(e.target.value)}
+              className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:ring-2 focus:ring-violet-500"
+            >
+              <option value="">Select a service principal...</option>
+              {Object.keys(servicePrincipals).map((sp) => (
+                <option key={sp} value={sp}>{sp}</option>
+              ))}
+            </select>
+            {!hasServicePrincipals && (
+              <p className="text-xs text-amber-400/70">
+                No service principals configured. Add them in Resources → Service Principals.
+              </p>
+            )}
+          </div>
+        )}
+        
+        {/* Manual Credentials Entry */}
+        {authMode === 'manual' && (
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-slate-400">Client ID</label>
+              <input
+                type="text"
+                value={manualClientId}
+                onChange={(e) => setManualClientId(e.target.value)}
+                placeholder="Enter client ID..."
+                className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-slate-400">Client Secret</label>
+              <input
+                type="password"
+                value={manualClientSecret}
+                onChange={(e) => setManualClientSecret(e.target.value)}
+                placeholder="Enter client secret..."
+                className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500"
+              />
+            </div>
+          </div>
+        )}
+        
+        {/* Status indicator */}
+        {authMode !== 'none' && servicePrincipalConfig && (
+          <p className="text-xs text-emerald-400">
+            ✓ Custom authentication configured
+          </p>
+        )}
+      </Card>
 
       {/* Prompt List */}
       {Object.keys(prompts).length === 0 ? (
@@ -516,36 +753,38 @@ export default function PromptsSection() {
               <div className="space-y-3">
                 <label className="block text-sm font-medium text-slate-300">Schema</label>
                 <div className="flex space-x-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSchemaSource('reference');
-                      setRefNameManuallyEdited(false);
-                      setFormData({ ...formData, catalog_name: '', schema_name: '', existingPromptFullName: '', name: '', refName: '' });
-                    }}
-                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                      schemaSource === 'reference'
-                        ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                        : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
-                    }`}
-                  >
-                    Use Configured Schema
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSchemaSource('direct');
-                      setRefNameManuallyEdited(false);
-                      setFormData({ ...formData, schemaRef: '', existingPromptFullName: '', name: '', refName: '' });
-                    }}
-                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                      schemaSource === 'direct'
-                        ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                        : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
-                    }`}
-                  >
-                    Select Catalog/Schema
-                  </button>
+                  <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5 w-full">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSchemaSource('reference');
+                        setRefNameManuallyEdited(false);
+                        setFormData({ ...formData, catalog_name: '', schema_name: '', existingPromptFullName: '', name: '', refName: '' });
+                      }}
+                      className={`flex-1 px-3 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
+                        schemaSource === 'reference'
+                          ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                          : 'text-slate-400 border border-transparent hover:text-slate-300'
+                      }`}
+                    >
+                      Configured
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSchemaSource('direct');
+                        setRefNameManuallyEdited(false);
+                        setFormData({ ...formData, schemaRef: '', existingPromptFullName: '', name: '', refName: '' });
+                      }}
+                      className={`flex-1 px-3 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
+                        schemaSource === 'direct'
+                          ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                          : 'text-slate-400 border border-transparent hover:text-slate-300'
+                      }`}
+                    >
+                      Select
+                    </button>
+                  </div>
                 </div>
 
                 {schemaSource === 'reference' ? (
@@ -640,29 +879,50 @@ export default function PromptsSection() {
                 <div className="space-y-3 pt-3 border-t border-slate-700">
                   <div className="flex items-center justify-between">
                     <p className="text-sm font-medium text-slate-300">Version & Alias</p>
-                    {detailsLoading && (
+                    {(detailsLoading || loadingTemplate) && (
                       <span className="text-xs text-slate-400 flex items-center space-x-1">
                         <RefreshCw className="w-3 h-3 animate-spin" />
-                        <span>Loading details...</span>
+                        <span>{loadingTemplate ? 'Loading template...' : 'Loading details...'}</span>
                       </span>
                     )}
                   </div>
+                  
+                  {/* Error message for template loading */}
+                  {templateError && (
+                    <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
+                      <p className="text-xs text-red-400">{templateError}</p>
+                    </div>
+                  )}
+                  
                   <div className="grid grid-cols-2 gap-4">
                     <Select
                       label="Alias"
                       value={formData.alias}
-                      onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, alias: e.target.value, version: '' })}
+                      onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                        setTemplateError(null);
+                        setFormData({ ...formData, alias: e.target.value, version: '' });
+                      }}
                       options={aliasOptions}
-                      hint="Use an alias for environment-based version selection"
+                      hint="latest, champion, default, or custom alias"
                     />
                     <Select
                       label="Version"
                       value={formData.version}
-                      onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, version: e.target.value, alias: '' })}
+                      onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                        setTemplateError(null);
+                        setFormData({ ...formData, version: e.target.value, alias: '' });
+                      }}
                       options={versionOptions}
                       hint="Pin to a specific version number"
                     />
                   </div>
+                  
+                  {/* Show current selection info */}
+                  {(formData.alias || formData.version) && !templateError && !loadingTemplate && (
+                    <p className="text-xs text-emerald-400">
+                      ✓ Using {formData.alias ? `alias: ${formData.alias}` : `version: v${formData.version}`}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
@@ -714,28 +974,28 @@ export default function PromptsSection() {
           {promptSource === 'new' && (
             <div className="space-y-3">
               <label className="block text-sm font-medium text-slate-300">Schema (Optional)</label>
-              <div className="flex space-x-2">
+              <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5 w-full">
                 <button
                   type="button"
                   onClick={() => { setSchemaSource('reference'); setFormData({ ...formData, catalog_name: '', schema_name: '' }); }}
-                  className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  className={`flex-1 px-3 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
                     schemaSource === 'reference'
-                      ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                      : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                      ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                      : 'text-slate-400 border border-transparent hover:text-slate-300'
                   }`}
                 >
-                  Use Configured Schema
+                  Configured
                 </button>
                 <button
                   type="button"
                   onClick={() => { setSchemaSource('direct'); setFormData({ ...formData, schemaRef: '' }); }}
-                  className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  className={`flex-1 px-3 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
                     schemaSource === 'direct'
-                      ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                      : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                      ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                      : 'text-slate-400 border border-transparent hover:text-slate-300'
                   }`}
                 >
-                  Select Catalog/Schema
+                  Select
                 </button>
               </div>
               
@@ -1032,6 +1292,21 @@ export default function PromptsSection() {
               Metadata tags for organization and filtering in MLflow
             </p>
           </div>
+
+          {/* Service Principal Info */}
+          {authMode !== 'none' && servicePrincipalConfig && (
+            <div className="p-3 bg-violet-500/10 border border-violet-500/20 rounded-lg">
+              <p className="text-xs text-violet-300">
+                {authMode === 'configured' 
+                  ? <>Using service principal: <span className="font-medium">{globalServicePrincipal}</span></>
+                  : <>Using manual credentials</>
+                }
+              </p>
+              <p className="text-xs text-slate-400 mt-1">
+                Change this in the Prompt Registry Authentication section above.
+              </p>
+            </div>
+          )}
 
           {/* Form Actions */}
           <div className="flex justify-end space-x-3 pt-4">

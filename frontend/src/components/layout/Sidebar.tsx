@@ -11,7 +11,8 @@ import {
   Package,
   FileText,
   LayoutDashboard,
-  Search
+  Search,
+  UserCheck
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { ActiveSection } from '@/App';
@@ -34,6 +35,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard, description: 'Getting started' },
   { id: 'variables', label: 'Variables', icon: Key, description: 'Config variables' },
+  { id: 'service_principals', label: 'Service Principals', icon: UserCheck, description: 'OAuth credentials' },
   { id: 'schemas', label: 'Schemas', icon: Database, description: 'Unity Catalog schemas', required: true },
   { id: 'resources', label: 'Resources', icon: Package, description: 'Databricks resources', required: true },
   { id: 'retrievers', label: 'Retrievers', icon: Search, description: 'Vector search retrievers' },
@@ -52,6 +54,8 @@ export default function Sidebar({ activeSection, onSectionChange, config }: Side
         return 0; // Overview doesn't have a count
       case 'variables':
         return Object.keys(config.variables || {}).length;
+      case 'service_principals':
+        return Object.keys(config.service_principals || {}).length;
       case 'schemas':
         return Object.keys(config.schemas || {}).length;
       case 'resources':

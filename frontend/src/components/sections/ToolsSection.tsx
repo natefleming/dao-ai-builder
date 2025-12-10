@@ -1,5 +1,5 @@
 import { useState, ChangeEvent } from 'react';
-import { Plus, Trash2, Wrench, RefreshCw, Globe, Database, MessageSquare, Search, Clock, Bot, Link2, UserCheck, ChevronDown, ChevronUp, Layers, Key } from 'lucide-react';
+import { Plus, Trash2, Wrench, RefreshCw, Globe, Database, MessageSquare, Search, Clock, Bot, Link2, UserCheck, ChevronDown, ChevronUp } from 'lucide-react';
 import { useConfigStore } from '@/stores/configStore';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
@@ -43,22 +43,25 @@ function ResourceSelector({
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <label className="block text-sm font-medium text-slate-300">{label}</label>
-        <div className="flex items-center space-x-2">
+        <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5">
           <button
             type="button"
             onClick={() => onSourceChange('configured')}
-            className={`px-2 py-1 text-xs rounded flex items-center space-x-1 ${
-              source === 'configured' ? 'bg-purple-500/30 text-purple-300' : 'bg-slate-700 text-slate-400'
+            className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${
+              source === 'configured'
+                ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                : 'text-slate-400 border border-transparent hover:text-slate-300'
             }`}
           >
-            <Layers className="w-3 h-3" />
-            <span>Configured</span>
+            Configured
           </button>
           <button
             type="button"
             onClick={() => onSourceChange('select')}
-            className={`px-2 py-1 text-xs rounded ${
-              source === 'select' ? 'bg-blue-500/30 text-blue-300' : 'bg-slate-700 text-slate-400'
+            className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${
+              source === 'select'
+                ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                : 'text-slate-400 border border-transparent hover:text-slate-300'
             }`}
           >
             Select
@@ -203,6 +206,8 @@ interface MCPFormData {
   warehouseId: string;
   // Auth credentials (shared)
   useCredentials: boolean;
+  credentialsMode: 'service_principal' | 'manual';  // Configured SP or manual credentials
+  servicePrincipalRef: string;  // Reference to configured service principal
   // Client ID - variable or manual
   clientIdSource: 'variable' | 'manual';
   clientIdVar: string;
@@ -242,6 +247,8 @@ const defaultMCPFormData: MCPFormData = {
   warehouseRefName: '',
   warehouseId: '',
   useCredentials: true,
+  credentialsMode: 'service_principal',  // Default to configured service principal
+  servicePrincipalRef: '',
   clientIdSource: 'variable',
   clientIdVar: '',
   clientIdManual: '',
@@ -421,23 +428,28 @@ export default function ToolsSection() {
 
     // Add credentials if enabled
     if (mcpForm.useCredentials) {
-      // Client ID
-      if (mcpForm.clientIdSource === 'variable' && mcpForm.clientIdVar) {
-        base.client_id = `*${mcpForm.clientIdVar}` as any; // YAML anchor reference
-      } else if (mcpForm.clientIdSource === 'manual' && mcpForm.clientIdManual) {
-        base.client_id = mcpForm.clientIdManual as any;
-      }
-      // Client Secret
-      if (mcpForm.clientSecretSource === 'variable' && mcpForm.clientSecretVar) {
-        base.client_secret = `*${mcpForm.clientSecretVar}` as any;
-      } else if (mcpForm.clientSecretSource === 'manual' && mcpForm.clientSecretManual) {
-        base.client_secret = mcpForm.clientSecretManual as any;
-      }
-      // Workspace Host (optional) - only include if a value is provided
-      if (mcpForm.workspaceHostSource === 'variable' && mcpForm.workspaceHostVar) {
-        base.workspace_host = `*${mcpForm.workspaceHostVar}` as any;
-      } else if (mcpForm.workspaceHostSource === 'manual' && mcpForm.workspaceHostManual) {
-        base.workspace_host = mcpForm.workspaceHostManual as any;
+      if (mcpForm.credentialsMode === 'service_principal' && mcpForm.servicePrincipalRef) {
+        // Use configured service principal reference
+        base.service_principal = `*${mcpForm.servicePrincipalRef}` as any;
+      } else if (mcpForm.credentialsMode === 'manual') {
+        // Client ID
+        if (mcpForm.clientIdSource === 'variable' && mcpForm.clientIdVar) {
+          base.client_id = `*${mcpForm.clientIdVar}` as any; // YAML anchor reference
+        } else if (mcpForm.clientIdSource === 'manual' && mcpForm.clientIdManual) {
+          base.client_id = mcpForm.clientIdManual as any;
+        }
+        // Client Secret
+        if (mcpForm.clientSecretSource === 'variable' && mcpForm.clientSecretVar) {
+          base.client_secret = `*${mcpForm.clientSecretVar}` as any;
+        } else if (mcpForm.clientSecretSource === 'manual' && mcpForm.clientSecretManual) {
+          base.client_secret = mcpForm.clientSecretManual as any;
+        }
+        // Workspace Host (optional) - only include if a value is provided
+        if (mcpForm.workspaceHostSource === 'variable' && mcpForm.workspaceHostVar) {
+          base.workspace_host = `*${mcpForm.workspaceHostVar}` as any;
+        } else if (mcpForm.workspaceHostSource === 'manual' && mcpForm.workspaceHostManual) {
+          base.workspace_host = mcpForm.workspaceHostManual as any;
+        }
       }
     }
 
@@ -976,22 +988,25 @@ export default function ToolsSection() {
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <label className="block text-sm font-medium text-slate-300">Function Source</label>
-                  <div className="flex items-center space-x-2">
+                  <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5">
                     <button
                       type="button"
                       onClick={() => setFormData({ ...formData, functionSource: 'configured', ucCatalog: '', ucSchema: '', ucFunction: '' })}
-                      className={`px-2 py-1 text-xs rounded flex items-center space-x-1 ${
-                        formData.functionSource === 'configured' ? 'bg-purple-500/30 text-purple-300' : 'bg-slate-700 text-slate-400'
+                      className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${
+                        formData.functionSource === 'configured'
+                          ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                          : 'text-slate-400 border border-transparent hover:text-slate-300'
                       }`}
                     >
-                      <Layers className="w-3 h-3" />
-                      <span>Configured</span>
+                      Configured
                     </button>
                     <button
                       type="button"
                       onClick={() => setFormData({ ...formData, functionSource: 'select', functionRefName: '' })}
-                      className={`px-2 py-1 text-xs rounded ${
-                        formData.functionSource === 'select' ? 'bg-blue-500/30 text-blue-300' : 'bg-slate-700 text-slate-400'
+                      className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${
+                        formData.functionSource === 'select'
+                          ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                          : 'text-slate-400 border border-transparent hover:text-slate-300'
                       }`}
                     >
                       Select
@@ -1523,74 +1538,129 @@ export default function ToolsSection() {
 
                 {mcpForm.useCredentials && (
                   <div className="space-y-4">
-                    {/* Client ID */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <label className="text-sm font-medium text-slate-300">Client ID</label>
-                        <div className="flex items-center space-x-2">
-                          <button
-                            type="button"
-                            onClick={() => setMcpForm({ ...mcpForm, clientIdSource: 'variable' })}
-                            className={`px-2 py-1 text-xs rounded flex items-center space-x-1 ${
-                              mcpForm.clientIdSource === 'variable' ? 'bg-purple-500/30 text-purple-300' : 'bg-slate-700 text-slate-400'
-                            }`}
-                          >
-                            <Key className="w-3 h-3" />
-                            <span>Variable</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setMcpForm({ ...mcpForm, clientIdSource: 'manual' })}
-                            className={`px-2 py-1 text-xs rounded ${
-                              mcpForm.clientIdSource === 'manual' ? 'bg-blue-500/30 text-blue-300' : 'bg-slate-700 text-slate-400'
-                            }`}
-                          >
-                            Manual
-                          </button>
-                        </div>
-                      </div>
-                      {mcpForm.clientIdSource === 'variable' ? (
+                    {/* Credentials Mode Toggle */}
+                    <div className="flex items-center space-x-2">
+                      <button
+                        type="button"
+                        onClick={() => setMcpForm({ ...mcpForm, credentialsMode: 'service_principal' })}
+                        className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-colors ${
+                          mcpForm.credentialsMode === 'service_principal'
+                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                            : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                        }`}
+                      >
+                        Configured Service Principal
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMcpForm({ ...mcpForm, credentialsMode: 'manual' })}
+                        className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-colors ${
+                          mcpForm.credentialsMode === 'manual'
+                            ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                            : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                        }`}
+                      >
+                        Manual Credentials
+                      </button>
+                    </div>
+                    
+                    {mcpForm.credentialsMode === 'service_principal' ? (
+                      <div className="space-y-2">
                         <Select
+                          label="Service Principal"
                           options={[
-                            { value: '', label: 'Select a variable...' },
-                            ...variableNames.map((name) => ({
-                              value: name,
-                              label: `${name} (${getVariableDisplayName(variables[name])})`,
+                            { value: '', label: 'Select a service principal...' },
+                            ...Object.keys(config.service_principals || {}).map((sp) => ({
+                              value: sp,
+                              label: sp,
                             })),
                           ]}
-                          value={mcpForm.clientIdVar}
-                          onChange={(e: ChangeEvent<HTMLSelectElement>) => setMcpForm({ ...mcpForm, clientIdVar: e.target.value })}
-                          hint={variableNames.length === 0 ? 'Define variables in the Variables section first' : undefined}
+                          value={mcpForm.servicePrincipalRef}
+                          onChange={(e: ChangeEvent<HTMLSelectElement>) => setMcpForm({ ...mcpForm, servicePrincipalRef: e.target.value })}
+                          hint="Reference a pre-configured service principal"
                         />
-                      ) : (
-                        <Input
-                          placeholder="Enter client ID..."
-                          value={mcpForm.clientIdManual}
-                          onChange={(e: ChangeEvent<HTMLInputElement>) => setMcpForm({ ...mcpForm, clientIdManual: e.target.value })}
-                        />
-                      )}
-                    </div>
+                        {Object.keys(config.service_principals || {}).length === 0 && (
+                          <div className="p-2 bg-amber-500/10 border border-amber-500/30 rounded text-amber-400 text-xs">
+                            No service principals configured. Add one in Resources → Service Principals first.
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <>
+                        {/* Client ID */}
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <label className="text-sm font-medium text-slate-300">Client ID</label>
+                            <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5">
+                              <button
+                                type="button"
+                                onClick={() => setMcpForm({ ...mcpForm, clientIdSource: 'variable' })}
+                                className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${
+                                  mcpForm.clientIdSource === 'variable'
+                                    ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                                    : 'text-slate-400 border border-transparent hover:text-slate-300'
+                                }`}
+                              >
+                                Variable
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setMcpForm({ ...mcpForm, clientIdSource: 'manual' })}
+                                className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${
+                                  mcpForm.clientIdSource === 'manual'
+                                    ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                                    : 'text-slate-400 border border-transparent hover:text-slate-300'
+                                }`}
+                              >
+                                Manual
+                              </button>
+                            </div>
+                          </div>
+                          {mcpForm.clientIdSource === 'variable' ? (
+                            <Select
+                              options={[
+                                { value: '', label: 'Select a variable...' },
+                                ...variableNames.map((name) => ({
+                                  value: name,
+                                  label: `${name} (${getVariableDisplayName(variables[name])})`,
+                                })),
+                              ]}
+                              value={mcpForm.clientIdVar}
+                              onChange={(e: ChangeEvent<HTMLSelectElement>) => setMcpForm({ ...mcpForm, clientIdVar: e.target.value })}
+                              hint={variableNames.length === 0 ? 'Define variables in the Variables section first' : undefined}
+                            />
+                          ) : (
+                            <Input
+                              placeholder="Enter client ID..."
+                              value={mcpForm.clientIdManual}
+                              onChange={(e: ChangeEvent<HTMLInputElement>) => setMcpForm({ ...mcpForm, clientIdManual: e.target.value })}
+                            />
+                          )}
+                        </div>
 
                     {/* Client Secret */}
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
                         <label className="text-sm font-medium text-slate-300">Client Secret</label>
-                        <div className="flex items-center space-x-2">
+                        <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5">
                           <button
                             type="button"
                             onClick={() => setMcpForm({ ...mcpForm, clientSecretSource: 'variable' })}
-                            className={`px-2 py-1 text-xs rounded flex items-center space-x-1 ${
-                              mcpForm.clientSecretSource === 'variable' ? 'bg-purple-500/30 text-purple-300' : 'bg-slate-700 text-slate-400'
+                            className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${
+                              mcpForm.clientSecretSource === 'variable'
+                                ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                                : 'text-slate-400 border border-transparent hover:text-slate-300'
                             }`}
                           >
-                            <Key className="w-3 h-3" />
-                            <span>Variable</span>
+                            Variable
                           </button>
                           <button
                             type="button"
                             onClick={() => setMcpForm({ ...mcpForm, clientSecretSource: 'manual' })}
-                            className={`px-2 py-1 text-xs rounded ${
-                              mcpForm.clientSecretSource === 'manual' ? 'bg-blue-500/30 text-blue-300' : 'bg-slate-700 text-slate-400'
+                            className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${
+                              mcpForm.clientSecretSource === 'manual'
+                                ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                                : 'text-slate-400 border border-transparent hover:text-slate-300'
                             }`}
                           >
                             Manual
@@ -1620,56 +1690,60 @@ export default function ToolsSection() {
                       )}
                     </div>
 
-                    {/* Workspace Host (Optional) */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <label className="text-sm font-medium text-slate-300">
-                          Workspace Host <span className="text-slate-500">(Optional)</span>
-                        </label>
-                        <div className="flex items-center space-x-2">
-                          <button
-                            type="button"
-                            onClick={() => setMcpForm({ ...mcpForm, workspaceHostSource: 'variable' })}
-                            className={`px-2 py-1 text-xs rounded flex items-center space-x-1 ${
-                              mcpForm.workspaceHostSource === 'variable' ? 'bg-purple-500/30 text-purple-300' : 'bg-slate-700 text-slate-400'
-                            }`}
-                          >
-                            <Key className="w-3 h-3" />
-                            <span>Variable</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setMcpForm({ ...mcpForm, workspaceHostSource: 'manual' })}
-                            className={`px-2 py-1 text-xs rounded ${
-                              mcpForm.workspaceHostSource === 'manual' ? 'bg-blue-500/30 text-blue-300' : 'bg-slate-700 text-slate-400'
-                            }`}
-                          >
-                            Manual
-                          </button>
+                        {/* Workspace Host (Optional) */}
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <label className="text-sm font-medium text-slate-300">
+                              Workspace Host <span className="text-slate-500">(Optional)</span>
+                            </label>
+                            <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5">
+                              <button
+                                type="button"
+                                onClick={() => setMcpForm({ ...mcpForm, workspaceHostSource: 'variable' })}
+                                className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${
+                                  mcpForm.workspaceHostSource === 'variable'
+                                    ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                                    : 'text-slate-400 border border-transparent hover:text-slate-300'
+                                }`}
+                              >
+                                Variable
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setMcpForm({ ...mcpForm, workspaceHostSource: 'manual' })}
+                                className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${
+                                  mcpForm.workspaceHostSource === 'manual'
+                                    ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                                    : 'text-slate-400 border border-transparent hover:text-slate-300'
+                                }`}
+                              >
+                                Manual
+                              </button>
+                            </div>
+                          </div>
+                          {mcpForm.workspaceHostSource === 'variable' ? (
+                            <Select
+                              options={[
+                                { value: '', label: 'Select a variable...' },
+                                ...variableNames.map((name) => ({
+                                  value: name,
+                                  label: `${name} (${getVariableDisplayName(variables[name])})`,
+                                })),
+                              ]}
+                              value={mcpForm.workspaceHostVar}
+                              onChange={(e: ChangeEvent<HTMLSelectElement>) => setMcpForm({ ...mcpForm, workspaceHostVar: e.target.value })}
+                              hint={variableNames.length === 0 ? 'Define variables in the Variables section first' : undefined}
+                            />
+                          ) : (
+                            <Input
+                              placeholder="https://your-workspace.cloud.databricks.com"
+                              value={mcpForm.workspaceHostManual}
+                              onChange={(e: ChangeEvent<HTMLInputElement>) => setMcpForm({ ...mcpForm, workspaceHostManual: e.target.value })}
+                            />
+                          )}
                         </div>
-                      </div>
-                      {mcpForm.workspaceHostSource === 'variable' ? (
-                        <Select
-                          options={[
-                            { value: '', label: 'Select a variable...' },
-                            ...variableNames.map((name) => ({
-                              value: name,
-                              label: `${name} (${getVariableDisplayName(variables[name])})`,
-                            })),
-                          ]}
-                          value={mcpForm.workspaceHostVar}
-                          onChange={(e: ChangeEvent<HTMLSelectElement>) => setMcpForm({ ...mcpForm, workspaceHostVar: e.target.value })}
-                          hint={variableNames.length === 0 ? 'Define variables in the Variables section first' : undefined}
-                        />
-                      ) : (
-                        <Input
-                          placeholder="https://your-workspace.cloud.databricks.com"
-                          value={mcpForm.workspaceHostManual}
-                          onChange={(e: ChangeEvent<HTMLInputElement>) => setMcpForm({ ...mcpForm, workspaceHostManual: e.target.value })}
-                        />
-                      )}
-                    </div>
-
+                      </>
+                    )}
                   </div>
                 )}
               </div>

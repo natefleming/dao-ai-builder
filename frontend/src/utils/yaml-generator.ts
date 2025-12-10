@@ -1,6 +1,6 @@
 import yaml from 'js-yaml';
 import { AppConfig, VariableModel, CompositeVariableModel, EnvironmentVariableModel, SecretVariableModel, PrimitiveVariableModel, DatabaseModel, OrchestrationModel, ToolFunctionModel, HumanInTheLoopModel } from '@/types/dao-ai-types';
-import { getYamlReferences } from './yaml-references';
+import { getYamlReferences, getOriginalAnchorName } from './yaml-references';
 
 /**
  * Safely check if a value is a string that starts with a prefix.
@@ -30,7 +30,8 @@ function addYamlAnchors(yamlString: string): string {
   // Top-level sections where we want to add anchors to their direct children
   const topLevelAnchorSections = [
     'variables',
-    'schemas', 
+    'schemas',
+    'service_principals',
     'retrievers',
     'tools',
     'guardrails',
@@ -139,6 +140,11 @@ function addYamlAnchors(yamlString: string): string {
     // Skip if this section is in noAnchorSections
     if (noAnchorSections.includes(section.name)) continue;
     
+    // Determine the path prefix for this section
+    // For top-level sections (indent 0), use section name directly
+    // For nested resource sections (indent 2), prefix with "resources."
+    const pathPrefix = section.indent === 0 ? section.name : `resources.${section.name}`;
+    
     for (let i = section.startLine + 1; i < section.endLine; i++) {
       const line = lines[i];
       if (!line.trim()) continue;
@@ -156,7 +162,24 @@ function addYamlAnchors(yamlString: string): string {
         
         // Add anchor if not already present
         if (!line.includes('&')) {
-          lines[i] = `${indent}${keyName}: &${keyName}`;
+          // Check if there's an original anchor name from imported YAML
+          const fullPath = `${pathPrefix}.${keyName}`;
+          const originalAnchor = getOriginalAnchorName(fullPath);
+          
+          // Resource sections that rarely need anchors (they're source data, not references)
+          // Only add anchor if it was in the original YAML
+          const noAutoAnchorSections = ['tables', 'volumes', 'functions'];
+          
+          if (originalAnchor) {
+            // Preserve the original anchor from imported YAML
+            lines[i] = `${indent}${keyName}: &${originalAnchor}`;
+          } else if (noAutoAnchorSections.includes(section.name)) {
+            // Don't auto-add anchors to tables/volumes/functions - they're rarely referenced
+            // Leave the line as-is (no anchor)
+          } else {
+            // For other sections (tools, agents, schemas, etc.), add anchor using key name
+            lines[i] = `${indent}${keyName}: &${keyName}`;
+          }
         }
       }
     }
@@ -211,10 +234,8 @@ function findOriginalReference(path: string, value: any): string | null {
   // Normalize path for comparison
   const normalizedPath = path.toLowerCase().replace(/-/g, '_');
   const pathParts = path.split('.');
-  const lastKey = pathParts[pathParts.length - 1] || '';
-  const lastTwoKeys = pathParts.slice(-2).join('.');
   
-  // Strategy 1: Exact path match in aliasUsage
+  // Strategy 1: Exact path match in aliasUsage (highest priority)
   for (const [anchorName, usagePaths] of Object.entries(refs.aliasUsage)) {
     for (const usagePath of usagePaths) {
       const normalizedUsagePath = usagePath.toLowerCase().replace(/-/g, '_');
@@ -225,29 +246,67 @@ function findOriginalReference(path: string, value: any): string | null {
           return anchorName;
         }
       }
-      
-      // Path ends with alias path
-      if (normalizedPath.endsWith('.' + normalizedUsagePath) || normalizedUsagePath.endsWith('.' + normalizedPath)) {
-        if (refs.anchorPaths[anchorName]) {
+    }
+  }
+  
+  // Strategy 2: For array items, try matching without the index
+  // e.g., "agents.genie.tools.0" should match "agents.genie.tools.0" stored usage
+  const lastPart = pathParts[pathParts.length - 1];
+  if (/^\d+$/.test(lastPart)) {
+    // This is an array index - look for exact matches including the index
+    for (const [anchorName, usagePaths] of Object.entries(refs.aliasUsage)) {
+      for (const usagePath of usagePaths) {
+        const normalizedUsagePath = usagePath.toLowerCase().replace(/-/g, '_');
+        // Check if the usage path matches our path
+        if (normalizedPath === normalizedUsagePath) {
+          return anchorName;
+        }
+        // Also check if usage path ends with our path (for nested cases)
+        if (normalizedUsagePath.endsWith(normalizedPath)) {
           return anchorName;
         }
       }
-      
-      // Last key matches (e.g., both end with "schema")
-      const aliasLastKey = usagePath.split('.').pop() || '';
-      if (lastKey === aliasLastKey && lastKey !== '') {
-        // Additional check: make sure the context is similar
-        const aliasLastTwo = usagePath.split('.').slice(-2).join('.');
-        if (lastTwoKeys.endsWith(aliasLastTwo) || aliasLastTwo.endsWith(lastTwoKeys)) {
-          if (refs.anchorPaths[anchorName]) {
-            return anchorName;
+    }
+  }
+  
+  // Strategy 3: Match by checking if the anchor's definition path matches what we're referencing
+  // This is useful for tools where the tool key might differ from tool.name
+  if (value && typeof value === 'object') {
+    // If this looks like a tool reference (has name and function properties)
+    if ('name' in value && 'function' in value) {
+      // Find the anchor that defines this tool by checking if the value matches
+      for (const [anchorName, anchorPath] of Object.entries(refs.anchorPaths)) {
+        // Check if this anchor is in the tools section
+        if (anchorPath.startsWith('tools.')) {
+          // This anchor is a tool - check if it's the one we want
+          // The anchorName (e.g., "genie_tool") is what we want to reference
+          // Check if any usage of this anchor is in a similar context
+          const usages = refs.aliasUsage[anchorName] || [];
+          for (const usagePath of usages) {
+            // Check if the context matches (e.g., both are agent tool references)
+            const usagePathParts = usagePath.split('.');
+            const currentPathParts = path.split('.');
+            // Match if both are in agents.X.tools context
+            if (usagePathParts.includes('tools') && currentPathParts.includes('tools')) {
+              const usageAgentIdx = usagePathParts.indexOf('agents');
+              const currentAgentIdx = currentPathParts.indexOf('agents');
+              if (usageAgentIdx !== -1 && currentAgentIdx !== -1) {
+                // Both are agent tool references - check if same agent
+                const usageAgent = usagePathParts[usageAgentIdx + 1];
+                const currentAgent = currentPathParts[currentAgentIdx + 1];
+                if (usageAgent === currentAgent) {
+                  return anchorName;
+                }
+              }
+            }
           }
         }
       }
     }
   }
   
-  // Strategy 2: Check pathSuffixToAnchor for quick lookups
+  // Strategy 4: Check pathSuffixToAnchor for quick lookups (use last 2 path parts)
+  const lastTwoKeys = pathParts.slice(-2).join('.');
   if (refs.pathSuffixToAnchor) {
     const normalizedLastTwo = lastTwoKeys.toLowerCase().replace(/-/g, '_');
     for (const [suffix, anchorName] of Object.entries(refs.pathSuffixToAnchor)) {
@@ -260,24 +319,13 @@ function findOriginalReference(path: string, value: any): string | null {
     }
   }
   
-  // Strategy 3: Value-based matching for objects
+  // Strategy 5: Value-based matching for schema objects
   if (value && typeof value === 'object') {
     // For schema objects, try to match by catalog_name + schema_name
     if (value.catalog_name && value.schema_name) {
       for (const [anchorName, anchorPath] of Object.entries(refs.anchorPaths)) {
         if (anchorPath.includes('schema')) {
           // This might be a schema reference
-          return anchorName;
-        }
-      }
-    }
-    
-    // For objects with a name property, try to match
-    const valueName = value.name || value.refName;
-    if (valueName) {
-      for (const [anchorName, anchorPath] of Object.entries(refs.anchorPaths)) {
-        const anchorKey = anchorPath.split('.').pop() || '';
-        if (anchorName === valueName || anchorKey === valueName) {
           return anchorName;
         }
       }
@@ -476,14 +524,29 @@ function formatVolumePath(
  * Format orchestration configuration for YAML output.
  * Handles swarm handoffs where null means "any agent" and [] means "no handoffs".
  */
-function formatOrchestration(orchestration: OrchestrationModel, definedLLMs: Record<string, any>): any {
+function formatOrchestration(orchestration: OrchestrationModel, definedLLMs: Record<string, any>, definedTools: Record<string, any>): any {
   const result: any = {};
   
   if (orchestration.supervisor) {
+    // Format supervisor tools as references - tools should be referenced using *tool_name
+    let supervisorToolsValue: string[] | undefined;
+    if (orchestration.supervisor.tools && orchestration.supervisor.tools.length > 0) {
+      supervisorToolsValue = orchestration.supervisor.tools.map((tool) => {
+        // Tools are stored as ToolModel objects - find the key by matching the name
+        const toolName = typeof tool === 'string' ? tool : tool.name;
+        // Find the key in definedTools that matches this tool's name
+        const matchedEntry = Object.entries(definedTools).find(
+          ([, t]) => t.name === toolName
+        );
+        const toolKey = matchedEntry ? matchedEntry[0] : toolName;
+        return createReference(toolKey);
+      });
+    }
+    
     result.supervisor = {
       model: formatModelReference(orchestration.supervisor.model, definedLLMs),
-      ...(orchestration.supervisor.tools && orchestration.supervisor.tools.length > 0 && { 
-        tools: orchestration.supervisor.tools 
+      ...(supervisorToolsValue && supervisorToolsValue.length > 0 && { 
+        tools: supervisorToolsValue 
       }),
       ...(orchestration.supervisor.prompt && { prompt: orchestration.supervisor.prompt }),
     };
@@ -596,7 +659,18 @@ function formatToolFunction(func: ToolFunctionModel, toolKey?: string): any {
       result.name = func.name;
     }
     if ('partial_args' in func && func.partial_args) {
-      result.partial_args = func.partial_args;
+      // Check each partial_arg for original references
+      const processedPartialArgs: Record<string, any> = {};
+      for (const [argKey, argValue] of Object.entries(func.partial_args)) {
+        // Check if this arg was originally a reference
+        const argRef = toolKey ? findOriginalReference(`tools.${toolKey}.function.partial_args.${argKey}`, argValue) : null;
+        if (argRef) {
+          processedPartialArgs[argKey] = createReference(argRef);
+        } else {
+          processedPartialArgs[argKey] = argValue;
+        }
+      }
+      result.partial_args = processedPartialArgs;
     }
   }
 
@@ -608,9 +682,30 @@ function formatToolFunction(func: ToolFunctionModel, toolKey?: string): any {
     if ('headers' in func && func.headers) result.headers = func.headers;
     if ('args' in func && func.args) result.args = func.args;
     if ('pat' in func && func.pat) result.pat = formatCredential(func.pat as string);
-    if ('client_id' in func && func.client_id) result.client_id = formatCredential(func.client_id as string);
-    if ('client_secret' in func && func.client_secret) result.client_secret = formatCredential(func.client_secret as string);
-    if ('workspace_host' in func && func.workspace_host) result.workspace_host = formatCredential(func.workspace_host as string);
+    
+    // Service Principal reference (takes precedence over inline credentials)
+    if ('service_principal' in func && func.service_principal) {
+      const sp = func.service_principal as any;
+      if (typeof sp === 'string') {
+        if (sp.startsWith('*')) {
+          result.service_principal = createReference(sp.slice(1));
+        } else {
+          result.service_principal = createReference(sp);
+        }
+      } else {
+        // Inline service principal object
+        result.service_principal = {
+          client_id: formatCredential(sp.client_id),
+          client_secret: formatCredential(sp.client_secret),
+        };
+      }
+    } else {
+      // Individual credentials (only if no service_principal)
+      if ('client_id' in func && func.client_id) result.client_id = formatCredential(func.client_id as string);
+      if ('client_secret' in func && func.client_secret) result.client_secret = formatCredential(func.client_secret as string);
+      if ('workspace_host' in func && func.workspace_host) result.workspace_host = formatCredential(func.workspace_host as string);
+    }
+    
     if ('connection' in func && func.connection) {
       // Handle connection reference (string starting with *) or inline object
       const conn = func.connection as any;
@@ -671,10 +766,28 @@ function formatDatabaseRef(database: DatabaseModel): any {
   if (database.max_pool_size) db.max_pool_size = database.max_pool_size;
   if (database.timeout_seconds) db.timeout_seconds = database.timeout_seconds;
   
-  // OAuth credentials
-  if (database.client_id) db.client_id = formatCredential(database.client_id);
-  if (database.client_secret) db.client_secret = formatCredential(database.client_secret);
-  if (database.workspace_host) db.workspace_host = formatCredential(database.workspace_host);
+  // Service Principal reference (takes precedence over inline credentials)
+  if (database.service_principal) {
+    if (typeof database.service_principal === 'string') {
+      // It's already a reference string like "*my_sp"
+      if (database.service_principal.startsWith('*')) {
+        db.service_principal = createReference(database.service_principal.slice(1));
+      } else {
+        db.service_principal = createReference(database.service_principal);
+      }
+      } else {
+        // It's an inline ServicePrincipalModel object
+        db.service_principal = {
+          client_id: formatCredential(database.service_principal.client_id),
+          client_secret: formatCredential(database.service_principal.client_secret),
+        };
+      }
+  } else {
+    // OAuth credentials (only if no service_principal)
+    if (database.client_id) db.client_id = formatCredential(database.client_id);
+    if (database.client_secret) db.client_secret = formatCredential(database.client_secret);
+    if (database.workspace_host) db.workspace_host = formatCredential(database.workspace_host);
+  }
   
   // User credentials
   if (database.user) db.user = formatCredential(database.user);
@@ -755,6 +868,17 @@ export function generateYAML(config: AppConfig): string {
     yamlConfig.variables = {};
     Object.entries(config.variables).forEach(([key, variable]) => {
       yamlConfig.variables[key] = formatVariable(variable as VariableModel);
+    });
+  }
+
+  // Service Principals (after variables, before schemas - they are credentials that may reference variables)
+  if (config.service_principals && Object.keys(config.service_principals).length > 0) {
+    yamlConfig.service_principals = {};
+    Object.entries(config.service_principals).forEach(([key, sp]) => {
+      yamlConfig.service_principals[key] = {
+        client_id: formatCredential(sp.client_id),
+        client_secret: formatCredential(sp.client_secret),
+      };
     });
   }
 
@@ -1079,6 +1203,24 @@ export function generateYAML(config: AppConfig): string {
   if (config.prompts && Object.keys(config.prompts).length > 0) {
     yamlConfig.prompts = {};
     Object.entries(config.prompts).forEach(([key, prompt]) => {
+      // Handle service_principal reference
+      let promptServicePrincipal: any = undefined;
+      if (prompt.service_principal) {
+        if (typeof prompt.service_principal === 'string') {
+          // It's a reference string like "*my_sp"
+          const spRef = prompt.service_principal.startsWith('*') 
+            ? prompt.service_principal.slice(1) 
+            : prompt.service_principal;
+          promptServicePrincipal = createReference(spRef);
+        } else {
+          // Inline service principal object
+          promptServicePrincipal = {
+            client_id: formatCredential(prompt.service_principal.client_id),
+            client_secret: formatCredential(prompt.service_principal.client_secret),
+          };
+        }
+      }
+      
       yamlConfig.prompts[key] = {
         name: prompt.name,
         ...(prompt.schema && { schema: formatSchemaReference(prompt.schema, definedSchemas) }),
@@ -1087,6 +1229,7 @@ export function generateYAML(config: AppConfig): string {
         ...(prompt.alias && { alias: prompt.alias }),
         ...(prompt.version !== undefined && { version: prompt.version }),
         ...(prompt.tags && Object.keys(prompt.tags).length > 0 && { tags: prompt.tags }),
+        ...(promptServicePrincipal && { service_principal: promptServicePrincipal }),
       };
     });
   }
@@ -1202,11 +1345,30 @@ export function generateYAML(config: AppConfig): string {
       }
     }
     
+    // Handle service_principal reference
+    let appServicePrincipal: any = undefined;
+    if (config.app.service_principal) {
+      if (typeof config.app.service_principal === 'string') {
+        // It's a reference string like "*my_sp"
+        const spRef = config.app.service_principal.startsWith('*') 
+          ? config.app.service_principal.slice(1) 
+          : config.app.service_principal;
+        appServicePrincipal = createReference(spRef);
+      } else {
+        // Inline service principal object
+        appServicePrincipal = {
+          client_id: formatCredential(config.app.service_principal.client_id),
+          client_secret: formatCredential(config.app.service_principal.client_secret),
+        };
+      }
+    }
+    
     yamlConfig.app = {
       name: config.app.name,
       registered_model: registeredModel,
       ...(config.app.description && { description: config.app.description }),
       ...(config.app.log_level && { log_level: config.app.log_level }),
+      ...(appServicePrincipal && { service_principal: appServicePrincipal }),
       ...(config.app.endpoint_name && { endpoint_name: config.app.endpoint_name }),
       ...(config.app.tags && { tags: config.app.tags }),
       ...(config.app.permissions && { permissions: config.app.permissions }),
@@ -1216,7 +1378,8 @@ export function generateYAML(config: AppConfig): string {
     // Format orchestration separately to handle swarm handoffs properly
     if (config.app.orchestration) {
       const definedLLMs = config.resources?.llms || {};
-      yamlConfig.app.orchestration = formatOrchestration(config.app.orchestration, definedLLMs);
+      const definedTools = config.tools || {};
+      yamlConfig.app.orchestration = formatOrchestration(config.app.orchestration, definedLLMs, definedTools);
     }
   }
 

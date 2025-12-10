@@ -58,6 +58,7 @@ import Modal from '@/components/ui/Modal';
 import { StatusSelect, StatusSelectOption, StatusType } from '@/components/ui/StatusSelect';
 import { useConfigStore } from '@/stores/configStore';
 import { 
+  AppConfig,
   GenieRoomModel, 
   TableModel, 
   VolumeModel, 
@@ -128,6 +129,79 @@ function generateRefName(name: string): string {
     .replace(/[^a-z0-9]+/g, '_') // Replace non-alphanumeric chars with underscore
     .replace(/_+/g, '_')          // Collapse multiple underscores
     .replace(/^_|_$/g, '');       // Remove leading/trailing underscores
+}
+
+/**
+ * Check if a reference name already exists in the config.
+ * Returns true if the refName is a duplicate (exists and is not the editingKey).
+ * 
+ * @param refName - The reference name to check
+ * @param config - The full config object
+ * @param editingKey - The key being edited (allowed to match itself)
+ * @returns true if duplicate, false otherwise
+ */
+function isRefNameDuplicate(refName: string, config: AppConfig, editingKey: string | null): boolean {
+  if (!refName) return false;
+  
+  // Check resources
+  const resources = config.resources || {};
+  const resourceTypes = ['llms', 'genie_rooms', 'tables', 'volumes', 'functions', 'warehouses', 'connections', 'databases', 'vector_stores'] as const;
+  for (const type of resourceTypes) {
+    const items = resources[type] || {};
+    if (refName in items && refName !== editingKey) {
+      return true;
+    }
+  }
+  
+  // Check top-level service_principals
+  const servicePrincipals = config.service_principals || {};
+  if (refName in servicePrincipals && refName !== editingKey) {
+    return true;
+  }
+  
+  // Check agents
+  const agents = config.agents || {};
+  if (refName in agents && refName !== editingKey) {
+    return true;
+  }
+  
+  // Check tools
+  const tools = config.tools || {};
+  if (refName in tools && refName !== editingKey) {
+    return true;
+  }
+  
+  // Check guardrails
+  const guardrails = config.guardrails || {};
+  if (refName in guardrails && refName !== editingKey) {
+    return true;
+  }
+  
+  // Check retrievers
+  const retrievers = config.retrievers || {};
+  if (refName in retrievers && refName !== editingKey) {
+    return true;
+  }
+  
+  // Check schemas
+  const schemas = config.schemas || {};
+  if (refName in schemas && refName !== editingKey) {
+    return true;
+  }
+  
+  // Check prompts
+  const prompts = config.prompts || {};
+  if (refName in prompts && refName !== editingKey) {
+    return true;
+  }
+  
+  // Check variables
+  const variables = config.variables || {};
+  if (refName in variables && refName !== editingKey) {
+    return true;
+  }
+  
+  return false;
 }
 
 export function ResourcesSection() {
@@ -328,28 +402,28 @@ function FallbackItem({
 
       {/* Source Toggle */}
       {hasConfiguredLLMs && (
-        <div className="flex space-x-2">
+        <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5 w-full">
           <button
             type="button"
             onClick={() => handleSourceChange('reference')}
-            className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            className={`flex-1 px-3 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
               source === 'reference'
-                ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                : 'text-slate-400 border border-transparent hover:text-slate-300'
             }`}
           >
-            Use Configured LLM
+            Configured
           </button>
           <button
             type="button"
             onClick={() => handleSourceChange('endpoint')}
-            className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+            className={`flex-1 px-3 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
               source === 'endpoint'
-                ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                : 'text-slate-400 border border-transparent hover:text-slate-300'
             }`}
           >
-            Select Endpoint
+            Endpoint
           </button>
         </div>
       )}
@@ -647,36 +721,36 @@ function LLMsPanel() {
           {/* Model Source Selector */}
           <div className="space-y-2">
             <label className="block text-sm font-medium text-slate-300">Model Source</label>
-            <div className="flex space-x-2">
+            <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5 w-full">
               <button
                 type="button"
                 onClick={() => setModelSource('preset')}
-                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                className={`flex-1 px-3 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
                   modelSource === 'preset'
-                    ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                    : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                    ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                    : 'text-slate-400 border border-transparent hover:text-slate-300'
                 }`}
               >
-                Preset Models
+                Preset
               </button>
               <button
                 type="button"
                 onClick={() => setModelSource('endpoint')}
-                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                className={`flex-1 px-3 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
                   modelSource === 'endpoint'
-                    ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                    : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                    ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                    : 'text-slate-400 border border-transparent hover:text-slate-300'
                 }`}
               >
-                Serving Endpoint
+                Endpoint
               </button>
               <button
                 type="button"
                 onClick={() => setModelSource('custom')}
-                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                className={`flex-1 px-3 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
                   modelSource === 'custom'
-                    ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                    : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                    ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                    : 'text-slate-400 border border-transparent hover:text-slate-300'
                 }`}
               >
                 Custom
@@ -852,6 +926,13 @@ function LLMsPanel() {
             </div>
           )}
 
+          {/* Duplicate reference name warning */}
+          {formData.name && isRefNameDuplicate(formData.name, config, editingKey) && (
+            <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+              A resource with reference name "{formData.name}" already exists. Please choose a unique name.
+            </div>
+          )}
+
           <div className="flex justify-end space-x-3 pt-4">
             <Button variant="secondary" type="button" onClick={() => {
               setIsModalOpen(false);
@@ -859,7 +940,7 @@ function LLMsPanel() {
             }}>
               Cancel
             </Button>
-            <Button type="submit">
+            <Button type="submit" disabled={isRefNameDuplicate(formData.name, config, editingKey)}>
               {editingKey ? 'Save Changes' : 'Add LLM'}
             </Button>
           </div>
@@ -929,8 +1010,10 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
       // If key changed, remove old and add new
       if (editingKey !== formData.refName) {
         removeGenieRoom(editingKey);
+        addGenieRoom(formData.refName, genieRoom);
+      } else {
+        updateGenieRoom(formData.refName, genieRoom);
       }
-      updateGenieRoom(formData.refName, genieRoom);
     } else {
       addGenieRoom(formData.refName, genieRoom);
     }
@@ -1196,6 +1279,13 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
             <span className="text-xs text-slate-500">(Use requesting user's credentials)</span>
           </label>
           
+          {/* Duplicate reference name warning */}
+          {formData.refName && isRefNameDuplicate(formData.refName, config, editingKey) && (
+            <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+              A resource with reference name "{formData.refName}" already exists. Please choose a unique name.
+            </div>
+          )}
+          
           <div className="flex justify-end space-x-3">
             <Button variant="secondary" onClick={onClose}>Cancel</Button>
             <Button 
@@ -1205,7 +1295,8 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
                 !formData.name || 
                 (spaceIdSource === 'select' && !formData.space_id) ||
                 (spaceIdSource === 'manual' && !formData.space_id) ||
-                (spaceIdSource === 'variable' && !formData.space_id_variable)
+                (spaceIdSource === 'variable' && !formData.space_id_variable) ||
+                isRefNameDuplicate(formData.refName, config, editingKey)
               }
             >
               {editingKey ? 'Update' : 'Add'}
@@ -1284,8 +1375,10 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
     if (editingKey) {
       if (editingKey !== formData.refName) {
         removeWarehouse(editingKey);
+        addWarehouse(formData.refName, warehouse);
+      } else {
+        updateWarehouse(formData.refName, warehouse);
       }
-      updateWarehouse(formData.refName, warehouse);
     } else {
       addWarehouse(formData.refName, warehouse);
     }
@@ -1570,6 +1663,13 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
             <span className="text-xs text-slate-500">(Use requesting user's credentials)</span>
           </label>
           
+          {/* Duplicate reference name warning */}
+          {formData.refName && isRefNameDuplicate(formData.refName, config, editingKey) && (
+            <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+              A resource with reference name "{formData.refName}" already exists. Please choose a unique name.
+            </div>
+          )}
+          
           <div className="flex justify-end space-x-3">
             <Button variant="secondary" onClick={onClose}>Cancel</Button>
             <Button 
@@ -1579,7 +1679,8 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
                 !formData.name || 
                 (warehouseIdSource === 'select' && !formData.warehouse_id) ||
                 (warehouseIdSource === 'manual' && !formData.warehouse_id) ||
-                (warehouseIdSource === 'variable' && !formData.warehouse_id_variable)
+                (warehouseIdSource === 'variable' && !formData.warehouse_id_variable) ||
+                isRefNameDuplicate(formData.refName, config, editingKey)
               }
             >
               {editingKey ? 'Update' : 'Add'}
@@ -1668,8 +1769,10 @@ function TablesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose
     if (editingKey) {
       if (editingKey !== formData.refName) {
         removeTable(editingKey);
+        addTable(formData.refName, table);
+      } else {
+        updateTable(formData.refName, table);
       }
-      updateTable(formData.refName, table);
     } else {
       addTable(formData.refName, table);
     }
@@ -1783,28 +1886,28 @@ function TablesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose
           {hasConfiguredSchemas && (
             <div className="space-y-2">
               <label className="block text-sm font-medium text-slate-300">Schema Source</label>
-              <div className="flex space-x-2">
+              <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5 w-full">
                 <button
                   type="button"
                   onClick={() => { setSchemaSource('reference'); setFormData({ ...formData, catalog_name: '', schema_name: '' }); }}
-                  className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  className={`flex-1 px-3 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
                     schemaSource === 'reference'
-                      ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                      : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                      ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                      : 'text-slate-400 border border-transparent hover:text-slate-300'
                   }`}
                 >
-                  Use Configured Schema
+                  Configured
                 </button>
                 <button
                   type="button"
                   onClick={() => { setSchemaSource('direct'); setFormData({ ...formData, schemaRef: '' }); }}
-                  className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  className={`flex-1 px-3 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
                     schemaSource === 'direct'
-                      ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                      : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                      ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                      : 'text-slate-400 border border-transparent hover:text-slate-300'
                   }`}
                 >
-                  Select Catalog/Schema
+                  Select
                 </button>
               </div>
             </div>
@@ -1924,9 +2027,16 @@ function TablesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose
             <span className="text-sm text-slate-300">On Behalf of User</span>
           </label>
           
+          {/* Duplicate reference name warning */}
+          {formData.refName && isRefNameDuplicate(formData.refName, config, editingKey) && (
+            <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+              A resource with reference name "{formData.refName}" already exists. Please choose a unique name.
+            </div>
+          )}
+          
           <div className="flex justify-end space-x-3">
             <Button variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button onClick={handleSave} disabled={!formData.refName || !isSchemaSelected}>
+            <Button onClick={handleSave} disabled={!formData.refName || !isSchemaSelected || isRefNameDuplicate(formData.refName, config, editingKey)}>
               {editingKey ? 'Update' : 'Add'}
             </Button>
           </div>
@@ -2010,8 +2120,10 @@ function VolumesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClos
     if (editingKey) {
       if (editingKey !== formData.refName) {
         removeVolume(editingKey);
+        addVolume(formData.refName, volume);
+      } else {
+        updateVolume(formData.refName, volume);
       }
-      updateVolume(formData.refName, volume);
     } else {
       addVolume(formData.refName, volume);
     }
@@ -2125,28 +2237,28 @@ function VolumesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClos
           {hasConfiguredSchemas && (
             <div className="space-y-2">
               <label className="block text-sm font-medium text-slate-300">Schema Source</label>
-              <div className="flex space-x-2">
+              <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5 w-full">
                 <button
                   type="button"
                   onClick={() => { setSchemaSource('reference'); setFormData({ ...formData, catalog_name: '', schema_name: '' }); }}
-                  className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  className={`flex-1 px-3 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
                     schemaSource === 'reference'
-                      ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                      : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                      ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                      : 'text-slate-400 border border-transparent hover:text-slate-300'
                   }`}
                 >
-                  Use Configured Schema
+                  Configured
                 </button>
                 <button
                   type="button"
                   onClick={() => { setSchemaSource('direct'); setFormData({ ...formData, schemaRef: '' }); }}
-                  className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  className={`flex-1 px-3 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
                     schemaSource === 'direct'
-                      ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                      : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                      ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                      : 'text-slate-400 border border-transparent hover:text-slate-300'
                   }`}
                 >
-                  Select Catalog/Schema
+                  Select
                 </button>
               </div>
             </div>
@@ -2229,9 +2341,16 @@ function VolumesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClos
             <span className="text-sm text-slate-300">On Behalf of User</span>
           </label>
           
+          {/* Duplicate reference name warning */}
+          {formData.refName && isRefNameDuplicate(formData.refName, config, editingKey) && (
+            <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+              A resource with reference name "{formData.refName}" already exists. Please choose a unique name.
+            </div>
+          )}
+          
           <div className="flex justify-end space-x-3">
             <Button variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button onClick={handleSave} disabled={!formData.refName || !formData.name || !isSchemaSelected}>
+            <Button onClick={handleSave} disabled={!formData.refName || !formData.name || !isSchemaSelected || isRefNameDuplicate(formData.refName, config, editingKey)}>
               {editingKey ? 'Update' : 'Add'}
             </Button>
           </div>
@@ -2335,8 +2454,10 @@ function FunctionsPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
     if (editingKey) {
       if (editingKey !== formData.refName) {
         removeFunction(editingKey);
+        addFunction(formData.refName, func);
+      } else {
+        updateFunction(formData.refName, func);
       }
-      updateFunction(formData.refName, func);
     } else {
       addFunction(formData.refName, func);
     }
@@ -2450,28 +2571,28 @@ function FunctionsPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
           {hasConfiguredSchemas && (
             <div className="space-y-2">
               <label className="block text-sm font-medium text-slate-300">Schema Source</label>
-              <div className="flex space-x-2">
+              <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5 w-full">
                 <button
                   type="button"
                   onClick={() => { setSchemaSource('reference'); setFormData({ ...formData, catalog_name: '', schema_name: '' }); }}
-                  className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  className={`flex-1 px-3 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
                     schemaSource === 'reference'
-                      ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                      : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                      ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                      : 'text-slate-400 border border-transparent hover:text-slate-300'
                   }`}
                 >
-                  Use Configured Schema
+                  Configured
                 </button>
                 <button
                   type="button"
                   onClick={() => { setSchemaSource('direct'); setFormData({ ...formData, schemaRef: '' }); }}
-                  className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  className={`flex-1 px-3 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
                     schemaSource === 'direct'
-                      ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                      : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                      ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                      : 'text-slate-400 border border-transparent hover:text-slate-300'
                   }`}
                 >
-                  Select Catalog/Schema
+                  Select
                 </button>
               </div>
             </div>
@@ -2482,11 +2603,15 @@ function FunctionsPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
               label="Schema Reference"
               value={formData.schemaRef}
               onChange={(e: ChangeEvent<HTMLSelectElement>) => {
-                // Don't set refName here - let function selection set it
+                const schemaRefValue = e.target.value;
+                const schema = schemaRefValue ? configuredSchemas[schemaRefValue] : null;
+                // Generate default refName based on schema (for "all functions" case)
+                const refName = schema ? generateRefName(`${schema.catalog_name}_${schema.schema_name}_functions`) : '';
                 setFormData({ 
                   ...formData, 
-                  schemaRef: e.target.value, 
+                  schemaRef: schemaRefValue, 
                   name: '',
+                  refName: formData.refName || refName,
                 });
               }}
               options={[
@@ -2513,11 +2638,14 @@ function FunctionsPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
                 label="Schema"
                 value={formData.schema_name}
                 onChange={(e: ChangeEvent<HTMLSelectElement>) => {
-                  // Don't set refName here - let function selection set it
+                  const schemaName = e.target.value;
+                  // Generate default refName based on schema (for "all functions" case)
+                  const refName = schemaName ? generateRefName(`${formData.catalog_name}_${schemaName}_functions`) : '';
                   setFormData({ 
                     ...formData, 
-                    schema_name: e.target.value, 
+                    schema_name: schemaName, 
                     name: '',
+                    refName: formData.refName || refName,
                   });
                 }}
                 options={[
@@ -2585,9 +2713,16 @@ function FunctionsPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
             <span className="text-sm text-slate-300">On Behalf of User</span>
           </label>
           
+          {/* Duplicate reference name warning */}
+          {formData.refName && isRefNameDuplicate(formData.refName, config, editingKey) && (
+            <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+              A resource with reference name "{formData.refName}" already exists. Please choose a unique name.
+            </div>
+          )}
+          
           <div className="flex justify-end space-x-3">
             <Button variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button onClick={handleSave} disabled={!formData.refName || !isSchemaSelected}>
+            <Button onClick={handleSave} disabled={!formData.refName || !isSchemaSelected || isRefNameDuplicate(formData.refName, config, editingKey)}>
               {editingKey ? 'Update' : 'Add'}
             </Button>
           </div>
@@ -2631,8 +2766,10 @@ function ConnectionsPanel({ showForm, setShowForm, editingKey, setEditingKey, on
     if (editingKey) {
       if (editingKey !== formData.refName) {
         removeConnection(editingKey);
+        addConnection(formData.refName, connection);
+      } else {
+        updateConnection(formData.refName, connection);
       }
-      updateConnection(formData.refName, connection);
     } else {
       addConnection(formData.refName, connection);
     }
@@ -2741,9 +2878,16 @@ function ConnectionsPanel({ showForm, setShowForm, editingKey, setEditingKey, on
             <span className="text-sm text-slate-300">On Behalf of User</span>
           </label>
           
+          {/* Duplicate reference name warning */}
+          {formData.refName && isRefNameDuplicate(formData.refName, config, editingKey) && (
+            <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+              A resource with reference name "{formData.refName}" already exists. Please choose a unique name.
+            </div>
+          )}
+          
           <div className="flex justify-end space-x-3">
             <Button variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button onClick={handleSave} disabled={!formData.refName || !formData.name}>
+            <Button onClick={handleSave} disabled={!formData.refName || !formData.name || isRefNameDuplicate(formData.refName, config, editingKey)}>
               {editingKey ? 'Update' : 'Add'}
             </Button>
           </div>
@@ -2767,7 +2911,8 @@ interface DatabaseFormData {
   capacity: 'CU_1' | 'CU_2';
   max_pool_size: number;
   timeout_seconds: number;
-  authMethod: 'oauth' | 'user';
+  authMethod: 'oauth' | 'user' | 'service_principal';
+  servicePrincipalRef: string;  // Reference to configured service principal
   clientIdSource: CredentialSource;
   clientSecretSource: CredentialSource;
   workspaceHostSource: CredentialSource;
@@ -2795,7 +2940,8 @@ const defaultDatabaseForm: DatabaseFormData = {
   capacity: 'CU_2',
   max_pool_size: 10,
   timeout_seconds: 10,
-  authMethod: 'oauth',
+  authMethod: 'service_principal',
+  servicePrincipalRef: '',
   clientIdSource: 'variable',
   clientSecretSource: 'variable',
   workspaceHostSource: 'variable',
@@ -2820,7 +2966,8 @@ const capacityOptions = [
 ];
 
 const authMethodOptions = [
-  { value: 'oauth', label: 'OAuth2 (Service Principal)' },
+  { value: 'service_principal', label: 'Configured Service Principal' },
+  { value: 'oauth', label: 'Manual OAuth2 Credentials' },
   { value: 'user', label: 'User/Password' },
 ];
 
@@ -2872,19 +3019,26 @@ function CredentialInput({
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <label className="text-sm font-medium text-slate-300">{label}</label>
-        <div className="flex items-center space-x-2">
+        <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5">
           <button
             type="button"
             onClick={() => onSourceChange('variable')}
-            className={`px-2 py-1 text-xs rounded flex items-center space-x-1 ${source === 'variable' ? 'bg-purple-500/30 text-purple-300' : 'bg-slate-700 text-slate-400'}`}
+            className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 flex items-center gap-1 ${
+              source === 'variable'
+                ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                : 'text-slate-400 border border-transparent hover:text-slate-300'
+            }`}
           >
-            <Key className="w-3 h-3" />
-            <span>Variable</span>
+            Variable
           </button>
           <button
             type="button"
             onClick={() => onSourceChange('manual')}
-            className={`px-2 py-1 text-xs rounded ${source === 'manual' ? 'bg-blue-500/30 text-blue-300' : 'bg-slate-700 text-slate-400'}`}
+            className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${
+              source === 'manual'
+                ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                : 'text-slate-400 border border-transparent hover:text-slate-300'
+            }`}
           >
             Manual
           </button>
@@ -2976,7 +3130,8 @@ function DatabasesPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
         capacity: db.capacity || 'CU_2',
         max_pool_size: db.max_pool_size || 10,
         timeout_seconds: db.timeout_seconds || 10,
-        authMethod: db.client_id ? 'oauth' : 'user',
+        authMethod: db.service_principal ? 'service_principal' : (db.client_id ? 'oauth' : 'user'),
+        servicePrincipalRef: safeStartsWith(db.service_principal, '*') ? safeString(db.service_principal).slice(1) : '',
         clientIdSource: isVariableRef(db.client_id) ? 'variable' : 'manual',
         clientSecretSource: isVariableRef(db.client_secret) ? 'variable' : 'manual',
         workspaceHostSource: isVariableRef(db.workspace_host) ? 'variable' : 'manual',
@@ -3021,7 +3176,12 @@ function DatabasesPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
       on_behalf_of_user: formData.on_behalf_of_user || undefined,
     };
     
-    if (formData.authMethod === 'oauth') {
+    if (formData.authMethod === 'service_principal') {
+      // Use configured service principal reference
+      if (formData.servicePrincipalRef) {
+        db.service_principal = `*${formData.servicePrincipalRef}`;
+      }
+    } else if (formData.authMethod === 'oauth') {
       const clientId = getCredentialValue(formData.clientIdSource, formData.client_id, formData.clientIdVariable);
       const clientSecret = getCredentialValue(formData.clientSecretSource, formData.client_secret, formData.clientSecretVariable);
       const workspaceHost = getCredentialValue(formData.workspaceHostSource, formData.workspace_host, formData.workspaceHostVariable);
@@ -3247,11 +3407,35 @@ function DatabasesPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
           <Select
             label="Authentication Method"
             value={formData.authMethod}
-            onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, authMethod: e.target.value as 'oauth' | 'user' })}
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, authMethod: e.target.value as 'oauth' | 'user' | 'service_principal' })}
             options={authMethodOptions}
           />
           
-          {formData.authMethod === 'oauth' ? (
+          {formData.authMethod === 'service_principal' ? (
+            <div className="space-y-4 p-3 bg-slate-900/50 rounded border border-slate-600">
+              <p className="text-xs text-slate-400 font-medium">Select Configured Service Principal</p>
+              
+              <Select
+                label="Service Principal"
+                value={formData.servicePrincipalRef}
+                onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, servicePrincipalRef: e.target.value })}
+                options={[
+                  { value: '', label: 'Select a service principal...' },
+                  ...Object.keys(config.service_principals || {}).map((sp) => ({
+                    value: sp,
+                    label: sp,
+                  })),
+                ]}
+                hint="Reference a pre-configured service principal"
+              />
+              
+              {Object.keys(config.service_principals || {}).length === 0 && (
+                <div className="p-2 bg-amber-500/10 border border-amber-500/30 rounded text-amber-400 text-xs">
+                  No service principals configured. Add one in the Service Principals tab first.
+                </div>
+              )}
+            </div>
+          ) : formData.authMethod === 'oauth' ? (
             <div className="space-y-4 p-3 bg-slate-900/50 rounded border border-slate-600">
               <p className="text-xs text-slate-400 font-medium">OAuth2 / Service Principal Credentials</p>
               
@@ -3340,9 +3524,16 @@ function DatabasesPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
             <span className="text-sm text-slate-300">On Behalf of User</span>
           </label>
           
+          {/* Duplicate reference name warning */}
+          {formData.refName && isRefNameDuplicate(formData.refName, config, editingKey) && (
+            <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+              A resource with reference name "{formData.refName}" already exists. Please choose a unique name.
+            </div>
+          )}
+          
           <div className="flex justify-end space-x-3">
             <Button variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button onClick={handleSave} disabled={!formData.refName || !formData.name}>
+            <Button onClick={handleSave} disabled={!formData.refName || !formData.name || isRefNameDuplicate(formData.refName, config, editingKey)}>
               {editingKey ? 'Update' : 'Add'}
             </Button>
           </div>
@@ -3368,7 +3559,7 @@ interface VectorStoreFormData {
   index_schema: string;
   indexNameSource: 'select' | 'manual';
   index_name: string;
-  // Source Table - schema source (REQUIRED)
+  // Source Table - schema source (optional for existing indexes, required for new)
   sourceSchemaSource: SchemaSource;
   sourceSchemaRefName: string;
   source_catalog: string;
@@ -3761,6 +3952,7 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
   const [formData, setFormData] = useState<VectorStoreFormData>(defaultVectorStoreForm);
   const [columnsInput, setColumnsInput] = useState('');
   
+  
   // Schema selection for index and source table
   const { data: indexSchemas } = useSchemas(formData.index_catalog || null);
   const { data: sourceSchemas } = useSchemas(formData.source_catalog || null);
@@ -3788,8 +3980,9 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
     label: `${col.name}${col.type_text ? ` (${col.type_text})` : ''}`,
   }));
   
-  // Vector search indexes for selected endpoint
-  const { data: vsIndexes, loading: indexesLoading, refetch: refetchIndexes } = useVectorSearchIndexes(formData.endpoint_name || null);
+  // Vector search indexes for selected endpoint (used in "Create New" mode) - currently unused but may be useful for future enhancements
+  const _vsIndexesResult = useVectorSearchIndexes(formData.endpoint_name || null);
+  void _vsIndexesResult; // Suppress unused warning
   
   // Volume path selection - schemas and volumes for source path
   const { data: sourcePathSchemas } = useSchemas(formData.sourcePathVolumeCatalog || null);
@@ -3810,7 +4003,7 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
     value: key,
     label: `${key} (${schema.catalog_name}.${schema.schema_name})`,
   }));
-
+  
   const handleEdit = (key: string) => {
     const vs = vectorStores[key];
     if (vs) {
@@ -3971,14 +4164,6 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
     const columns = columnsInput.split(',').map(c => c.trim()).filter(c => c);
     
     const vs: VectorStoreModel = {
-      // Source table is required
-      source_table: {
-        schema: {
-          catalog_name: formData.source_catalog,
-          schema_name: formData.source_schema,
-        },
-        name: formData.source_table,
-      },
       // Embedding source column is required
       embedding_source_column: formData.embedding_source_column,
       // Optional fields
@@ -3987,6 +4172,17 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
       doc_uri: formData.doc_uri || undefined,
       on_behalf_of_user: formData.on_behalf_of_user || undefined,
     };
+    
+    // Source table is optional - only add if specified
+    if (formData.source_table && formData.source_catalog && formData.source_schema) {
+      vs.source_table = {
+        schema: {
+          catalog_name: formData.source_catalog,
+          schema_name: formData.source_schema,
+        },
+        name: formData.source_table,
+      };
+    }
     
     // Add endpoint only if specified (optional - auto-detected if not provided)
     if (formData.endpoint_name) {
@@ -4199,7 +4395,6 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
               options={endpointOptions}
               value={formData.endpoint_name}
               onChange={(value) => {
-                // Find the selected endpoint to get its type
                 const selectedEndpoint = vsEndpoints?.find(ep => ep.name === value);
                 const detectedType = selectedEndpoint?.endpoint_type === 'OPTIMIZED_STORAGE' 
                   ? 'OPTIMIZED_STORAGE' 
@@ -4208,7 +4403,6 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
                 setFormData({ 
                   ...formData, 
                   endpoint_name: value,
-                  // Auto-set endpoint type from selected endpoint
                   endpoint_type: value ? detectedType : formData.endpoint_type,
                 });
               }}
@@ -4226,109 +4420,6 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
               disabled={!!formData.endpoint_name}
             />
           </div>
-          
-          {/* Index Configuration (Optional) */}
-          <div className="space-y-3 p-3 bg-slate-900/50 rounded border border-slate-600">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-slate-300 font-medium">Vector Search Index <span className="text-slate-500 font-normal">(Optional)</span></p>
-                <p className="text-xs text-slate-500">Auto-generated from source table name if not specified</p>
-              </div>
-              {formData.endpoint_name && (
-                <button
-                  type="button"
-                  onClick={() => refetchIndexes()}
-                  className="text-xs text-slate-400 hover:text-white flex items-center space-x-1"
-                  disabled={indexesLoading}
-                >
-                  <RefreshCw className={`w-3 h-3 ${indexesLoading ? 'animate-spin' : ''}`} />
-                  <span>Refresh</span>
-                </button>
-              )}
-            </div>
-            
-            {/* Option to select existing index or configure new one */}
-            {formData.endpoint_name && vsIndexes && vsIndexes.length > 0 && (
-              <Select
-                label="Select Existing Index (Optional)"
-                value={vsIndexes.some(idx => idx.name === `${formData.index_catalog}.${formData.index_schema}.${formData.index_name}`) ? `${formData.index_catalog}.${formData.index_schema}.${formData.index_name}` : ''}
-                onChange={(e: ChangeEvent<HTMLSelectElement>) => {
-                  const idxName = e.target.value;
-                  if (idxName) {
-                    // Find the selected index to get its details
-                    const selectedIndex = vsIndexes.find(idx => idx.name === idxName);
-                    
-                    // Parse index name (catalog.schema.index)
-                    const parts = idxName.split('.');
-                    if (parts.length >= 3) {
-                      // Get the index name (last part after catalog.schema)
-                      const indexNamePart = parts.slice(2).join('_');
-                      
-                      // Use functional update to ensure we get latest formData
-                      setFormData(prev => {
-                        const newFormData: VectorStoreFormData = {
-                          ...prev,
-                          indexSchemaSource: 'direct',
-                          indexSchemaRefName: '',
-                          index_catalog: parts[0],
-                          index_schema: parts[1],
-                          index_name: parts.slice(2).join('.'),
-                          // Always generate refName from index name for new entries, preserve for editing
-                          refName: editingKey ? prev.refName : generateRefName(indexNamePart),
-                        };
-                        
-                        // Auto-populate from delta_sync_index_spec if available
-                        if (selectedIndex?.delta_sync_index_spec) {
-                          const spec = selectedIndex.delta_sync_index_spec;
-                          
-                          // Parse source table (format: catalog.schema.table)
-                          if (spec.source_table) {
-                            const tableParts = spec.source_table.split('.');
-                            if (tableParts.length >= 3) {
-                              newFormData.sourceSchemaSource = 'direct';
-                              newFormData.sourceSchemaRefName = '';
-                              newFormData.source_catalog = tableParts[0];
-                              newFormData.source_schema = tableParts[1];
-                              newFormData.source_table = tableParts.slice(2).join('.');
-                            }
-                          }
-                          
-                          // Auto-populate embedding source column
-                          if (spec.embedding_source_columns && spec.embedding_source_columns.length > 0) {
-                            const embeddingCol = spec.embedding_source_columns[0];
-                            newFormData.embedding_source_column = embeddingCol.name || '';
-                            // Also set the embedding model if available
-                            if (embeddingCol.embedding_model_endpoint_name) {
-                              newFormData.embedding_model = embeddingCol.embedding_model_endpoint_name;
-                            }
-                          }
-                          
-                          // Auto-populate columns to sync
-                          if (spec.columns_to_sync && spec.columns_to_sync.length > 0) {
-                            newFormData.columns = spec.columns_to_sync;
-                            setColumnsInput(spec.columns_to_sync.join(', '));
-                          }
-                        }
-                        
-                        // Auto-populate primary key if available
-                        if (selectedIndex?.primary_key) {
-                          newFormData.primary_key = selectedIndex.primary_key;
-                        }
-                        
-                        return newFormData;
-                      });
-                    }
-                  }
-                }}
-                options={[
-                  { value: '', label: indexesLoading ? 'Loading...' : 'Or configure manually below...' },
-                  ...(vsIndexes || []).map((idx) => ({
-                    value: idx.name,
-                    label: `${idx.name}${idx.delta_sync_index_spec?.source_table ? ` (→ ${idx.delta_sync_index_spec.source_table})` : ''}`,
-                  })),
-                ]}
-              />
-            )}
             
             {/* Schema Source Toggle */}
             <div className="space-y-2">
@@ -4459,11 +4550,13 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
                 />
               )}
             </div>
-          </div>
-          
-          {/* Source Table */}
-          <div className="space-y-3 p-3 bg-slate-900/50 rounded border border-slate-600">
-            <p className="text-sm text-slate-300 font-medium">Source Table</p>
+            
+            {/* Source Table - REQUIRED for new indexes */}
+            <div className="space-y-3 p-3 bg-slate-900/50 rounded border border-slate-600">
+              <div>
+                <p className="text-sm text-slate-300 font-medium">Source Table <span className="text-red-400 font-normal">(Required for new index)</span></p>
+                <p className="text-xs text-slate-500">The table containing data to be indexed</p>
+              </div>
             
             {/* Schema Source Toggle */}
             <div className="space-y-2">
@@ -4741,9 +4834,19 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
             <span className="text-sm text-slate-300">On Behalf of User</span>
           </label>
           
+          {/* Duplicate reference name warning */}
+          {formData.refName && isRefNameDuplicate(formData.refName, config, editingKey) && (
+            <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+              A resource with reference name "{formData.refName}" already exists. Please choose a unique name.
+            </div>
+          )}
+          
           <div className="flex justify-end space-x-3">
             <Button variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button onClick={handleSave} disabled={!formData.refName || !formData.source_table || !formData.embedding_source_column}>
+            <Button 
+              onClick={handleSave} 
+              disabled={!formData.refName || !formData.embedding_source_column || isRefNameDuplicate(formData.refName, config, editingKey)}
+            >
               {editingKey ? 'Update' : 'Add'}
             </Button>
           </div>

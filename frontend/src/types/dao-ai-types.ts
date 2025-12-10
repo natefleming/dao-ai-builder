@@ -34,6 +34,14 @@ export type VariableModel =
   | SecretVariableModel
   | CompositeVariableModel;
 
+// Variable value type - can be a VariableModel or primitive value
+export type VariableValue = VariableModel | string | number | boolean;
+
+export interface ServicePrincipalModel {
+  client_id: VariableValue;
+  client_secret: VariableValue;
+}
+
 export interface SchemaModel {
   catalog_name: string;
   schema_name: string;
@@ -53,7 +61,7 @@ export interface VectorStoreModel {
   embedding_model?: LLMModel;
   index?: IndexModel;
   endpoint?: VectorSearchEndpoint;
-  source_table: TableModel;
+  source_table?: TableModel;  // Optional - auto-populated from index if available
   source_path?: VolumePathModel;
   checkpoint_path?: VolumePathModel;
   primary_key?: string;
@@ -125,6 +133,7 @@ export interface DatabaseModel {
   node_count?: number;
   user?: string;
   password?: string;
+  service_principal?: ServicePrincipalModel | string;  // Can be inline or reference
   client_id?: string;
   client_secret?: string;
   workspace_host?: string;
@@ -188,6 +197,7 @@ export interface McpFunctionModel {
   headers?: Record<string, any>;
   args?: string[];
   pat?: string;
+  service_principal?: ServicePrincipalModel | string;  // Can be inline or reference
   client_id?: string;
   client_secret?: string;
   workspace_host?: string;
@@ -246,6 +256,7 @@ export interface PromptModel {
   alias?: string;
   version?: number;
   tags?: Record<string, any>;
+  service_principal?: ServicePrincipalModel | string;  // Can be inline or reference
 }
 
 export interface PermissionModel {
@@ -305,6 +316,7 @@ export interface AppModel {
   name: string;
   description?: string;
   log_level?: LogLevel;
+  service_principal?: ServicePrincipalModel | string;  // Can be inline or reference
   registered_model: RegisteredModelModel;
   endpoint_name?: string;
   tags?: Record<string, any>;
@@ -390,11 +402,13 @@ export interface ResourcesModel {
   warehouses?: Record<string, WarehouseModel>;
   databases?: Record<string, DatabaseModel>;
   connections?: Record<string, ConnectionModel>;
+  service_principals?: Record<string, ServicePrincipalModel>;
 }
 
 export interface AppConfig {
   variables?: Record<string, any>;
   schemas?: Record<string, SchemaModel>;
+  service_principals?: Record<string, ServicePrincipalModel>;
   resources?: ResourcesModel;
   retrievers?: Record<string, RetrieverModel>;
   tools?: Record<string, ToolModel>;

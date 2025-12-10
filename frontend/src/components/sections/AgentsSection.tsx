@@ -9,7 +9,69 @@ import Card from '../ui/Card';
 import Modal from '../ui/Modal';
 import Badge from '../ui/Badge';
 import MultiSelect from '../ui/MultiSelect';
-import { AgentModel, PromptModel } from '@/types/dao-ai-types';
+import { AgentModel, AppConfig, PromptModel } from '@/types/dao-ai-types';
+
+/**
+ * Check if a reference name already exists in the config.
+ * Returns true if the refName is a duplicate (exists and is not the editingKey).
+ */
+function isRefNameDuplicate(refName: string, config: AppConfig, editingKey: string | null): boolean {
+  if (!refName) return false;
+  
+  // Check resources
+  const resources = config.resources || {};
+  const resourceTypes = ['llms', 'genie_rooms', 'tables', 'volumes', 'functions', 'warehouses', 'connections', 'databases', 'vector_stores'] as const;
+  for (const type of resourceTypes) {
+    const items = resources[type] || {};
+    if (refName in items && refName !== editingKey) {
+      return true;
+    }
+  }
+  
+  // Check agents
+  const agents = config.agents || {};
+  if (refName in agents && refName !== editingKey) {
+    return true;
+  }
+  
+  // Check tools
+  const tools = config.tools || {};
+  if (refName in tools && refName !== editingKey) {
+    return true;
+  }
+  
+  // Check guardrails
+  const guardrails = config.guardrails || {};
+  if (refName in guardrails && refName !== editingKey) {
+    return true;
+  }
+  
+  // Check retrievers
+  const retrievers = config.retrievers || {};
+  if (refName in retrievers && refName !== editingKey) {
+    return true;
+  }
+  
+  // Check schemas
+  const schemas = config.schemas || {};
+  if (refName in schemas && refName !== editingKey) {
+    return true;
+  }
+  
+  // Check prompts
+  const prompts = config.prompts || {};
+  if (refName in prompts && refName !== editingKey) {
+    return true;
+  }
+  
+  // Check variables
+  const variables = config.variables || {};
+  if (refName in variables && refName !== editingKey) {
+    return true;
+  }
+  
+  return false;
+}
 
 // AI Prompt generation API
 async function generatePromptWithAI(params: {
@@ -150,10 +212,10 @@ export default function AgentsSection() {
                     <Bot className="w-5 h-5 text-violet-400" />
                   </div>
                   <div>
-                    <h3 className="font-medium text-white">{agent.name}</h3>
-                    {agent.description && (
-                      <p className="text-sm text-slate-400">{agent.description}</p>
-                    )}
+                    <p className="font-medium text-slate-200">{key}</p>
+                    <p className="text-xs text-slate-500">
+                      {agent.name}{agent.description ? ` • ${agent.description}` : ''}
+                    </p>
                   </div>
                 </div>
                 <div className="flex items-center space-x-3">
@@ -240,6 +302,7 @@ export default function AgentsSection() {
         prompts={prompts}
         onAdd={addAgent}
         onUpdate={updateAgent}
+        onRemove={removeAgent}
       />
     </div>
   );
@@ -258,8 +321,23 @@ interface AgentModalProps {
   tools: Record<string, any>;
   guardrails: Record<string, any>;
   prompts: Record<string, PromptModel>;
-  onAdd: (agent: AgentModel) => void;
-  onUpdate: (key: string, updates: Partial<AgentModel>) => void;
+  onAdd: (refName: string, agent: AgentModel) => void;
+  onUpdate: (refName: string, updates: Partial<AgentModel>) => void;
+  onRemove: (refName: string) => void;
+}
+
+/**
+ * Generate a normalized reference name from an asset name.
+ * - Converts to lowercase
+ * - Replaces consecutive whitespace/special chars with single underscore
+ * - Removes leading/trailing underscores
+ */
+function generateRefName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_') // Replace non-alphanumeric chars with underscore
+    .replace(/_+/g, '_')          // Collapse multiple underscores
+    .replace(/^_|_$/g, '');       // Remove leading/trailing underscores
 }
 
 function AgentModal({
@@ -277,6 +355,7 @@ function AgentModal({
   prompts,
   onAdd,
   onUpdate,
+  onRemove,
 }: AgentModalProps) {
   const { config } = useConfigStore();
   const [promptSource, setPromptSource] = useState<PromptSource>('inline');
@@ -287,6 +366,7 @@ function AgentModal({
   const [templateParams, setTemplateParams] = useState<string[]>(['user_id', 'store_num']);
   const [customParam, setCustomParam] = useState('');
   const [formData, setFormData] = useState({
+    refName: '',  // Reference name used as the key in YAML
     name: '',
     description: '',
     modelKey: '',
@@ -362,7 +442,10 @@ function AgentModal({
 
   // Reset form when modal opens or editing agent changes
   useEffect(() => {
-    if (editingAgent) {
+    // Only run when modal opens
+    if (!isOpen) return;
+    
+    if (editingAgent && editingKey) {
       const modelKey = Object.entries(llms).find(
         ([, llm]) => llm.name === editingAgent.model?.name
       )?.[0] || '';
@@ -395,6 +478,7 @@ function AgentModal({
       ).filter(Boolean) || [];
       
       const newFormData = {
+        refName: editingKey, // Use the existing key as refName
         name: editingAgent.name,
         description: editingAgent.description || '',
         modelKey,
@@ -407,6 +491,7 @@ function AgentModal({
       
       // Create a separate copy for initial state comparison
       const initialData = {
+        refName: editingKey,
         name: editingAgent.name,
         description: editingAgent.description || '',
         modelKey,
@@ -422,7 +507,9 @@ function AgentModal({
       setInitialFormData(initialData);
       setInitialPromptSource(detectedPromptSource);
     } else {
+      // Reset to default values for new agent
       const defaultFormData = {
+        refName: '',
         name: '',
         description: '',
         modelKey: '',
@@ -436,13 +523,15 @@ function AgentModal({
       setFormData(defaultFormData);
       setInitialFormData(null); // No initial data for new agents
       setInitialPromptSource('inline');
+      setShowAiInput(false);
+      setAiContext('');
     }
-  }, [editingAgent, editingKey, llms, prompts, tools, guardrails]);
+  }, [isOpen, editingAgent, editingKey, llms, prompts, tools, guardrails]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!formData.name || !formData.modelKey || !llms[formData.modelKey]) return;
+    if (!formData.refName || !formData.name || !formData.modelKey || !llms[formData.modelKey]) return;
 
     // Determine prompt value based on source
     let promptValue: string | PromptModel | undefined;
@@ -463,9 +552,15 @@ function AgentModal({
     };
 
     if (editingKey) {
-      onUpdate(editingKey, agent);
+      // If reference name changed, remove old and add new
+      if (editingKey !== formData.refName) {
+        onRemove(editingKey);
+        onAdd(formData.refName, agent);
+      } else {
+        onUpdate(formData.refName, agent);
+      }
     } else {
-      onAdd(agent);
+      onAdd(formData.refName, agent);
     }
     
     onClose();
@@ -476,6 +571,7 @@ function AgentModal({
     if (!editingKey || !initialFormData) return true; // Always allow submit for new agents
     
     // Compare all form fields
+    if (formData.refName !== initialFormData.refName) return true;
     if (formData.name !== initialFormData.name) return true;
     if (formData.description !== initialFormData.description) return true;
     if (formData.modelKey !== initialFormData.modelKey) return true;
@@ -511,10 +607,11 @@ function AgentModal({
 
         <div className="grid grid-cols-2 gap-4">
           <Input
-            label="Agent Name"
+            label="Reference Name"
             placeholder="e.g., customer_service_agent"
-            value={formData.name}
-            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+            value={formData.refName}
+            onChange={(e) => setFormData({ ...formData, refName: e.target.value })}
+            hint={editingKey ? "Changing this will update all references in the YAML" : "Unique key to reference this agent in YAML"}
             required
           />
           <Select
@@ -527,40 +624,58 @@ function AgentModal({
           />
         </div>
 
-        <Input
-          label="Description"
-          placeholder="Brief description of this agent's purpose"
-          value={formData.description}
-          onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-        />
+        <div className="grid grid-cols-2 gap-4">
+          <Input
+            label="Display Name"
+            placeholder="e.g., Customer Service Agent"
+            value={formData.name}
+            onChange={(e) => {
+              const name = e.target.value;
+              // Auto-generate refName from name if refName is empty or was auto-generated
+              const shouldAutoGenerate = !editingKey && (!formData.refName || formData.refName === generateRefName(formData.name));
+              setFormData({ 
+                ...formData, 
+                name,
+                refName: shouldAutoGenerate ? generateRefName(name) : formData.refName,
+              });
+            }}
+            hint="Human-readable name for this agent"
+            required
+          />
+          <Input
+            label="Description"
+            placeholder="Brief description of this agent's purpose"
+            value={formData.description}
+            onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+          />
+        </div>
 
         {/* System Prompt with Source Toggle */}
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <label className="block text-sm font-medium text-slate-300">System Prompt</label>
-            <div className="flex items-center space-x-2">
+            <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5">
               <button
                 type="button"
                 onClick={() => { setPromptSource('inline'); setFormData({ ...formData, promptRef: '' }); }}
-                className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-colors ${
+                className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${
                   promptSource === 'inline'
-                    ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                    : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                    ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                    : 'text-slate-400 border border-transparent hover:text-slate-300'
                 }`}
               >
-                Write Inline
+                Inline
               </button>
               <button
                 type="button"
                 onClick={() => { setPromptSource('configured'); setFormData({ ...formData, prompt: '' }); }}
-                className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-colors flex items-center space-x-1 ${
+                className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${
                   promptSource === 'configured'
-                    ? 'bg-violet-500/20 text-violet-400 border border-violet-500/30'
-                    : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                    ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                    : 'text-slate-400 border border-transparent hover:text-slate-300'
                 }`}
               >
-                <FileText className="w-3 h-3" />
-                <span>Use Configured</span>
+                Configured
               </button>
             </div>
           </div>
@@ -817,13 +932,20 @@ function AgentModal({
           />
         </div>
 
+        {/* Duplicate reference name warning */}
+        {formData.refName && isRefNameDuplicate(formData.refName, config, editingKey) && (
+          <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+            A resource with reference name "{formData.refName}" already exists. Please choose a unique name.
+          </div>
+        )}
+
         <div className="flex justify-end space-x-3 pt-4">
           <Button variant="secondary" type="button" onClick={onClose}>
             Cancel
           </Button>
           <Button 
             type="submit" 
-            disabled={llmOptions.length === 0 || (!!editingKey && !hasChanges)}
+            disabled={llmOptions.length === 0 || (!!editingKey && !hasChanges) || isRefNameDuplicate(formData.refName, config, editingKey)}
           >
             {editingKey ? 'Save Changes' : 'Add Agent'}
           </Button>

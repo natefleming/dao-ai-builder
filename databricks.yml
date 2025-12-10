@@ -3,6 +3,10 @@
 bundle:
   name: dao_ai_builder
 
+sync:
+  include:
+    - frontend/dist/**
+
 targets:
   default:
     workspace:

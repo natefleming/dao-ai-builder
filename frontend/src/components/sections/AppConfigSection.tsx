@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Settings, Save, GitBranch, Users, ArrowRightLeft, Plus, Trash2, Info, Bot, X, Tag } from 'lucide-react';
+import { Settings, Save, GitBranch, Users, ArrowRightLeft, Plus, Trash2, Info, Bot, X, Tag, Wrench, Sparkles, Loader2 } from 'lucide-react';
 import { useConfigStore } from '@/stores/configStore';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
@@ -9,6 +9,27 @@ import Card from '../ui/Card';
 import Badge from '../ui/Badge';
 import { LogLevel } from '@/types/dao-ai-types';
 import { clsx } from 'clsx';
+
+// AI Supervisor Prompt generation API
+async function generateSupervisorPromptWithAI(params: {
+  context?: string;
+  agents?: { name: string; description?: string; handoff_prompt?: string }[];
+  existing_prompt?: string;
+}): Promise<string> {
+  const response = await fetch('/api/ai/generate-supervisor-prompt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to generate supervisor prompt');
+  }
+  
+  const data = await response.json();
+  return data.prompt;
+}
 
 const LOG_LEVELS = [
   { value: 'TRACE', label: 'TRACE' },
@@ -33,24 +54,62 @@ interface HandoffConfig {
   targets: string[];
 }
 
+// Helper to convert a string to snake_case
+function toSnakeCase(str: string): string {
+  return str
+    .trim()
+    .replace(/[\s-]+/g, '_')           // Replace spaces and hyphens with underscores
+    .replace(/([a-z])([A-Z])/g, '$1_$2') // Add underscore before capitals in camelCase
+    .replace(/[^a-zA-Z0-9_]/g, '')      // Remove non-alphanumeric except underscores
+    .toLowerCase()
+    .replace(/_+/g, '_')               // Collapse multiple underscores
+    .replace(/^_|_$/g, '');            // Remove leading/trailing underscores
+}
+
 export default function AppConfigSection() {
   const { config, updateApp } = useConfigStore();
   const app = config.app;
   const schemas = config.schemas || {};
   const agents = config.agents || {};
   const llms = config.resources?.llms || {};
+  const tools = config.tools || {};
 
   // App settings form
-  const [formData, setFormData] = useState({
-    name: app?.name || '',
+  const [formData, setFormData] = useState(() => {
+    // Find the schema key that matches the registered_model's schema
+    let modelSchemaKey = '';
+    if (app?.registered_model?.schema) {
+      const regSchema = app.registered_model.schema;
+      const matchedSchemaEntry = Object.entries(schemas).find(([, s]) => 
+        s.catalog_name === regSchema.catalog_name && s.schema_name === regSchema.schema_name
+      );
+      modelSchemaKey = matchedSchemaEntry ? matchedSchemaEntry[0] : '';
+    }
+    
+    // Get service principal ref if it exists
+    let spRef = '';
+    if (app?.service_principal) {
+      if (typeof app.service_principal === 'string') {
+        spRef = app.service_principal.startsWith('*') ? app.service_principal.slice(1) : app.service_principal;
+      }
+    }
+    
+    return {
+      name: app?.name || '',
     description: app?.description || '',
     logLevel: app?.log_level || 'INFO',
     endpointName: app?.endpoint_name || '',
-    modelName: app?.registered_model?.name || '',
-    modelSchema: '',
+      modelName: app?.registered_model?.name || '',
+      modelSchema: modelSchemaKey,
     workloadSize: app?.workload_size || 'Small',
     scaleToZero: app?.scale_to_zero ?? true,
+      servicePrincipalRef: spRef,
+    };
   });
+  
+  // Track if endpoint/model names were auto-derived (to know when to update them)
+  const [derivedEndpointName, setDerivedEndpointName] = useState('');
+  const [derivedModelName, setDerivedModelName] = useState('');
 
   // Tags state - values can be strings, booleans, or numbers from YAML
   const [tags, setTags] = useState<Record<string, string | boolean | number>>(
@@ -79,17 +138,18 @@ export default function AppConfigSection() {
   );
   const [newPrincipal, setNewPrincipal] = useState('');
 
-  // Selected agents for the app
+  // Selected agents for the app - default to ALL agents if none are explicitly configured
   const [selectedAgents, setSelectedAgents] = useState<string[]>(() => {
-    // Initialize from existing app.agents
-    if (app?.agents && Array.isArray(app.agents)) {
+    // Initialize from existing app.agents if they exist
+    if (app?.agents && Array.isArray(app.agents) && app.agents.length > 0) {
       return app.agents.map(a => {
         // Find the key in config.agents that matches this agent's name
         const matchedKey = Object.entries(agents).find(([, agent]) => agent.name === a.name)?.[0];
         return matchedKey || '';
       }).filter(Boolean);
     }
-    return [];
+    // Default to all agents when no explicit selection exists
+    return Object.keys(agents);
   });
 
   // Orchestration state
@@ -100,6 +160,12 @@ export default function AppConfigSection() {
   const [supervisorPrompt, setSupervisorPrompt] = useState(
     config.app?.orchestration?.supervisor?.prompt || ''
   );
+  
+  // AI generation state for supervisor prompt
+  const [isGeneratingSupervisorPrompt, setIsGeneratingSupervisorPrompt] = useState(false);
+  const [showSupervisorAiInput, setShowSupervisorAiInput] = useState(false);
+  const [supervisorAiContext, setSupervisorAiContext] = useState('');
+  
   const [selectedLLM, setSelectedLLM] = useState(() => {
     const existingModel = config.app?.orchestration?.supervisor?.model?.name || 
                           config.app?.orchestration?.swarm?.model?.name;
@@ -133,6 +199,19 @@ export default function AppConfigSection() {
     });
   });
 
+  // Supervisor tools state - stores tool keys
+  const [supervisorTools, setSupervisorTools] = useState<string[]>(() => {
+    const existingTools = config.app?.orchestration?.supervisor?.tools;
+    if (!existingTools || !Array.isArray(existingTools)) return [];
+    
+    // Find the tool keys that match the tool names
+    return existingTools.map(t => {
+      const toolName = typeof t === 'string' ? t : t?.name;
+      const matchedKey = Object.entries(tools).find(([, tool]) => tool.name === toolName)?.[0];
+      return matchedKey || '';
+    }).filter(Boolean);
+  });
+
   // Determine if there are unsaved changes
   const hasChanges = (() => {
     // Check basic form fields
@@ -143,6 +222,17 @@ export default function AppConfigSection() {
     if (formData.modelName !== (app?.registered_model?.name || '')) return true;
     if (formData.workloadSize !== (app?.workload_size || 'Small')) return true;
     if (formData.scaleToZero !== (app?.scale_to_zero ?? true)) return true;
+    
+    // Check model schema
+    let savedModelSchemaKey = '';
+    if (app?.registered_model?.schema) {
+      const regSchema = app.registered_model.schema;
+      const matchedSchemaEntry = Object.entries(schemas).find(([, s]) => 
+        s.catalog_name === regSchema.catalog_name && s.schema_name === regSchema.schema_name
+      );
+      savedModelSchemaKey = matchedSchemaEntry ? matchedSchemaEntry[0] : '';
+    }
+    if (formData.modelSchema !== savedModelSchemaKey) return true;
     
     // Check selected agents
     const savedAgentKeys = (app?.agents || []).map(a => {
@@ -164,6 +254,15 @@ export default function AppConfigSection() {
       const currentLLMName = selectedLLM ? llms[selectedLLM]?.name : '';
       if (savedLLMName !== currentLLMName) return true;
       if (supervisorPrompt !== (app?.orchestration?.supervisor?.prompt || '')) return true;
+      
+      // Check supervisor tools
+      const savedSupervisorTools = (app?.orchestration?.supervisor?.tools || []).map(t => {
+        const toolName = typeof t === 'string' ? t : t?.name;
+        const matchedKey = Object.entries(tools).find(([, tool]) => tool.name === toolName)?.[0];
+        return matchedKey || '';
+      }).filter(Boolean).sort();
+      const currentSupervisorTools = [...supervisorTools].sort();
+      if (JSON.stringify(savedSupervisorTools) !== JSON.stringify(currentSupervisorTools)) return true;
     } else if (pattern === 'swarm') {
       const savedLLMName = app?.orchestration?.swarm?.model?.name;
       const currentLLMName = selectedLLM ? llms[selectedLLM]?.name : '';
@@ -237,26 +336,46 @@ export default function AppConfigSection() {
 
   // Sync form data when config changes
   useEffect(() => {
+    // Find the schema key that matches the registered_model's schema
+    let modelSchemaKey = '';
+    if (app?.registered_model?.schema) {
+      const regSchema = app.registered_model.schema;
+      const matchedSchemaEntry = Object.entries(schemas).find(([, s]) => 
+        s.catalog_name === regSchema.catalog_name && s.schema_name === regSchema.schema_name
+      );
+      modelSchemaKey = matchedSchemaEntry ? matchedSchemaEntry[0] : '';
+    }
+    
+    // Get service principal ref if it exists
+    let spRef = '';
+    if (app?.service_principal) {
+      if (typeof app.service_principal === 'string') {
+        spRef = app.service_principal.startsWith('*') ? app.service_principal.slice(1) : app.service_principal;
+      }
+    }
+    
     setFormData({
       name: app?.name || '',
       description: app?.description || '',
       logLevel: app?.log_level || 'INFO',
       endpointName: app?.endpoint_name || '',
       modelName: app?.registered_model?.name || '',
-      modelSchema: '',
+      modelSchema: modelSchemaKey,
       workloadSize: app?.workload_size || 'Small',
       scaleToZero: app?.scale_to_zero ?? true,
+      servicePrincipalRef: spRef,
     });
     
-    // Sync selected agents
-    if (app?.agents && Array.isArray(app.agents)) {
+    // Sync selected agents - default to all if none are explicitly configured
+    if (app?.agents && Array.isArray(app.agents) && app.agents.length > 0) {
       const agentKeys = app.agents.map(a => {
         const matchedKey = Object.entries(agents).find(([, agent]) => agent.name === a.name)?.[0];
         return matchedKey || '';
       }).filter(Boolean);
       setSelectedAgents(agentKeys);
     } else {
-      setSelectedAgents([]);
+      // Default to all agents when no explicit selection exists
+      setSelectedAgents(Object.keys(agents));
     }
     
     // Sync orchestration pattern and settings
@@ -277,6 +396,19 @@ export default function AppConfigSection() {
     
     // Sync supervisor prompt
     setSupervisorPrompt(app?.orchestration?.supervisor?.prompt || '');
+    
+    // Sync supervisor tools
+    const existingSupervisorTools = app?.orchestration?.supervisor?.tools;
+    if (existingSupervisorTools && Array.isArray(existingSupervisorTools)) {
+      const toolKeys = existingSupervisorTools.map(t => {
+        const toolName = typeof t === 'string' ? t : t?.name;
+        const matchedKey = Object.entries(tools).find(([, tool]) => tool.name === toolName)?.[0];
+        return matchedKey || '';
+      }).filter(Boolean);
+      setSupervisorTools(toolKeys);
+    } else {
+      setSupervisorTools([]);
+    }
     
     // Sync swarm default agent
     const existingDefault = app?.orchestration?.swarm?.default_agent;
@@ -318,7 +450,20 @@ export default function AppConfigSection() {
         entitlements: p.entitlements || [],
       })) || []
     );
-  }, [app, agents, llms]);
+  }, [app, agents, llms, tools]);
+
+  // Auto-adjust orchestration pattern based on number of selected agents
+  useEffect(() => {
+    if (selectedAgents.length <= 1) {
+      // Single agent or no agents - must use "No Orchestration"
+      if (pattern !== 'none') {
+        setPattern('none');
+      }
+    } else if (selectedAgents.length > 1 && pattern === 'none') {
+      // Multiple agents - default to Supervisor orchestration
+      setPattern('supervisor');
+    }
+  }, [selectedAgents.length, pattern]);
 
   const addHandoff = () => {
     if (unusedAgentsForHandoffs.length > 0) {
@@ -346,15 +491,49 @@ export default function AppConfigSection() {
     updateHandoff(handoffIndex, { targets: newTargets });
   };
 
+  // Handler for generating supervisor prompt with AI
+  const handleGenerateSupervisorPrompt = async (improveExisting = false) => {
+    setIsGeneratingSupervisorPrompt(true);
+    try {
+      // Gather agent metadata for context
+      const agentData = Object.values(agents).map(agent => ({
+        name: agent.name,
+        description: agent.description,
+        handoff_prompt: agent.handoff_prompt,
+      }));
+      
+      const prompt = await generateSupervisorPromptWithAI({
+        context: supervisorAiContext || undefined,
+        agents: agentData.length > 0 ? agentData : undefined,
+        existing_prompt: improveExisting ? supervisorPrompt : undefined,
+      });
+      
+      setSupervisorPrompt(prompt);
+      setShowSupervisorAiInput(false);
+      setSupervisorAiContext('');
+    } catch (error) {
+      console.error('Failed to generate supervisor prompt:', error);
+      alert(error instanceof Error ? error.message : 'Failed to generate supervisor prompt');
+    } finally {
+      setIsGeneratingSupervisorPrompt(false);
+    }
+  };
+
   const handleSave = () => {
     const selectedSchema = formData.modelSchema ? schemas[formData.modelSchema] : undefined;
 
     // Build orchestration config
     let orchestration: any = undefined;
     if (pattern === 'supervisor' && selectedLLM && llms[selectedLLM]) {
+      // Build supervisor tools array from selected tool keys
+      const supervisorToolsArray = supervisorTools
+        .map(key => tools[key])
+        .filter(Boolean);
+      
       orchestration = {
         supervisor: {
           model: llms[selectedLLM],
+          ...(supervisorToolsArray.length > 0 && { tools: supervisorToolsArray }),
           ...(supervisorPrompt && { prompt: supervisorPrompt }),
         },
       };
@@ -389,6 +568,7 @@ export default function AppConfigSection() {
       description: formData.description || undefined,
       log_level: formData.logLevel as LogLevel,
       endpoint_name: formData.endpointName || undefined,
+      service_principal: formData.servicePrincipalRef ? `*${formData.servicePrincipalRef}` : undefined,
       registered_model: {
         name: formData.modelName,
         ...(selectedSchema && { schema: selectedSchema }),
@@ -440,7 +620,29 @@ export default function AppConfigSection() {
             label="Application Name"
             placeholder="e.g., my_retail_app"
             value={formData.name}
-            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+            onChange={(e) => {
+              const newName = e.target.value;
+              const snakeCaseName = toSnakeCase(newName);
+              const newEndpointName = snakeCaseName ? `${snakeCaseName}_endpoint` : '';
+              const newModelName = snakeCaseName || '';
+              
+              // Update form data
+              const updates: typeof formData = { ...formData, name: newName };
+              
+              // Auto-derive endpoint name if it's empty or matches the previous derived value
+              if (!formData.endpointName || formData.endpointName === derivedEndpointName) {
+                updates.endpointName = newEndpointName;
+                setDerivedEndpointName(newEndpointName);
+              }
+              
+              // Auto-derive model name if it's empty or matches the previous derived value
+              if (!formData.modelName || formData.modelName === derivedModelName) {
+                updates.modelName = newModelName;
+                setDerivedModelName(newModelName);
+              }
+              
+              setFormData(updates);
+            }}
             required
           />
           <Select
@@ -465,6 +667,26 @@ export default function AppConfigSection() {
           onChange={(e) => setFormData({ ...formData, endpointName: e.target.value })}
           hint="The name of the model serving endpoint"
         />
+
+        {/* Service Principal Selection */}
+        <Select
+          label="Service Principal (Optional)"
+          value={formData.servicePrincipalRef}
+          onChange={(e) => setFormData({ ...formData, servicePrincipalRef: e.target.value })}
+          options={[
+            { value: '', label: 'None - Use default credentials' },
+            ...Object.keys(config.service_principals || {}).map((sp) => ({
+              value: sp,
+              label: sp,
+            })),
+          ]}
+          hint="Optional service principal for application authentication"
+        />
+        {Object.keys(config.service_principals || {}).length === 0 && formData.servicePrincipalRef === '' && (
+          <p className="text-xs text-slate-500 -mt-2">
+            Configure service principals in Resources → Service Principals to use them here.
+          </p>
+        )}
       </Card>
 
       {/* Agent Selection - Must come before Orchestration */}
@@ -597,11 +819,13 @@ export default function AppConfigSection() {
           <button
             type="button"
             onClick={() => setPattern('none')}
+            disabled={selectedAgents.length > 1}
             className={clsx(
               'p-4 rounded-lg border text-center transition-all',
               pattern === 'none'
                 ? 'bg-blue-500/10 border-blue-500 ring-1 ring-blue-500'
-                : 'bg-slate-800/50 border-slate-700 hover:border-slate-600'
+                : 'bg-slate-800/50 border-slate-700 hover:border-slate-600',
+              selectedAgents.length > 1 && 'opacity-50 cursor-not-allowed hover:border-slate-700'
             )}
           >
             <div className="w-10 h-10 mx-auto rounded-lg bg-slate-700 flex items-center justify-center mb-2">
@@ -614,15 +838,20 @@ export default function AppConfigSection() {
           <button
             type="button"
             onClick={() => setPattern('supervisor')}
+            disabled={selectedAgents.length <= 1}
             className={clsx(
               'p-4 rounded-lg border text-center transition-all',
               pattern === 'supervisor'
                 ? 'bg-blue-500/10 border-blue-500 ring-1 ring-blue-500'
-                : 'bg-slate-800/50 border-slate-700 hover:border-slate-600'
+                : 'bg-slate-800/50 border-slate-700 hover:border-slate-600',
+              selectedAgents.length <= 1 && 'opacity-50 cursor-not-allowed hover:border-slate-700'
             )}
           >
-            <div className="w-10 h-10 mx-auto rounded-lg bg-blue-500/20 flex items-center justify-center mb-2">
-              <Users className="w-5 h-5 text-blue-400" />
+            <div className={clsx(
+              'w-10 h-10 mx-auto rounded-lg flex items-center justify-center mb-2',
+              selectedAgents.length <= 1 ? 'bg-slate-700' : 'bg-blue-500/20'
+            )}>
+              <Users className={clsx('w-5 h-5', selectedAgents.length <= 1 ? 'text-slate-500' : 'text-blue-400')} />
             </div>
             <h4 className="text-sm font-medium text-white">Supervisor</h4>
             <p className="text-xs text-slate-500 mt-0.5">Central routing agent</p>
@@ -631,20 +860,32 @@ export default function AppConfigSection() {
           <button
             type="button"
             onClick={() => setPattern('swarm')}
+            disabled={selectedAgents.length <= 1}
             className={clsx(
               'p-4 rounded-lg border text-center transition-all',
               pattern === 'swarm'
                 ? 'bg-blue-500/10 border-blue-500 ring-1 ring-blue-500'
-                : 'bg-slate-800/50 border-slate-700 hover:border-slate-600'
+                : 'bg-slate-800/50 border-slate-700 hover:border-slate-600',
+              selectedAgents.length <= 1 && 'opacity-50 cursor-not-allowed hover:border-slate-700'
             )}
           >
-            <div className="w-10 h-10 mx-auto rounded-lg bg-purple-500/20 flex items-center justify-center mb-2">
-              <ArrowRightLeft className="w-5 h-5 text-purple-400" />
+            <div className={clsx(
+              'w-10 h-10 mx-auto rounded-lg flex items-center justify-center mb-2',
+              selectedAgents.length <= 1 ? 'bg-slate-700' : 'bg-purple-500/20'
+            )}>
+              <ArrowRightLeft className={clsx('w-5 h-5', selectedAgents.length <= 1 ? 'text-slate-500' : 'text-purple-400')} />
             </div>
             <h4 className="text-sm font-medium text-white">Swarm</h4>
             <p className="text-xs text-slate-500 mt-0.5">Peer-to-peer handoffs</p>
           </button>
         </div>
+        
+        {/* Info message about orchestration availability */}
+        {selectedAgents.length <= 1 && (
+          <p className="text-xs text-slate-500 mt-2">
+            Supervisor and Swarm orchestration require multiple agents to be selected.
+          </p>
+        )}
 
         {/* Pattern Configuration */}
         {pattern !== 'none' && (
@@ -667,14 +908,175 @@ export default function AppConfigSection() {
             />
 
             {pattern === 'supervisor' && (
-              <Textarea
-                label="Supervisor Prompt (Optional)"
-                placeholder="Custom instructions for the supervisor agent..."
-                value={supervisorPrompt}
-                onChange={(e) => setSupervisorPrompt(e.target.value)}
-                rows={4}
-                hint="Override the default supervisor prompt"
-              />
+              <>
+                {/* Supervisor Prompt with AI Assistant */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-slate-300">Supervisor Prompt (Optional)</label>
+                  <div className="flex items-center space-x-2">
+                    {!showSupervisorAiInput && (
+                      <button
+                        type="button"
+                        onClick={() => setShowSupervisorAiInput(true)}
+                        className="flex items-center space-x-1.5 px-3 py-1.5 text-xs rounded-lg font-medium bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-purple-300 border border-purple-500/30 hover:from-purple-500/30 hover:to-pink-500/30 transition-all"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>AI Assistant</span>
+                      </button>
+                    )}
+                    {supervisorPrompt && !showSupervisorAiInput && (
+                      <button
+                        type="button"
+                        onClick={() => handleGenerateSupervisorPrompt(true)}
+                        className="flex items-center space-x-1.5 px-3 py-1.5 text-xs rounded-lg font-medium bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-purple-300 border border-purple-500/30 hover:from-purple-500/30 hover:to-pink-500/30 transition-all"
+                        disabled={isGeneratingSupervisorPrompt}
+                      >
+                        {isGeneratingSupervisorPrompt ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Sparkles className="w-3.5 h-3.5" />
+                        )}
+                        <span>Improve Prompt</span>
+                      </button>
+                    )}
+                  </div>
+                  
+                  {/* AI Context Input */}
+                  {showSupervisorAiInput && (
+                    <div className="p-3 bg-gradient-to-r from-purple-500/10 to-pink-500/10 rounded-lg border border-purple-500/30 space-y-3">
+                      <div className="flex items-center space-x-2">
+                        <Sparkles className="w-4 h-4 text-purple-400" />
+                        <span className="text-sm font-medium text-purple-300">Generate Supervisor Prompt with AI</span>
+                      </div>
+                      
+                      <p className="text-xs text-slate-400">
+                        The AI will use the configured agents' names, descriptions, and handoff prompts to generate a supervisor prompt that effectively routes requests.
+                      </p>
+                      
+                      {/* Show configured agents */}
+                      {Object.keys(agents).length > 0 && (
+                        <div className="space-y-1">
+                          <p className="text-xs text-slate-500">Agents that will be included:</p>
+                          <div className="flex flex-wrap gap-1">
+                            {Object.values(agents).map((agent, idx) => (
+                              <span key={idx} className="px-2 py-0.5 bg-slate-800/50 rounded text-xs text-slate-300">
+                                {agent.name}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      
+                      <Textarea
+                        label="Additional Context (Optional)"
+                        placeholder="Describe any specific routing logic, priorities, or special instructions for the supervisor..."
+                        value={supervisorAiContext}
+                        onChange={(e) => setSupervisorAiContext(e.target.value)}
+                        rows={3}
+                      />
+                      
+                      <div className="flex justify-end space-x-2">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => {
+                            setShowSupervisorAiInput(false);
+                            setSupervisorAiContext('');
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() => handleGenerateSupervisorPrompt(false)}
+                          disabled={isGeneratingSupervisorPrompt || Object.keys(agents).length === 0}
+                          className="bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
+                        >
+                          {isGeneratingSupervisorPrompt ? (
+                            <>
+                              <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+                              Generating...
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="w-4 h-4 mr-1.5" />
+                              Generate Prompt
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                  
+                  <Textarea
+                    placeholder="Custom instructions for the supervisor agent..."
+                    value={supervisorPrompt}
+                    onChange={(e) => setSupervisorPrompt(e.target.value)}
+                    rows={4}
+                    hint="Override the default supervisor prompt"
+                  />
+                </div>
+
+                {/* Supervisor Tools Configuration */}
+                <div className="space-y-3 pt-3 border-t border-slate-700/50">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-sm font-medium text-slate-200 flex items-center gap-2">
+                        <Wrench className="w-4 h-4 text-green-400" />
+                        Supervisor Tools
+                      </h4>
+                      <p className="text-xs text-slate-500">
+                        Assign tools that the supervisor can use directly
+                      </p>
+                    </div>
+                  </div>
+
+                  {Object.keys(tools).length === 0 ? (
+                    <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 text-amber-400 text-sm">
+                      No tools configured. Add tools in the Tools section first.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap gap-2">
+                        {Object.entries(tools).map(([key, tool]) => {
+                          const isSelected = supervisorTools.includes(key);
+                          return (
+                            <button
+                              key={key}
+                              type="button"
+                              onClick={() => {
+                                setSupervisorTools(prev =>
+                                  isSelected
+                                    ? prev.filter(k => k !== key)
+                                    : [...prev, key]
+                                );
+                              }}
+                              className={clsx(
+                                'px-3 py-1.5 rounded-lg text-sm transition-colors flex items-center gap-2',
+                                isSelected
+                                  ? 'bg-green-500/20 text-green-300 border border-green-500/50'
+                                  : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                              )}
+                            >
+                              <Wrench className="w-3 h-3" />
+                              {tool.name}
+                              {isSelected && (
+                                <X className="w-3 h-3 ml-1" />
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      
+                      {supervisorTools.length > 0 && (
+                        <p className="text-xs text-green-400">
+                          ✓ {supervisorTools.length} tool{supervisorTools.length !== 1 ? 's' : ''} assigned to supervisor
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </>
             )}
 
             {pattern === 'swarm' && (
@@ -865,14 +1267,14 @@ export default function AppConfigSection() {
           />
           <div className="space-y-1.5">
             <label className="block text-sm font-medium text-slate-300">Scale to Zero</label>
-            <div className="flex items-center space-x-3 pt-2">
+            <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5 mt-1">
               <button
                 type="button"
                 onClick={() => setFormData({ ...formData, scaleToZero: true })}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                className={`px-4 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
                   formData.scaleToZero
-                    ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                    : 'bg-slate-800 text-slate-400 border border-slate-700'
+                    ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                    : 'text-slate-400 border border-transparent hover:text-slate-300'
                 }`}
               >
                 Enabled
@@ -880,10 +1282,10 @@ export default function AppConfigSection() {
               <button
                 type="button"
                 onClick={() => setFormData({ ...formData, scaleToZero: false })}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                className={`px-4 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
                   !formData.scaleToZero
-                    ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                    : 'bg-slate-800 text-slate-400 border border-slate-700'
+                    ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                    : 'text-slate-400 border border-transparent hover:text-slate-300'
                 }`}
               >
                 Disabled

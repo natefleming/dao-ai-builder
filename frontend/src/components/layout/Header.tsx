@@ -1,5 +1,6 @@
-import { Download, Eye, EyeOff, Upload, RotateCcw } from 'lucide-react';
+import { Download, Eye, EyeOff, Upload, RotateCcw, GitBranch, Rocket, MessageSquare } from 'lucide-react';
 import Button from '../ui/Button';
+import Modal from '../ui/Modal';
 import { useConfigStore } from '@/stores/configStore';
 import { downloadYAML } from '@/utils/yaml-generator';
 import { useRef, useState, useEffect } from 'react';
@@ -7,6 +8,9 @@ import yaml from 'js-yaml';
 import { extractYamlReferences, setYamlReferences, clearYamlReferences } from '@/utils/yaml-references';
 import { AppConfig } from '@/types/dao-ai-types';
 import ConnectionStatus from '../ui/ConnectionStatus';
+import GraphVisualization from '../visualization/GraphVisualization';
+import DeploymentPanel from '../deployment/DeploymentPanel';
+import ChatPanel from '../chat/ChatPanel';
 
 interface HeaderProps {
   showPreview: boolean;
@@ -17,6 +21,14 @@ export default function Header({ showPreview, onTogglePreview }: HeaderProps) {
   const { config, setConfig, reset } = useConfigStore();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [daoAiVersion, setDaoAiVersion] = useState<string | null>(null);
+  const [showVisualization, setShowVisualization] = useState(false);
+  const [showDeployment, setShowDeployment] = useState(false);
+  const [showChat, setShowChat] = useState(false);
+
+  const hasAgents = Object.keys(config.agents || {}).length > 0;
+  const hasOrchestration = !!(config.app?.orchestration?.supervisor || config.app?.orchestration?.swarm);
+  const canDeploy = hasAgents && hasOrchestration;
+  const canChat = hasAgents;
 
   // Fetch dao-ai version on mount
   useEffect(() => {
@@ -142,7 +154,79 @@ export default function Header({ showPreview, onTogglePreview }: HeaderProps) {
           <Download className="w-4 h-4" />
           Export YAML
         </Button>
+        
+        <div className="w-px h-6 bg-slate-700" />
+        
+        <Button 
+          variant="secondary" 
+          size="sm"
+          onClick={() => setShowVisualization(true)}
+          disabled={!hasAgents}
+          title={hasAgents ? 'Visualize agent graph' : 'Add agents to visualize'}
+        >
+          <GitBranch className="w-4 h-4" />
+          Visualize
+        </Button>
+        
+        <Button 
+          variant="secondary" 
+          size="sm"
+          onClick={() => setShowChat(true)}
+          disabled={!canChat}
+          title={canChat ? 'Test agent locally' : 'Add agents to chat'}
+          className="bg-gradient-to-r from-cyan-600/80 to-blue-600/80 hover:from-cyan-500 hover:to-blue-500 text-white border-0"
+        >
+          <MessageSquare className="w-4 h-4" />
+          Chat
+        </Button>
+        
+        <Button 
+          variant="primary" 
+          size="sm"
+          onClick={() => setShowDeployment(true)}
+          disabled={!canDeploy}
+          title={canDeploy ? 'Deploy to Databricks' : 'Configure agents and orchestration first'}
+          className="bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500"
+        >
+          <Rocket className="w-4 h-4" />
+          Deploy
+        </Button>
       </div>
+      
+      {/* Visualization Modal */}
+      <Modal
+        isOpen={showVisualization}
+        onClose={() => setShowVisualization(false)}
+        title="Application Visualization"
+        description="Interactive graph showing agent relationships and orchestration flow"
+        size="full"
+      >
+        <div className="h-[70vh]">
+          <GraphVisualization config={config} />
+        </div>
+      </Modal>
+      
+      {/* Deployment Modal */}
+      <Modal
+        isOpen={showDeployment}
+        onClose={() => setShowDeployment(false)}
+        title="Deploy to Databricks"
+        description="Deploy your agent configuration to a Databricks workspace"
+        size="lg"
+      >
+        <DeploymentPanel onClose={() => setShowDeployment(false)} />
+      </Modal>
+      
+      {/* Chat Modal */}
+      <Modal
+        isOpen={showChat}
+        onClose={() => setShowChat(false)}
+        title="Chat with Agent"
+        description="Test your agent configuration locally without deploying"
+        size="lg"
+      >
+        <ChatPanel onClose={() => setShowChat(false)} />
+      </Modal>
     </header>
   );
 }

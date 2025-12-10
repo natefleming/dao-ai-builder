@@ -12,7 +12,7 @@
  * 
  * Reference: https://apps-cookbook.dev/docs/streamlit/authentication/users_obo
  */
-import { useState, useEffect, useCallback, useSyncExternalStore } from 'react';
+import { useState, useEffect, useCallback, useSyncExternalStore, useRef } from 'react';
 import {
   databricksNativeApi,
   isDatabricksConfigured,
@@ -85,33 +85,43 @@ function useAsync<T>(
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  
+  // Serialize deps for stable comparison (handles objects/arrays)
+  // This prevents infinite loops when object deps have same content but different reference
+  const depsKey = JSON.stringify(deps);
+  
+  // Track if we're currently fetching to prevent duplicate fetches
+  const fetchingRef = useRef(false);
 
   const fetch = useCallback(async () => {
+    // Prevent duplicate concurrent fetches
+    if (fetchingRef.current) {
+      return;
+    }
+    
     // Always check isDatabricksConfigured() fresh - don't rely on captured values
     const isConfigured = isDatabricksConfigured();
-    console.log('[useAsync] Fetch called, isConfigured:', isConfigured, 'additionalSkip:', additionalSkip, 'configVer:', configVer);
     if (additionalSkip || !isConfigured) {
-      console.log('[useAsync] Skipping fetch');
       setLoading(false);
       setData(null);
       return;
     }
     
+    fetchingRef.current = true;
     setLoading(true);
     setError(null);
     try {
-      console.log('[useAsync] Executing fetch function...');
       const result = await fetchFn();
-      console.log('[useAsync] Fetch successful, result:', result);
       setData(result);
     } catch (err) {
       console.error('[useAsync] Fetch error:', err);
       setError(err instanceof Error ? err : new Error(String(err)));
     } finally {
       setLoading(false);
+      fetchingRef.current = false;
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [additionalSkip, configVer, ...deps]);
+  }, [additionalSkip, configVer, depsKey]);
 
   useEffect(() => {
     fetch();
@@ -342,15 +352,27 @@ export function useVectorSearchEndpoints(): UseAsyncState<VectorSearchEndpoint[]
 
 /**
  * Hook to list vector search indexes.
+ * If endpoint is null, returns all indexes.
+ * If endpoint is provided, returns only indexes for that endpoint.
  */
 export function useVectorSearchIndexes(endpoint: string | null): UseAsyncState<VectorSearchIndex[]> {
   return useAsync(
     async () => {
-      if (!endpoint) return [];
       return databricksNativeApi.listVectorSearchIndexes(endpoint);
     },
-    [endpoint],
-    !endpoint
+    [endpoint]
+  );
+}
+
+/**
+ * Hook to list ALL vector search indexes (across all endpoints).
+ */
+export function useAllVectorSearchIndexes(): UseAsyncState<VectorSearchIndex[]> {
+  return useAsync(
+    async () => {
+      return databricksNativeApi.listVectorSearchIndexes(null);
+    },
+    []
   );
 }
 
@@ -393,28 +415,42 @@ export function useCatalogSchemaSelector() {
 
 /**
  * Hook to list MLflow prompts in a catalog/schema.
+ * 
+ * @param catalog - The catalog name
+ * @param schema - The schema name
+ * @param servicePrincipal - Optional service principal config for authentication
  */
-export function usePrompts(catalog: string | null, schema: string | null): UseAsyncState<MLflowPrompt[]> {
+export function usePrompts(
+  catalog: string | null, 
+  schema: string | null,
+  servicePrincipal?: { client_id: unknown; client_secret: unknown } | null
+): UseAsyncState<MLflowPrompt[]> {
   return useAsync(
     async () => {
       if (!catalog || !schema) return [];
-      return databricksNativeApi.listPrompts(catalog, schema);
+      return databricksNativeApi.listPrompts(catalog, schema, servicePrincipal);
     },
-    [catalog, schema],
+    [catalog, schema, servicePrincipal],
     !catalog || !schema
   );
 }
 
 /**
  * Hook to get prompt details (versions, aliases, template).
+ * 
+ * @param fullName - The full prompt name (catalog.schema.name)
+ * @param servicePrincipal - Optional service principal config for authentication
  */
-export function usePromptDetails(fullName: string | null): UseAsyncState<PromptDetails | null> {
+export function usePromptDetails(
+  fullName: string | null,
+  servicePrincipal?: { client_id: unknown; client_secret: unknown } | null
+): UseAsyncState<PromptDetails | null> {
   return useAsync(
     async () => {
       if (!fullName) return null;
-      return databricksNativeApi.getPromptDetails(fullName);
+      return databricksNativeApi.getPromptDetails(fullName, servicePrincipal);
     },
-    [fullName],
+    [fullName, servicePrincipal],
     !fullName
   );
 }

@@ -227,13 +227,22 @@ def get_databricks_host_with_source() -> tuple[str | None, str | None]:
     Resolution order:
     1. Session host (from OAuth flow)
     2. X-Databricks-Host header (sent by frontend for manual config)
-    3. Databricks SDK Config (handles env vars, profiles, etc.)
-    4. DATABRICKS_HOST environment variable (explicit fallback)
+    3. X-Forwarded-Host header (provided by Databricks Apps infrastructure)
+    4. Databricks SDK Config (handles env vars, profiles, etc.)
+    5. DATABRICKS_HOST environment variable (explicit fallback)
+    
+    The X-Forwarded-Host header is critical for Databricks Apps running with
+    service principal authentication. The Databricks Apps infrastructure sets
+    this header to the workspace URL. Without it, MLflow SDK cannot authenticate
+    properly because DATABRICKS_HOST may not be set in the environment.
+    
+    Reference: https://learn.microsoft.com/en-us/azure/databricks/dev-tools/databricks-apps/system-env
     
     Returns:
         tuple: (host, source) where source is one of:
             - 'oauth': From OAuth session
             - 'header': X-Databricks-Host header from frontend
+            - 'forwarded': X-Forwarded-Host header from Databricks Apps
             - 'sdk': Databricks SDK Config
             - 'env': DATABRICKS_HOST environment variable
             - None: No host found
@@ -246,6 +255,29 @@ def get_databricks_host_with_source() -> tuple[str | None, str | None]:
     host = request.headers.get('X-Databricks-Host')
     if host:
         return normalize_host(host), 'header'
+    
+    # Check X-Forwarded-Host header (Databricks Apps infrastructure)
+    # NOTE: X-Forwarded-Host contains the APP URL, not the workspace URL!
+    # We need to derive the workspace URL from the app URL or use other sources.
+    # App URL format: {app-name}-{workspace-id}.{region}.azure.databricksapps.com
+    # Workspace URL format: adb-{workspace-id}.{region}.azuredatabricks.net
+    forwarded_host = request.headers.get('X-Forwarded-Host')
+    if forwarded_host:
+        # Try to extract workspace ID and derive the workspace URL
+        # Pattern: something-WORKSPACEID.REGION.azure.databricksapps.com
+        import re
+        match = re.search(r'-(\d+)\.(\d+)\.azure\.databricksapps\.com', forwarded_host)
+        if match:
+            workspace_id = match.group(1)
+            region = match.group(2)
+            workspace_host = f'https://adb-{workspace_id}.{region}.azuredatabricks.net'
+            log('info', f"Derived workspace URL from X-Forwarded-Host: {workspace_host} (from {forwarded_host})")
+            return normalize_host(workspace_host), 'forwarded'
+        else:
+            # Maybe it's already a workspace URL or different format
+            log('warning', f"Could not parse workspace ID from X-Forwarded-Host: {forwarded_host}")
+            host = forwarded_host if forwarded_host.startswith('http') else f'https://{forwarded_host}'
+            return normalize_host(host), 'forwarded'
     
     # Try Databricks SDK Config
     host = get_databricks_host_from_sdk()
@@ -538,11 +570,19 @@ def get_auth_context():
     # OAuth configuration info
     oauth_configured = bool(OAUTH_CLIENT_ID or os.environ.get('DATABRICKS_OAUTH_CLIENT_ID') or os.environ.get('DATABRICKS_APP_CLIENT_ID'))
     
-    log('info', f"Auth context: host={host} (from {host_source}), token_source={token_source}, has_token={has_token}, is_app={is_databricks_app}")
+    # Check for service principal credentials
+    has_service_principal = bool(
+        os.environ.get('DATABRICKS_CLIENT_ID') and 
+        os.environ.get('DATABRICKS_CLIENT_SECRET')
+    )
+    
+    log('info', f"Auth context: host={host} (from {host_source}), token_source={token_source}, has_token={has_token}, is_app={is_databricks_app}, has_sp={has_service_principal}")
     
     return jsonify({
         'is_databricks_app': is_databricks_app,
         'has_token': has_token,
+        'has_obo_token': has_obo_token,
+        'has_service_principal': has_service_principal,
         'user': {
             'email': email,
             'username': username,
@@ -791,6 +831,140 @@ def get_current_user_email() -> str | None:
     except Exception as e:
         log('warning', f"Could not get current user: {e}")
         return None
+
+
+def resolve_secret_value(secret_ref: dict, obo_token: str | None = None) -> str | None:
+    """
+    Resolve a Databricks secret reference to its actual value.
+    
+    Secret references look like: {"scope": "my_scope", "secret": "my_secret"}
+    
+    Args:
+        secret_ref: Dictionary with 'scope' and 'secret' keys
+        obo_token: Optional OBO token to use for authentication (uses user's permissions)
+    
+    Returns:
+        The resolved secret value, or None if resolution fails
+    """
+    if not isinstance(secret_ref, dict):
+        return None
+    
+    scope = secret_ref.get('scope')
+    secret_key = secret_ref.get('secret')
+    
+    if not scope or not secret_key:
+        return None
+    
+    try:
+        host = get_databricks_host()
+        if not host:
+            log('warning', "Cannot resolve secret: no Databricks host configured")
+            return None
+        
+        # Use OBO token if provided, otherwise fall back to default token
+        token = obo_token
+        if not token:
+            token = get_databricks_token()
+        
+        if not token:
+            log('warning', "Cannot resolve secret: no authentication token available")
+            return None
+        
+        # Call Secrets API
+        import requests
+        api_url = f"{host}/api/2.0/secrets/get"
+        headers = {
+            'Authorization': f'Bearer {token}',
+            'Content-Type': 'application/json',
+        }
+        payload = {
+            'scope': scope,
+            'key': secret_key,
+        }
+        
+        log('info', f"Resolving secret {scope}/{secret_key}")
+        response = requests.get(api_url, headers=headers, params=payload, timeout=30)
+        
+        if response.status_code == 200:
+            data = response.json()
+            # The secrets API returns the value base64 encoded
+            import base64
+            value_b64 = data.get('value')
+            if value_b64:
+                return base64.b64decode(value_b64).decode('utf-8')
+        else:
+            log('warning', f"Failed to resolve secret {scope}/{secret_key}: {response.status_code}")
+        
+        return None
+    except Exception as e:
+        log('error', f"Error resolving secret {scope}/{secret_key}: {e}")
+        return None
+
+
+def resolve_variable_value(value: any, obo_token: str | None = None) -> str | None:
+    """
+    Resolve a variable value which could be:
+    - A plain string value
+    - An environment variable reference: {"env": "VAR_NAME"}
+    - A secret reference: {"scope": "scope_name", "secret": "secret_name"}
+    
+    Args:
+        value: The value to resolve
+        obo_token: Optional OBO token for secret resolution
+    
+    Returns:
+        The resolved string value, or None if resolution fails
+    """
+    if value is None:
+        return None
+    
+    # Plain string value
+    if isinstance(value, str):
+        return value
+    
+    # Dictionary-based reference
+    if isinstance(value, dict):
+        # Environment variable reference
+        if 'env' in value:
+            env_name = value.get('env')
+            return os.environ.get(env_name)
+        
+        # Secret reference
+        if 'scope' in value and 'secret' in value:
+            return resolve_secret_value(value, obo_token)
+        
+        # Composite variable with options
+        if 'options' in value:
+            options = value.get('options', [])
+            for opt in options:
+                resolved = resolve_variable_value(opt, obo_token)
+                if resolved:
+                    return resolved
+            return None
+    
+    return str(value) if value else None
+
+
+def get_service_principal_credentials(sp_config: dict, obo_token: str | None = None) -> tuple[str | None, str | None]:
+    """
+    Get resolved credentials from a service principal configuration.
+    
+    Handles both direct values and references (env vars, secrets).
+    
+    Args:
+        sp_config: Service principal config dict with 'client_id' and 'client_secret'
+        obo_token: Optional OBO token for resolving secrets with user permissions
+    
+    Returns:
+        tuple: (client_id, client_secret) with resolved values
+    """
+    if not sp_config or not isinstance(sp_config, dict):
+        return None, None
+    
+    client_id = resolve_variable_value(sp_config.get('client_id'), obo_token)
+    client_secret = resolve_variable_value(sp_config.get('client_secret'), obo_token)
+    
+    return client_id, client_secret
 
 
 def sort_by_owner(items: list, current_user: str | None) -> list:
@@ -1047,20 +1221,28 @@ def list_registered_models():
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/uc/prompts')
+@app.route('/api/uc/prompts', methods=['GET', 'POST'])
 def list_prompts():
-    """List MLflow prompts in a catalog.schema using direct REST API.
+    """List MLflow prompts in a catalog.schema using MLflow SDK.
     
-    Query params:
+    Query params (GET) or JSON body (POST):
     - catalog: The catalog name (required)
     - schema: The schema name (required)
+    - service_principal: Optional service principal config for authentication
+      If the SP uses secret references, they'll be resolved with user's OBO token
     
     Returns prompts with their name, description, aliases, and latest version info.
-    
-    Uses the user's OBO token with direct REST API calls to bypass MLflow SDK scope issues.
     """
-    catalog = request.args.get('catalog')
-    schema = request.args.get('schema')
+    # Support both GET (query params) and POST (JSON body with service principal)
+    if request.method == 'POST':
+        data = request.get_json() or {}
+        catalog = data.get('catalog')
+        schema = data.get('schema')
+        service_principal = data.get('service_principal')
+    else:
+        catalog = request.args.get('catalog')
+        schema = request.args.get('schema')
+        service_principal = None
     
     if not catalog or not schema:
         return jsonify({'error': 'catalog and schema parameters required'}), 400
@@ -1069,106 +1251,279 @@ def list_prompts():
         current_user = get_current_user_email()
         log('info', f"Listing prompts in {catalog}.{schema} for user: {current_user}")
         
+        # Log all forwarded headers for debugging
+        log('info', f"=== PROMPTS ENDPOINT DEBUG ===")
+        log('info', f"X-Forwarded-Host: {request.headers.get('X-Forwarded-Host', 'NOT SET')}")
+        log('info', f"X-Forwarded-Access-Token: {'SET (len={})'.format(len(request.headers.get('X-Forwarded-Access-Token', ''))) if request.headers.get('X-Forwarded-Access-Token') else 'NOT SET'}")
+        log('info', f"X-Forwarded-Email: {request.headers.get('X-Forwarded-Email', 'NOT SET')}")
+        log('info', f"Host header: {request.headers.get('Host', 'NOT SET')}")
+        log('info', f"DATABRICKS_HOST env: {os.environ.get('DATABRICKS_HOST', 'NOT SET')}")
+        
         result = []
         
-        # Get user's token and host
-        token, token_source = get_databricks_token_with_source()
+        # Get host from Databricks headers or environment
+        # This now checks X-Forwarded-Host header which is critical for Databricks Apps
         host, host_source = get_databricks_host_with_source()
         
         if not host:
-            log('warning', "No Databricks host available")
-            return jsonify({'error': 'No Databricks host configured'}), 401
+            log('warning', "No Databricks host available. "
+                         f"X-Forwarded-Host header: {request.headers.get('X-Forwarded-Host', 'NOT SET')}")
+            return jsonify({
+                'error': 'No Databricks host configured',
+                'help': 'When running as a Databricks App, the X-Forwarded-Host header should be set. '
+                        'You can also set DATABRICKS_HOST environment variable or use OAuth login.'
+            }), 401
         
-        if not token:
-            log('warning', "No authentication token available")
-            return jsonify({'error': 'No authentication token available'}), 401
+        # Normalize host (remove trailing slash)
+        host = host.rstrip('/')
+        log('info', f"Using host={host} from source={host_source}")
         
-        log('info', f"Using token from {token_source}, host from {host_source}: {host}")
+        # Determine which credentials to use
+        sp_client_id = None
+        sp_client_secret = None
+        use_sp_auth = False
         
-        import requests
-        
-        headers = {
-            'Authorization': f'Bearer {token}',
-            'Content-Type': 'application/json',
-        }
-        
-        # Try direct REST API call to MLflow prompts endpoint
-        # This uses the user's token which has catalog access permissions
-        api_url = f"{host}/api/2.0/mlflow/unity-catalog/prompts/search"
-        payload = {
-            'filter': f"catalog = '{catalog}' AND schema = '{schema}'",
-            'max_results': 100,
-        }
-        
-        log('info', f"Calling REST API: POST {api_url} with user's token")
-        
-        response = requests.post(api_url, headers=headers, json=payload, timeout=30)
-        
-        log('info', f"REST API response status: {response.status_code}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            prompts_data = data.get('prompts', [])
-            log('info', f"REST API returned {len(prompts_data)} prompts")
+        if service_principal:
+            log('info', f"Using service principal for prompt registry access")
+            # Get OBO token for resolving any secrets in the service principal config
+            obo_token, _ = get_databricks_token_with_source()
             
-            for p in prompts_data:
-                prompt_full_name = p.get('name', '')
-                short_name = prompt_full_name.split('.')[-1] if '.' in prompt_full_name else prompt_full_name
+            # Resolve service principal credentials (may involve secret lookups)
+            sp_client_id, sp_client_secret = get_service_principal_credentials(
+                service_principal, obo_token if obo_token else None
+            )
+            
+            if sp_client_id and sp_client_secret:
+                use_sp_auth = True
+                log('info', f"Resolved service principal credentials: client_id={sp_client_id[:8]}...")
+            else:
+                log('warning', f"Failed to resolve service principal credentials")
+        
+        # Save original environment variables to restore later
+        orig_env = {}
+        env_vars_to_manage = ['DATABRICKS_HOST', 'DATABRICKS_TOKEN', 'DATABRICKS_CLIENT_ID', 'DATABRICKS_CLIENT_SECRET']
+        for var in env_vars_to_manage:
+            orig_env[var] = os.environ.get(var)
+        
+        try:
+            # Clear all auth-related env vars first to prevent conflicts
+            for var in env_vars_to_manage:
+                if var in os.environ:
+                    del os.environ[var]
+            
+            # Set DATABRICKS_HOST
+            os.environ['DATABRICKS_HOST'] = host
+            log('info', f"Set DATABRICKS_HOST={host}")
+            
+            if use_sp_auth:
+                # Use service principal authentication
+                os.environ['DATABRICKS_CLIENT_ID'] = sp_client_id
+                os.environ['DATABRICKS_CLIENT_SECRET'] = sp_client_secret
+                log('info', f"Set DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET for SP auth")
+            else:
+                # Fall back to user's token
+                token, token_source = get_databricks_token_with_source()
+                if token:
+                    os.environ['DATABRICKS_TOKEN'] = token
+                    log('info', f"Set DATABRICKS_TOKEN from {token_source}")
+                else:
+                    log('warning', "No authentication token available")
+                    return jsonify({'error': 'No authentication token available'}), 401
+            
+            # Use MLflow SDK to search prompts
+            import mlflow
+            
+            # Log current environment for debugging
+            log('info', f"DATABRICKS_HOST env: {os.environ.get('DATABRICKS_HOST', 'NOT SET')}")
+            log('info', f"DATABRICKS_TOKEN env: {'SET (len={})'.format(len(os.environ.get('DATABRICKS_TOKEN', ''))) if os.environ.get('DATABRICKS_TOKEN') else 'NOT SET'}")
+            log('info', f"DATABRICKS_CLIENT_ID env: {os.environ.get('DATABRICKS_CLIENT_ID', 'NOT SET')[:8] + '...' if os.environ.get('DATABRICKS_CLIENT_ID') else 'NOT SET'}")
+            
+            mlflow.set_tracking_uri("databricks")
+            
+            log('info', f"Searching prompts with MLflow SDK: catalog={catalog}, schema={schema}")
+            
+            try:
+                prompts_list = mlflow.genai.search_prompts(
+                    filter_string=f"catalog = '{catalog}' AND schema = '{schema}'",
+                    max_results=100
+                )
+                log('info', f"MLflow SDK returned {len(prompts_list)} prompts")
                 
-                prompt_info = {
-                    'name': short_name,
-                    'full_name': prompt_full_name,
-                    'description': p.get('description', ''),
-                    'tags': p.get('tags', {}),
-                    'aliases': [],
-                    'latest_version': None,
-                    'versions': [],
+                # PromptInfo has typed attributes: name, description, tags
+                for p in prompts_list:
+                    prompt_full_name: str = p.name
+                    short_name: str = prompt_full_name.split('.')[-1] if '.' in prompt_full_name else prompt_full_name
+                    
+                    # Extract tags - search_prompts returns tags including PromptVersionCount
+                    # PromptInfo.tags is Dict[str, str]
+                    tags: dict[str, str] = p.tags if p.tags else {}
+                    
+                    # Get PromptVersionCount from tags to determine latest version
+                    # This avoids having to call load_prompt which can fail
+                    version_count_str: str = tags.get('PromptVersionCount', '1')
+                    try:
+                        version_count: int = int(version_count_str)
+                    except (ValueError, TypeError):
+                        version_count = 1
+                    
+                    # Build version list (all versions from 1 to version_count)
+                    versions_list: list[dict[str, str | list[str]]] = []
+                    for v in range(version_count, 0, -1):  # Descending order
+                        versions_list.append({
+                            'version': str(v),
+                            'aliases': [],
+                        })
+                    
+                    # PromptInfo.description is Optional[str]
+                    description: str = p.description if p.description else ''
+                    
+                    prompt_info: dict[str, str | dict | list | None] = {
+                        'name': short_name,
+                        'full_name': prompt_full_name,
+                        'description': description,
+                        'tags': tags,
+                        'aliases': [],  # Aliases will be fetched when user selects the prompt
+                        'latest_version': str(version_count) if version_count > 0 else '1',
+                        'versions': versions_list,
+                    }
+                    
+                    log('debug', f"Prompt {short_name}: version_count={version_count}, tags={tags}")
+                    
+                    result.append(prompt_info)
+                
+            except Exception as mlflow_err:
+                import traceback
+                log('warning', f"MLflow SDK error: {mlflow_err}")
+                log('warning', f"MLflow SDK traceback: {traceback.format_exc()}")
+                # Fall back to REST API
+                log('info', "Falling back to REST API for prompts")
+                
+                import requests
+                
+                # Get a token for REST API
+                if use_sp_auth:
+                    # Get OAuth token for the service principal
+                    oauth_url = f"{host}/oidc/v1/token"
+                    oauth_data = {
+                        'grant_type': 'client_credentials',
+                        'client_id': sp_client_id,
+                        'client_secret': sp_client_secret,
+                        'scope': 'all-apis',
+                    }
+                    oauth_response = requests.post(oauth_url, data=oauth_data, timeout=30)
+                    if oauth_response.status_code == 200:
+                        oauth_result = oauth_response.json()
+                        token = oauth_result.get('access_token')
+                        log('info', "Got OAuth token for REST API fallback")
+                    else:
+                        log('error', f"OAuth failed: {oauth_response.status_code} - {oauth_response.text}")
+                        return jsonify({'error': f'OAuth failed: {oauth_response.text}'}), 401
+                else:
+                    token, _ = get_databricks_token_with_source()
+                
+                if not token:
+                    return jsonify({'error': 'No authentication token available'}), 401
+                
+                headers = {
+                    'Authorization': f'Bearer {token}',
+                    'Content-Type': 'application/json',
                 }
                 
-                # Get versions for this prompt
-                try:
-                    versions_url = f"{host}/api/2.0/mlflow/unity-catalog/prompts/versions/search"
-                    versions_payload = {'name': prompt_full_name}
-                    versions_response = requests.post(versions_url, headers=headers, json=versions_payload, timeout=30)
-                    
-                    if versions_response.status_code == 200:
-                        versions_data = versions_response.json()
-                        versions_list = versions_data.get('prompt_versions', [])
-                        
-                        all_aliases = set()
-                        version_infos = []
-                        latest_version = 0
-                        
-                        for v in versions_list:
-                            version_num = int(v.get('version', 0))
-                            v_aliases = v.get('aliases', [])
-                            all_aliases.update(v_aliases)
-                            
-                            version_infos.append({
-                                'version': str(version_num),
-                                'aliases': v_aliases,
-                            })
-                            
-                            if version_num > latest_version:
-                                latest_version = version_num
-                        
-                        prompt_info['aliases'] = sorted(list(all_aliases))
-                        prompt_info['latest_version'] = str(latest_version) if latest_version > 0 else None
-                        prompt_info['versions'] = sorted(version_infos, key=lambda x: int(x['version']), reverse=True)
-                except Exception as ve:
-                    log('debug', f"Could not get versions for {prompt_full_name}: {ve}")
+                api_url = f"{host}/api/2.0/mlflow/unity-catalog/prompts/search"
+                payload = {
+                    'filter': f"catalog = '{catalog}' AND schema = '{schema}'",
+                    'max_results': 100,
+                }
                 
-                result.append(prompt_info)
-            
-            log('info', f"Found {len(result)} prompts via REST API")
-            
-        elif response.status_code == 403:
-            # Permission denied - log the full error for debugging
-            log('error', f"Permission denied (403): {response.text}")
-            return jsonify({'error': f'Permission denied to access prompts. Response: {response.text}'}), 403
-        else:
-            log('error', f"REST API failed with status {response.status_code}: {response.text}")
-            return jsonify({'error': f'Failed to search prompts: {response.status_code} - {response.text}'}), response.status_code
+                response = requests.post(api_url, headers=headers, json=payload, timeout=30)
+                log('info', f"REST API response status: {response.status_code}")
+                log('debug', f"REST API response headers: {dict(response.headers)}")
+                log('debug', f"REST API response text (first 500 chars): {response.text[:500] if response.text else 'EMPTY'}")
+                
+                if response.status_code == 200:
+                    if not response.text or not response.text.strip():
+                        log('error', "REST API returned empty response")
+                        return jsonify({'error': 'REST API returned empty response'}), 500
+                    try:
+                        data = response.json()
+                    except Exception as json_err:
+                        log('error', f"Failed to parse REST API response as JSON: {json_err}")
+                        log('error', f"Raw response: {response.text[:1000]}")
+                        return jsonify({'error': f'Failed to parse response: {json_err}'}), 500
+                    prompts_data = data.get('prompts', [])
+                    log('info', f"REST API returned {len(prompts_data)} prompts")
+                    
+                    for p in prompts_data:
+                        prompt_full_name = p.get('name', '')
+                        short_name = prompt_full_name.split('.')[-1] if '.' in prompt_full_name else prompt_full_name
+                        
+                        prompt_info = {
+                            'name': short_name,
+                            'full_name': prompt_full_name,
+                            'description': p.get('description', ''),
+                            'tags': p.get('tags', {}),
+                            'aliases': [],
+                            'latest_version': None,
+                            'versions': [],
+                        }
+                        
+                        # Get versions for this prompt
+                        try:
+                            # Correct endpoint format: /api/2.0/mlflow/unity-catalog/prompts/{prompt-name}/versions/search
+                            from urllib.parse import quote
+                            # Keep dots unencoded as they're part of the catalog.schema.name format
+                            encoded_name = quote(prompt_full_name, safe='.')
+                            versions_url = f"{host}/api/2.0/mlflow/unity-catalog/prompts/{encoded_name}/versions/search"
+                            versions_response = requests.get(versions_url, headers=headers, timeout=30)
+                            
+                            if versions_response.status_code == 200:
+                                versions_data = versions_response.json()
+                                # Handle both wrapped and unwrapped response formats
+                                versions_list = versions_data.get('prompt_versions', []) if isinstance(versions_data, dict) else versions_data
+                                
+                                all_aliases = set()
+                                version_infos = []
+                                latest_version = 0
+                                
+                                for v in versions_list:
+                                    version_val = v.get('version')
+                                    version_num = int(version_val) if version_val is not None else 0
+                                    v_aliases = v.get('aliases', [])
+                                    all_aliases.update(v_aliases)
+                                    
+                                    version_infos.append({
+                                        'version': str(version_num),
+                                        'aliases': v_aliases,
+                                    })
+                                    
+                                    if version_num > latest_version:
+                                        latest_version = version_num
+                                
+                                prompt_info['aliases'] = sorted(list(all_aliases))
+                                prompt_info['latest_version'] = str(latest_version) if latest_version > 0 else None
+                                prompt_info['versions'] = sorted(version_infos, key=lambda x: int(x['version']) if x['version'] else 0, reverse=True)
+                        except Exception as ve:
+                            log('debug', f"Could not get versions for {prompt_full_name}: {ve}")
+                        
+                        result.append(prompt_info)
+                    
+                    log('info', f"Found {len(result)} prompts via REST API")
+                    
+                elif response.status_code == 403:
+                    log('error', f"Permission denied (403): {response.text}")
+                    return jsonify({'error': f'Permission denied to access prompts. Response: {response.text}'}), 403
+                else:
+                    log('error', f"REST API failed with status {response.status_code}: {response.text}")
+                    return jsonify({'error': f'Failed to search prompts: {response.status_code} - {response.text}'}), response.status_code
+        
+        finally:
+            # Restore original environment variables
+            for var in env_vars_to_manage:
+                if orig_env[var] is not None:
+                    os.environ[var] = orig_env[var]
+                elif var in os.environ:
+                    del os.environ[var]
+            log('debug', "Restored original environment variables")
         
         # Sort by name alphabetically
         result = sorted(result, key=lambda x: x['name'].lower())
@@ -1183,37 +1538,44 @@ def list_prompts():
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/uc/prompt-details')
+@app.route('/api/uc/prompt-details', methods=['GET', 'POST'])
 def get_prompt_details():
     """Get detailed information about a specific prompt including versions, aliases, and template.
     
-    Query params:
+    Query params (GET) or JSON body (POST):
     - name: The full prompt name (catalog.schema.name) (required)
+    - service_principal: Optional service principal config for authentication
     
     Returns prompt details including all versions, aliases, tags, and template content.
-    
-    Uses the user's OBO token with direct REST API calls.
+    Uses MLflow SDK: get_prompt_tags() for tags, load_prompt() for template.
     """
-    full_name = request.args.get('name')
+    # Support both GET (query params) and POST (JSON body with service principal)
+    if request.method == 'POST':
+        data = request.get_json() or {}
+        full_name = data.get('name')
+        service_principal = data.get('service_principal')
+    else:
+        full_name = request.args.get('name')
+        service_principal = None
     
     if not full_name:
         return jsonify({'error': 'name parameter required'}), 400
     
     try:
-        # Get user's token and host
-        token, token_source = get_databricks_token_with_source()
+        # Get host - now checks X-Forwarded-Host for Databricks Apps
         host, host_source = get_databricks_host_with_source()
         
         if not host:
-            log('warning', "No Databricks host available")
-            return jsonify({'error': 'No Databricks host configured'}), 401
+            log('warning', f"No Databricks host available. "
+                         f"X-Forwarded-Host header: {request.headers.get('X-Forwarded-Host', 'NOT SET')}")
+            return jsonify({
+                'error': 'No Databricks host configured',
+                'help': 'When running as a Databricks App, the X-Forwarded-Host header should be set.'
+            }), 401
         
-        if not token:
-            log('warning', "No authentication token available")
-            return jsonify({'error': 'No authentication token available'}), 401
-        
-        log('info', f"Using token from {token_source}, host from {host_source}: {host}")
-        log('info', f"Getting details for prompt: {full_name}")
+        # Normalize host
+        host = host.rstrip('/')
+        log('info', f"Using host={host} from source={host_source}")
         
         result = {
             'name': full_name.split('.')[-1] if '.' in full_name else full_name,
@@ -1226,261 +1588,537 @@ def get_prompt_details():
             'description': '',
         }
         
-        import requests
+        # Determine which credentials to use for SP auth
+        sp_client_id = None
+        sp_client_secret = None
+        use_sp_auth = False
         
-        headers = {
-            'Authorization': f'Bearer {token}',
-            'Content-Type': 'application/json',
-        }
+        if service_principal:
+            log('info', f"Using service principal for prompt details access")
+            obo_token, _ = get_databricks_token_with_source()
+            sp_client_id, sp_client_secret = get_service_principal_credentials(
+                service_principal, obo_token
+            )
+            if sp_client_id and sp_client_secret:
+                use_sp_auth = True
+                log('info', f"Resolved service principal credentials: client_id={sp_client_id[:8]}...")
         
-        # Get versions via REST API
-        versions_url = f"{host}/api/2.0/mlflow/unity-catalog/prompts/versions/search"
-        versions_payload = {'name': full_name}
+        # Save original environment variables to restore later
+        orig_env = {}
+        env_vars_to_manage = ['DATABRICKS_HOST', 'DATABRICKS_TOKEN', 'DATABRICKS_CLIENT_ID', 'DATABRICKS_CLIENT_SECRET']
+        for var in env_vars_to_manage:
+            orig_env[var] = os.environ.get(var)
         
-        log('info', f"Calling REST API for versions: POST {versions_url}")
-        versions_response = requests.post(versions_url, headers=headers, json=versions_payload, timeout=30)
-        
-        if versions_response.status_code == 200:
-            versions_data = versions_response.json()
-            versions_list = versions_data.get('prompt_versions', [])
+        try:
+            # Clear all auth-related env vars first to prevent conflicts
+            for var in env_vars_to_manage:
+                if var in os.environ:
+                    del os.environ[var]
             
-            all_aliases = set()
-            latest_version = 0
-            latest_template = None
+            # Set DATABRICKS_HOST
+            os.environ['DATABRICKS_HOST'] = host
             
-            for v in versions_list:
-                version_num = int(v.get('version', 0))
-                v_aliases = v.get('aliases', [])
-                v_tags = v.get('tags', {})
-                
-                version_info = {
-                    'version': str(version_num),
-                    'aliases': v_aliases,
-                    'tags': v_tags,
-                    'description': v.get('description', ''),
+            if use_sp_auth:
+                os.environ['DATABRICKS_CLIENT_ID'] = sp_client_id
+                os.environ['DATABRICKS_CLIENT_SECRET'] = sp_client_secret
+                log('info', f"Set DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET for SP auth")
+            else:
+                token, token_source = get_databricks_token_with_source()
+                if token:
+                    os.environ['DATABRICKS_TOKEN'] = token
+                    log('info', f"Set DATABRICKS_TOKEN from {token_source}")
+                else:
+                    log('warning', "No authentication token available")
+                    return jsonify({'error': 'No authentication token available'}), 401
+            
+            log('info', f"Getting details for prompt: {full_name}")
+            
+            # Use REST API to get prompt metadata (including aliases and tags)
+            import requests
+            from urllib.parse import quote
+            
+            # Get token for REST API call
+            rest_token: str | None = None
+            if use_sp_auth:
+                oauth_url = f"{host}/oidc/v1/token"
+                oauth_data = {
+                    'grant_type': 'client_credentials',
+                    'client_id': sp_client_id,
+                    'client_secret': sp_client_secret,
+                    'scope': 'all-apis',
                 }
-                result['versions'].append(version_info)
-                
-                all_aliases.update(v_aliases)
-                
-                if version_num > latest_version:
-                    latest_version = version_num
-                    if v.get('template'):
-                        latest_template = v.get('template')
+                oauth_response = requests.post(oauth_url, data=oauth_data, timeout=30)
+                if oauth_response.status_code == 200:
+                    rest_token = oauth_response.json().get('access_token')
+                else:
+                    log('error', f"OAuth failed: {oauth_response.status_code}")
+            else:
+                rest_token, _ = get_databricks_token_with_source()
             
-            result['versions'].sort(key=lambda x: int(x['version']), reverse=True)
-            result['aliases'] = sorted(list(all_aliases))
-            result['latest_version'] = str(latest_version) if latest_version > 0 else None
+            if not rest_token:
+                return jsonify({'error': 'No authentication token available'}), 401
             
-            if latest_template:
-                result['template'] = latest_template
+            headers = {
+                'Authorization': f'Bearer {rest_token}',
+                'Content-Type': 'application/json',
+            }
+            
+            # Keep dots unencoded as they're part of the catalog.schema.name format
+            encoded_name = quote(full_name, safe='.')
+            
+            # First, get prompt metadata (including aliases) from /prompts/{prompt-name}
+            prompt_url = f"{host}/api/2.0/mlflow/unity-catalog/prompts/{encoded_name}"
+            log('info', f"Calling REST API for prompt metadata: GET {prompt_url}")
+            prompt_response = requests.get(prompt_url, headers=headers, timeout=30)
+            
+            if prompt_response.status_code == 200:
+                prompt_data = prompt_response.json()
                 
-            log('info', f"REST API returned {len(versions_list)} versions")
-        else:
-            log('warning', f"Could not get versions for {full_name}: {versions_response.status_code} - {versions_response.text}")
-        
-        # If we don't have a template yet, try to get it
-        if not result['template'] and result['latest_version']:
-            try:
-                prompt_url = f"{host}/api/2.0/mlflow/unity-catalog/prompts/get"
-                prompt_payload = {'name': full_name, 'version': result['latest_version']}
-                prompt_response = requests.post(prompt_url, headers=headers, json=prompt_payload, timeout=30)
+                # Extract description
+                result['description'] = prompt_data.get('description', '')
                 
-                if prompt_response.status_code == 200:
-                    prompt_data = prompt_response.json()
-                    if prompt_data.get('prompt', {}).get('template'):
-                        result['template'] = prompt_data['prompt']['template']
-            except Exception as template_err:
-                log('debug', f"Could not load template for {full_name}: {template_err}")
-        
-        log('info', f"Retrieved details for prompt {full_name}: {len(result['versions'])} versions, {len(result['aliases'])} aliases")
-        return jsonify(result)
+                # Extract aliases - format: [{"alias": "champion", "version": "15"}, ...]
+                aliases_data = prompt_data.get('aliases', [])
+                alias_names: list[str] = []
+                alias_version_map: dict[str, str] = {}
+                for a in aliases_data:
+                    alias_name = a.get('alias', '')
+                    alias_version = a.get('version', '')
+                    if alias_name:
+                        alias_names.append(alias_name)
+                        alias_version_map[alias_name] = alias_version
+                result['aliases'] = sorted(alias_names)
+                result['alias_versions'] = alias_version_map  # Map of alias -> version
+                
+                # Extract tags - format: [{"key": "...", "value": "..."}, ...]
+                tags_data = prompt_data.get('tags', [])
+                tags_dict: dict[str, str] = {}
+                for t in tags_data:
+                    key = t.get('key', '')
+                    value = t.get('value', '')
+                    if key:
+                        tags_dict[key] = value
+                result['tags'] = tags_dict
+                
+                # Get PromptVersionCount from tags
+                version_count_str = tags_dict.get('PromptVersionCount', '1')
+                try:
+                    version_count = int(version_count_str)
+                    result['latest_version'] = str(version_count)
+                except (ValueError, TypeError):
+                    result['latest_version'] = '1'
+                
+                log('info', f"Got prompt metadata: {len(alias_names)} aliases, {len(tags_dict)} tags, latest_version={result['latest_version']}")
+            else:
+                log('warning', f"Could not get prompt metadata: {prompt_response.status_code} - {prompt_response.text}")
+            
+            # Then, get all versions from /prompts/{prompt-name}/versions/search
+            versions_url = f"{host}/api/2.0/mlflow/unity-catalog/prompts/{encoded_name}/versions/search"
+            log('info', f"Calling REST API for versions: GET {versions_url}")
+            versions_response = requests.get(versions_url, headers=headers, timeout=30)
+            
+            if versions_response.status_code == 200:
+                versions_data = versions_response.json()
+                # Handle both wrapped and unwrapped response formats
+                versions_list = versions_data.get('prompt_versions', []) if isinstance(versions_data, dict) else versions_data
+                if not isinstance(versions_list, list):
+                    versions_list = []
+                
+                latest_version_num: int = 0
+                
+                for v in versions_list:
+                    version_val = v.get('version')
+                    version_num = int(str(version_val)) if version_val is not None else 0
+                    
+                    # Find aliases for this version
+                    version_aliases: list[str] = []
+                    for alias_name, alias_ver in result.get('alias_versions', {}).items():
+                        if str(alias_ver) == str(version_num):
+                            version_aliases.append(alias_name)
+                    
+                    version_info = {
+                        'version': str(version_num),
+                        'aliases': version_aliases,
+                        'description': v.get('description', ''),
+                        'template': v.get('template', ''),
+                    }
+                    result['versions'].append(version_info)
+                    
+                    if version_num > latest_version_num:
+                        latest_version_num = version_num
+                
+                result['versions'].sort(key=lambda x: int(x['version']) if x['version'] else 0, reverse=True)
+                
+                # Update latest_version if not set
+                if not result.get('latest_version') and latest_version_num > 0:
+                    result['latest_version'] = str(latest_version_num)
+                
+                # Get template from the latest version
+                if result['versions'] and not result.get('template'):
+                    result['template'] = result['versions'][0].get('template', '')
+                
+                log('info', f"REST API returned {len(versions_list)} versions")
+            else:
+                log('warning', f"Could not get versions: {versions_response.status_code} - {versions_response.text}")
+            
+            log('info', f"Retrieved details for prompt {full_name}: {len(result['versions'])} versions, {len(result['aliases'])} aliases, {len(result['tags'])} tags")
+            return jsonify(result)
+            
+        finally:
+            # Restore original environment variables
+            for var in env_vars_to_manage:
+                if orig_env[var] is not None:
+                    os.environ[var] = orig_env[var]
+                elif var in os.environ:
+                    del os.environ[var]
+            log('debug', "Restored original environment variables")
         
     except Exception as e:
+        import traceback
         log('error', f"Error getting prompt details for {full_name}: {e}")
+        log('error', f"Traceback: {traceback.format_exc()}")
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/uc/prompt-template')
+@app.route('/api/uc/prompt-template', methods=['GET', 'POST'])
 def get_prompt_template():
     """Get the template content for a specific prompt version or alias.
     
-    Query params:
+    Query params (GET) or JSON body (POST):
     - name: The full prompt name (catalog.schema.name) (required)
     - version: The version number (optional, mutually exclusive with alias)
-    - alias: The alias name (optional, mutually exclusive with version)
+    - alias: The alias name (optional, e.g., 'latest', 'champion', 'default')
+    - service_principal: Optional service principal config for authentication
     
     Returns the prompt template content.
     
-    Uses the user's OBO token with direct REST API calls.
+    Uses REST API to fetch the prompt template.
+    Supports aliases: latest, champion, default, or any custom alias.
     """
-    full_name = request.args.get('name')
-    version = request.args.get('version')
-    alias = request.args.get('alias')
+    # Support both GET (query params) and POST (JSON body with service principal)
+    if request.method == 'POST':
+        data = request.get_json() or {}
+        full_name = data.get('name')
+        version = data.get('version')
+        alias = data.get('alias')
+        service_principal = data.get('service_principal')
+    else:
+        full_name = request.args.get('name')
+        version = request.args.get('version')
+        alias = request.args.get('alias')
+        service_principal = None
     
     if not full_name:
         return jsonify({'error': 'name parameter required'}), 400
     
     try:
-        # Get user's token and host
-        token, token_source = get_databricks_token_with_source()
+        # Get host
         host, host_source = get_databricks_host_with_source()
         
         if not host:
-            log('warning', "No Databricks host available")
-            return jsonify({'error': 'No Databricks host configured'}), 401
+            log('warning', f"No Databricks host available.")
+            return jsonify({
+                'error': 'No Databricks host configured',
+            }), 401
         
-        if not token:
-            log('warning', "No authentication token available")
-            return jsonify({'error': 'No authentication token available'}), 401
+        # Normalize host
+        host = host.rstrip('/')
         
-        log('info', f"Using token from {token_source}, host from {host_source}: {host}")
+        # Determine which credentials to use for SP auth
+        sp_client_id: str | None = None
+        sp_client_secret: str | None = None
+        use_sp_auth: bool = False
         
-        import requests
+        if service_principal:
+            log('info', f"Using service principal for prompt template access")
+            obo_token, _ = get_databricks_token_with_source()
+            sp_client_id, sp_client_secret = get_service_principal_credentials(
+                service_principal, obo_token
+            )
+            if sp_client_id and sp_client_secret:
+                use_sp_auth = True
+                log('info', f"Resolved service principal credentials: client_id={sp_client_id[:8]}...")
         
-        headers = {
-            'Authorization': f'Bearer {token}',
-            'Content-Type': 'application/json',
-        }
+        # Save original environment variables to restore later
+        orig_env: dict[str, str | None] = {}
+        env_vars_to_manage = ['DATABRICKS_HOST', 'DATABRICKS_TOKEN', 'DATABRICKS_CLIENT_ID', 'DATABRICKS_CLIENT_SECRET']
+        for var in env_vars_to_manage:
+            orig_env[var] = os.environ.get(var)
         
-        # Call REST API to get prompt
-        prompt_url = f"{host}/api/2.0/mlflow/unity-catalog/prompts/get"
-        
-        # Construct payload based on version or alias
-        if version:
-            prompt_payload = {'name': full_name, 'version': version}
-        elif alias:
-            prompt_payload = {'name': full_name, 'alias': alias}
-        else:
-            prompt_payload = {'name': full_name}  # Get latest
-        
-        log('info', f"Calling REST API for template: POST {prompt_url}")
-        prompt_response = requests.post(prompt_url, headers=headers, json=prompt_payload, timeout=30)
-        
-        if prompt_response.status_code == 200:
-            prompt_data = prompt_response.json()
-            prompt_info = prompt_data.get('prompt', {})
+        try:
+            # Clear all auth-related env vars first
+            for var in env_vars_to_manage:
+                if var in os.environ:
+                    del os.environ[var]
             
-            result = {
-                'template': prompt_info.get('template', ''),
-                'version': prompt_info.get('version', ''),
-                'name': full_name,
+            # Set DATABRICKS_HOST
+            os.environ['DATABRICKS_HOST'] = host
+            
+            # Get token for authentication
+            token: str | None = None
+            if use_sp_auth:
+                # Get OAuth token for the service principal
+                import requests as req
+                oauth_url = f"{host}/oidc/v1/token"
+                oauth_data = {
+                    'grant_type': 'client_credentials',
+                    'client_id': sp_client_id,
+                    'client_secret': sp_client_secret,
+                    'scope': 'all-apis',
+                }
+                oauth_response = req.post(oauth_url, data=oauth_data, timeout=30)
+                if oauth_response.status_code == 200:
+                    token = oauth_response.json().get('access_token')
+                    log('info', "Got OAuth token for service principal")
+                else:
+                    log('error', f"OAuth failed: {oauth_response.status_code} - {oauth_response.text}")
+                    return jsonify({'error': f'OAuth failed: {oauth_response.text}'}), 401
+            else:
+                token, token_source = get_databricks_token_with_source()
+                
+            if not token:
+                log('warning', "No authentication token available")
+                return jsonify({'error': 'No authentication token available'}), 401
+            
+            # Skip MLflow SDK entirely - go straight to REST API which is more reliable
+            # MLflow SDK has internal int() parsing bugs with some version formats
+            import requests as req
+            
+            prompt = None
+            load_error = None
+            template = None
+            prompt_version = None
+            
+            log('info', f"Loading prompt template via REST API: {full_name}, alias={alias}, version={version}")
+            
+            # Use REST API directly - more reliable than MLflow SDK
+            headers = {
+                'Authorization': f'Bearer {token}',
+                'Content-Type': 'application/json',
             }
             
-            log('info', f"Retrieved template via REST API for {full_name}")
-            return jsonify(result)
-        else:
-            log('error', f"REST API failed: {prompt_response.status_code} - {prompt_response.text}")
-            return jsonify({'error': f'Failed to get prompt template: {prompt_response.text}'}), prompt_response.status_code
+            try:
+                # First, get prompt metadata to find the latest version and aliases
+                prompt_url = f"{host}/api/2.0/mlflow/unity-catalog/prompts/{full_name}"
+                log('info', f"Calling REST API: GET {prompt_url}")
+                prompt_response = req.get(prompt_url, headers=headers, timeout=30)
+                
+                log('info', f"Prompt metadata response: status={prompt_response.status_code}")
+                
+                if prompt_response.status_code != 200:
+                    log('error', f"Prompt metadata error: {prompt_response.text[:500] if prompt_response.text else 'empty'}")
+                    return jsonify({'error': f'Failed to get prompt metadata: {prompt_response.status_code}'}), prompt_response.status_code
+                
+                prompt_meta = prompt_response.json()
+                
+                # Get version count from tags
+                tags_list = prompt_meta.get('tags', [])
+                version_count = 1
+                for t in tags_list:
+                    if t.get('key') == 'PromptVersionCount':
+                        try:
+                            version_count = int(t.get('value', '1'))
+                        except (ValueError, TypeError):
+                            version_count = 1
+                        break
+                
+                # Get aliases
+                aliases_list = prompt_meta.get('aliases', [])
+                alias_version_map: dict[str, str] = {}
+                for a in aliases_list:
+                    alias_name = a.get('alias', '')
+                    alias_ver = a.get('version', '')
+                    if alias_name and alias_ver:
+                        alias_version_map[alias_name] = alias_ver
+                
+                log('info', f"Prompt metadata: version_count={version_count}, aliases={list(alias_version_map.keys())}")
+                
+                # Determine which version to load
+                target_version_num: int | None = None
+                
+                if version:
+                    # Use specific version
+                    target_version_num = int(version)
+                elif alias and alias in alias_version_map:
+                    # Use aliased version
+                    target_version_num = int(alias_version_map[alias])
+                elif alias == 'latest' or not alias:
+                    # Use latest version (highest version number)
+                    target_version_num = version_count
+                elif alias in ['champion', 'default']:
+                    # Check if these aliases exist
+                    if alias in alias_version_map:
+                        target_version_num = int(alias_version_map[alias])
+                    else:
+                        return jsonify({
+                            'error': f"Alias '{alias}' not found for prompt {full_name}",
+                            'alias_not_found': True
+                        }), 404
+                
+                if not target_version_num:
+                    target_version_num = version_count
+                
+                log('info', f"Loading version {target_version_num} for prompt {full_name}")
+                
+                # Use MLflow SDK to load the specific version
+                import mlflow
+                mlflow.set_tracking_uri("databricks")
+                
+                os.environ['DATABRICKS_HOST'] = host
+                os.environ['DATABRICKS_TOKEN'] = token
+                
+                prompt_uri = f"prompts:/{full_name}/{target_version_num}"
+                log('info', f"Loading prompt with MLflow SDK: {prompt_uri}")
+                
+                try:
+                    prompt_obj = mlflow.genai.load_prompt(prompt_uri)
+                    template = prompt_obj.template if prompt_obj else ''
+                    loaded_version = str(prompt_obj.version) if prompt_obj and prompt_obj.version else str(target_version_num)
+                    
+                    result = {
+                        'template': template,
+                        'version': loaded_version,
+                        'name': full_name,
+                        'alias': alias if alias else None,
+                    }
+                    
+                    log('info', f"Successfully loaded template for {full_name}, version={loaded_version}")
+                    return jsonify(result)
+                    
+                except Exception as mlflow_err:
+                    log('error', f"MLflow load_prompt error: {mlflow_err}")
+                    return jsonify({'error': str(mlflow_err)}), 500
+                    
+            except Exception as rest_err:
+                log('error', f"REST API error: {rest_err}")
+                import traceback
+                log('error', f"Traceback: {traceback.format_exc()}")
+                return jsonify({'error': str(rest_err)}), 500
+                    
+        finally:
+            # Restore original environment variables
+            for var in env_vars_to_manage:
+                if orig_env[var] is not None:
+                    os.environ[var] = orig_env[var]
+                elif var in os.environ:
+                    del os.environ[var]
         
     except Exception as e:
+        import traceback
         log('error', f"Error getting prompt template for {full_name}: {e}")
+        log('error', f"Traceback: {traceback.format_exc()}")
         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/uc/genie-spaces')
 def list_genie_spaces():
-    """List Genie spaces/rooms using WorkspaceClient or REST API.
+    """List Genie spaces/rooms using user's token for proper permissions.
     
-    Returns all available Genie spaces (with pagination), sorted with:
-    1. Spaces owned by the current user first
-    2. Remaining spaces sorted alphabetically by title
+    Uses the user's OBO token (or other auth) to fetch Genie spaces the USER has access to,
+    not just what the app's service principal can see.
+    
+    Returns all available Genie spaces (with pagination), sorted alphabetically by title.
     """
     try:
-        w = get_workspace_client()
         current_user = get_current_user_email()
         log('info', f"Listing Genie spaces for user: {current_user}")
         
-        result = []
+        # Get user's token and host - this respects the auth priority:
+        # 1. OAuth session token
+        # 2. Authorization header (manual PAT)
+        # 3. X-Forwarded-Access-Token (OBO)
+        # 4. SDK config / env vars
+        token, token_source = get_databricks_token_with_source()
+        host, _ = get_databricks_host_with_source()
         
-        # Try SDK method first with pagination
-        try:
-            if hasattr(w, 'genie') and hasattr(w.genie, 'list_spaces'):
-                log('info', "Trying w.genie.list_spaces() with pagination...")
+        if not token or not host:
+            log('error', "No token or host available for Genie spaces API")
+            return jsonify({'error': 'Authentication required'}), 401
+        
+        log('info', f"Using {token_source} token for Genie spaces API")
+        
+        result = []
+        headers = {'Authorization': f'Bearer {token}'}
+        
+        # Use REST API directly with user's token for proper permissions
+        page_token = None
+        page_count = 0
+        max_pages = 100  # Safety limit
+        
+        while page_count < max_pages:
+            page_count += 1
+            api_url = f"{host}/api/2.0/genie/spaces?page_size=100"
+            if page_token:
+                api_url += f"&page_token={page_token}"
+            
+            log('info', f"Page {page_count}: Calling Genie spaces API with {token_source} token")
+            
+            try:
+                resp = http_requests.get(api_url, headers=headers, timeout=30)
+                log('info', f"Genie spaces API response status: {resp.status_code}")
                 
-                page_token = None
-                page_count = 0
-                max_pages = 100  # Safety limit
-                
-                while page_count < max_pages:
-                    page_count += 1
-                    response = w.genie.list_spaces(page_size=100, page_token=page_token)
-                    spaces = response.spaces or []
-                    log('info', f"Page {page_count}: genie.list_spaces() returned {len(spaces)} spaces")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    spaces = data.get('spaces', [])
+                    log('info', f"Page {page_count}: API returned {len(spaces)} spaces")
                     
                     for s in spaces:
-                        # Note: The Genie spaces list API does not return owner information
                         result.append({
-                            'space_id': s.space_id,
-                            'title': s.title,
-                            'description': getattr(s, 'description', None) or '',
-                            'warehouse_id': getattr(s, 'warehouse_id', None),
+                            'space_id': s.get('space_id') or s.get('id'),
+                            'title': s.get('title') or s.get('name'),
+                            'description': s.get('description') or '',
+                            'warehouse_id': s.get('warehouse_id'),
                         })
                     
                     # Check for next page
-                    page_token = getattr(response, 'next_page_token', None)
+                    page_token = data.get('next_page_token')
                     if not page_token:
                         break
-                
-                log('info', f"Total Genie spaces from SDK: {len(result)} (across {page_count} pages)")
-            else:
-                log('warning', "w.genie.list_spaces() not available, trying REST API...")
-                raise AttributeError("SDK method not available")
-        except Exception as e:
-            log('info', f"SDK method failed ({e}), trying REST API fallback...")
-            
-            # Fallback: Use REST API directly with pagination
+                elif resp.status_code == 401 or resp.status_code == 403:
+                    log('warning', f"Auth failed with {token_source} token: {resp.status_code}")
+                    # If user token fails, try falling back to SDK method
+                    break
+                else:
+                    log('error', f"Genie spaces API failed: {resp.status_code} - {resp.text}")
+                    break
+            except Exception as req_err:
+                log('error', f"Request error: {req_err}")
+                break
+        
+        log('info', f"Total Genie spaces from user token: {len(result)} (across {page_count} pages)")
+        
+        # If we got no results and the token wasn't working, try SDK fallback
+        if len(result) == 0:
+            log('info', "No results from user token, trying SDK fallback...")
             try:
-                import requests
-                host = w.config.host
-                # Get auth headers from SDK
-                headers = w.config.authenticate()
-                
-                page_token = None
-                page_count = 0
-                max_pages = 100  # Safety limit
-                
-                while page_count < max_pages:
-                    page_count += 1
-                    api_url = f"{host}/api/2.0/genie/spaces?page_size=100"
-                    if page_token:
-                        api_url += f"&page_token={page_token}"
+                w = get_workspace_client()
+                if hasattr(w, 'genie') and hasattr(w.genie, 'list_spaces'):
+                    page_token = None
+                    page_count = 0
                     
-                    log('info', f"Page {page_count}: Calling REST API: {api_url}")
-                    
-                    resp = requests.get(api_url, headers=headers, timeout=30)
-                    log('info', f"REST API response status: {resp.status_code}")
-                    
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        spaces = data.get('spaces', [])
-                        log('info', f"Page {page_count}: REST API returned {len(spaces)} spaces")
+                    while page_count < max_pages:
+                        page_count += 1
+                        response = w.genie.list_spaces(page_size=100, page_token=page_token)
+                        spaces = response.spaces or []
+                        log('info', f"SDK Page {page_count}: returned {len(spaces)} spaces")
                         
                         for s in spaces:
-                            # Note: The Genie spaces list API does not return owner information
                             result.append({
-                                'space_id': s.get('space_id') or s.get('id'),
-                                'title': s.get('title') or s.get('name'),
-                                'description': s.get('description') or '',
-                                'warehouse_id': s.get('warehouse_id'),
+                                'space_id': s.space_id,
+                                'title': s.title,
+                                'description': getattr(s, 'description', None) or '',
+                                'warehouse_id': getattr(s, 'warehouse_id', None),
                             })
                         
-                        # Check for next page
-                        page_token = data.get('next_page_token')
+                        page_token = getattr(response, 'next_page_token', None)
                         if not page_token:
                             break
-                    else:
-                        log('error', f"REST API failed: {resp.status_code} - {resp.text}")
-                        break
-                
-                log('info', f"Total Genie spaces from REST API: {len(result)} (across {page_count} pages)")
-            except Exception as rest_err:
-                log('error', f"REST API fallback failed: {rest_err}")
-                import traceback
-                log('error', traceback.format_exc())
+                    
+                    log('info', f"Total Genie spaces from SDK: {len(result)}")
+            except Exception as sdk_err:
+                log('warning', f"SDK fallback also failed: {sdk_err}")
         
         # Sort alphabetically by title
-        # Note: The Genie spaces API does not return owner information in the list response
         result.sort(key=lambda space: (space.get('title') or '').lower())
         
         log('info', f"Returning {len(result)} Genie spaces (sorted alphabetically)")
@@ -1669,72 +2307,110 @@ def list_vector_search_endpoints():
 
 @app.route('/api/uc/vector-search-indexes')
 def list_vector_search_indexes():
-    """List vector search indexes using WorkspaceClient with full details."""
+    """
+    List vector search indexes.
+    
+    Query params:
+    - endpoint (optional): Filter by endpoint name. If not provided, returns all indexes.
+    """
     endpoint = request.args.get('endpoint')
-    if not endpoint:
-        return jsonify({'error': 'endpoint parameter required'}), 400
+    
+    log('debug', f"Listing vector search indexes" + (f" for endpoint: {endpoint}" if endpoint else " (all)"))
     
     try:
         w = get_workspace_client()
-        try:
-            indexes = list(w.vector_search_indexes.list_indexes(endpoint_name=endpoint))
-            result = []
-            for idx in indexes:
-                index_info = {
-                    'name': idx.name,
-                    'endpoint_name': idx.endpoint_name,
-                    'index_type': idx.index_type.value if idx.index_type else None,
-                    'primary_key': idx.primary_key,
-                    'status': getattr(idx, 'status', None),
-                }
-                
-                # Extract source table info from delta_sync_index_spec
-                if idx.delta_sync_index_spec:
-                    spec = idx.delta_sync_index_spec
-                    source_table = getattr(spec, 'source_table', None)
-                    
-                    index_info['delta_sync_index_spec'] = {
-                        'source_table': source_table,
-                        'pipeline_type': spec.pipeline_type.value if spec.pipeline_type else None,
+        
+        # Get all vector search endpoints first, then fetch indexes for each
+        all_indexes = []
+        
+        if endpoint:
+            # Filter to specific endpoint
+            endpoints_to_check = [endpoint]
+        else:
+            # Get all endpoints
+            try:
+                endpoints_list = list(w.vector_search_endpoints.list_endpoints())
+                endpoints_to_check = [ep.name for ep in endpoints_list if ep.name]
+                log('debug', f"Found {len(endpoints_to_check)} endpoints to check for indexes")
+            except Exception as e:
+                log('warning', f"Could not list endpoints: {e}")
+                endpoints_to_check = []
+        
+        # Fetch indexes for each endpoint
+        for ep_name in endpoints_to_check:
+            try:
+                indexes = list(w.vector_search_indexes.list_indexes(endpoint_name=ep_name))
+                for idx in indexes:
+                    index_info = {
+                        'name': idx.name,
+                        'endpoint_name': idx.endpoint_name or ep_name,
+                        'index_type': idx.index_type.value if idx.index_type else None,
+                        'primary_key': idx.primary_key,
+                        'status': None,
                     }
                     
-                    # Extract embedding source columns
-                    if spec.embedding_source_columns:
-                        index_info['delta_sync_index_spec']['embedding_source_columns'] = [
-                            {
-                                'name': col.name,
-                                'embedding_model_endpoint_name': getattr(col, 'embedding_model_endpoint_name', None),
-                            }
-                            for col in spec.embedding_source_columns
-                        ]
+                    # Get status if available
+                    if hasattr(idx, 'status') and idx.status:
+                        status = idx.status
+                        if hasattr(status, 'ready'):
+                            index_info['status'] = 'READY' if status.ready else 'NOT_READY'
+                        elif isinstance(status, dict):
+                            index_info['status'] = status.get('message', str(status))
+                        else:
+                            index_info['status'] = str(status)
                     
-                    # Extract columns to sync
-                    if getattr(spec, 'columns_to_sync', None):
-                        index_info['delta_sync_index_spec']['columns_to_sync'] = spec.columns_to_sync
-                
-                # Extract info from direct_access_index_spec if available
-                if idx.direct_access_index_spec:
-                    spec = idx.direct_access_index_spec
-                    index_info['direct_access_index_spec'] = {
-                        'embedding_source_columns': [
-                            {
-                                'name': col.name,
-                                'embedding_model_endpoint_name': getattr(col, 'embedding_model_endpoint_name', None),
-                            }
-                            for col in (spec.embedding_source_columns or [])
-                        ] if spec.embedding_source_columns else None,
-                        'schema_json': getattr(spec, 'schema_json', None),
-                    }
-                
-                result.append(index_info)
-            
-            log('info', f"Listed {len(result)} vector search indexes for endpoint {endpoint}")
-            return jsonify({'vector_indexes': result})
-        except AttributeError as e:
-            log('warning', f"Vector search indexes API not available in this SDK version: {e}")
-            return jsonify({'vector_indexes': [], 'warning': 'Vector search indexes API not available'})
+                    # Extract source table info from delta_sync_index_spec
+                    if idx.delta_sync_index_spec:
+                        spec = idx.delta_sync_index_spec
+                        source_table = getattr(spec, 'source_table', None)
+                        
+                        index_info['delta_sync_index_spec'] = {
+                            'source_table': source_table,
+                            'pipeline_type': spec.pipeline_type.value if spec.pipeline_type else None,
+                        }
+                        
+                        # Extract embedding source columns
+                        if spec.embedding_source_columns:
+                            index_info['delta_sync_index_spec']['embedding_source_columns'] = [
+                                {
+                                    'name': col.name,
+                                    'embedding_model_endpoint_name': getattr(col, 'embedding_model_endpoint_name', None),
+                                }
+                                for col in spec.embedding_source_columns
+                            ]
+                        
+                        # Extract columns to sync
+                        if getattr(spec, 'columns_to_sync', None):
+                            index_info['delta_sync_index_spec']['columns_to_sync'] = spec.columns_to_sync
+                    
+                    # Extract info from direct_access_index_spec if available
+                    if idx.direct_access_index_spec:
+                        spec = idx.direct_access_index_spec
+                        index_info['direct_access_index_spec'] = {
+                            'embedding_source_columns': [
+                                {
+                                    'name': col.name,
+                                    'embedding_model_endpoint_name': getattr(col, 'embedding_model_endpoint_name', None),
+                                }
+                                for col in (spec.embedding_source_columns or [])
+                            ] if spec.embedding_source_columns else None,
+                            'schema_json': getattr(spec, 'schema_json', None),
+                        }
+                    
+                    all_indexes.append(index_info)
+                    
+            except AttributeError as e:
+                log('warning', f"Vector search indexes API not available for endpoint {ep_name}: {e}")
+            except Exception as e:
+                log('warning', f"Error fetching indexes for endpoint {ep_name}: {e}")
+        
+        log('info', f"Listed {len(all_indexes)} vector search indexes" + (f" for endpoint {endpoint}" if endpoint else ""))
+        return jsonify({'vector_indexes': all_indexes})
+        
     except Exception as e:
-        log('error', f"Error listing vector search indexes for {endpoint}: {e}")
+        log('error', f"Error listing vector search indexes: {e}")
+        import traceback
+        log('error', traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 
@@ -1995,6 +2671,829 @@ def debug_info():
             'DATABRICKS_CLIENT_ID': 'set' if os.environ.get('DATABRICKS_CLIENT_ID') else 'not set',
         },
         'configured_scopes': OAUTH_SCOPES,
+    })
+
+
+# =============================================================================
+# Deployment APIs
+# =============================================================================
+
+# Track deployment status in memory (in production, use a database or distributed cache)
+_deployment_status = {}
+
+@app.route('/api/deploy/validate', methods=['POST'])
+def validate_deployment():
+    """Validate configuration before deployment.
+    
+    Request body:
+    - config: The YAML configuration as a dictionary
+    
+    Returns validation results and deployment requirements.
+    """
+    try:
+        import yaml
+        import tempfile
+        import os as os_module
+        
+        data = request.get_json()
+        config = data.get('config')
+        
+        if not config:
+            return jsonify({'error': 'config is required'}), 400
+        
+        # Check required fields for deployment
+        errors = []
+        warnings = []
+        requirements = []
+        
+        app_config = config.get('app', {})
+        
+        # Check app name
+        if not app_config.get('name'):
+            errors.append('app.name is required')
+        
+        # Check registered model
+        registered_model = app_config.get('registered_model')
+        if not registered_model:
+            errors.append('app.registered_model is required for deployment')
+        else:
+            if not registered_model.get('name'):
+                errors.append('app.registered_model.name is required')
+            if not registered_model.get('schema'):
+                errors.append('app.registered_model.schema is required')
+        
+        # Check endpoint name
+        if not app_config.get('endpoint_name'):
+            warnings.append('app.endpoint_name not set - will default to app name')
+        
+        # Check for agents
+        agents = config.get('agents', {})
+        if not agents or len(agents) == 0:
+            errors.append('At least one agent is required')
+        
+        # Check for orchestration
+        orchestration = app_config.get('orchestration', {})
+        if not orchestration.get('supervisor') and not orchestration.get('swarm'):
+            errors.append('Orchestration pattern (supervisor or swarm) is required')
+        
+        # Check for LLMs in resources
+        resources = config.get('resources', {})
+        llms = resources.get('llms', {})
+        if not llms or len(llms) == 0:
+            warnings.append('No LLMs configured in resources')
+        
+        # Determine requirements based on configuration
+        if resources.get('vector_stores'):
+            requirements.append({
+                'type': 'vector_search',
+                'description': 'Vector Search endpoints and indexes',
+                'count': len(resources.get('vector_stores', {}))
+            })
+        
+        if resources.get('genie_rooms'):
+            requirements.append({
+                'type': 'genie',
+                'description': 'Genie Rooms',
+                'count': len(resources.get('genie_rooms', {}))
+            })
+        
+        if resources.get('databases'):
+            requirements.append({
+                'type': 'database',
+                'description': 'Lakebase/PostgreSQL databases',
+                'count': len(resources.get('databases', {}))
+            })
+        
+        if resources.get('functions'):
+            requirements.append({
+                'type': 'functions',
+                'description': 'Unity Catalog functions',
+                'count': len(resources.get('functions', {}))
+            })
+        
+        is_valid = len(errors) == 0
+        
+        return jsonify({
+            'valid': is_valid,
+            'errors': errors,
+            'warnings': warnings,
+            'requirements': requirements,
+            'app_name': app_config.get('name'),
+            'endpoint_name': app_config.get('endpoint_name') or app_config.get('name'),
+            'agent_count': len(agents),
+            'deployment_options': {
+                'quick': {
+                    'description': 'Deploy model and endpoint only (fast, ~2-5 min)',
+                    'provisions': ['MLflow Model', 'Model Serving Endpoint'],
+                    'available': is_valid
+                },
+                'full': {
+                    'description': 'Full pipeline with infrastructure (complete, ~10-30 min)',
+                    'provisions': ['Data Ingestion', 'Vector Search', 'Lakebase', 'UC Functions', 'Model', 'Endpoint', 'Evaluation'],
+                    'available': is_valid,
+                    'requires_bundle': True
+                }
+            }
+        })
+        
+    except Exception as e:
+        import traceback
+        log('error', f"Error validating deployment: {e}")
+        log('error', f"Traceback: {traceback.format_exc()}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/validate/schema', methods=['POST'])
+def validate_schema():
+    """Validate YAML configuration against dao_ai.config.AppConfig JSON schema.
+    
+    Uses AppConfig.model_json_schema() to generate the JSON schema and validates
+    against it using jsonschema library. This avoids triggering model validators
+    that make live API calls.
+    
+    Request body:
+    - yaml_content: The YAML configuration as a string
+    
+    Returns validation results with detailed error messages.
+    """
+    import yaml as pyyaml
+    import json
+    
+    try:
+        data = request.get_json()
+        yaml_content = data.get('yaml_content')
+        
+        if not yaml_content:
+            return jsonify({'error': 'yaml_content is required'}), 400
+        
+        # Parse YAML first
+        try:
+            # Remove comment lines before parsing
+            clean_yaml = '\n'.join(
+                line for line in yaml_content.split('\n') 
+                if not line.strip().startswith('#')
+            )
+            config_dict = pyyaml.safe_load(clean_yaml)
+        except pyyaml.YAMLError as yaml_err:
+            log('warning', f"YAML parse error: {yaml_err}")
+            return jsonify({
+                'valid': False,
+                'errors': [{
+                    'path': '/',
+                    'message': f'YAML parse error: {str(yaml_err)}',
+                    'type': 'yaml_parse'
+                }]
+            })
+        
+        if not config_dict:
+            # Empty configuration is valid - user hasn't added anything yet
+            return jsonify({
+                'valid': True,
+                'errors': []
+            })
+        
+        # Check if this is an essentially empty/minimal config (work in progress)
+        # Don't show errors for configs that are just starting to be built
+        is_minimal = (
+            not config_dict.get('agents') and 
+            not config_dict.get('app') and 
+            not config_dict.get('tools')
+        )
+        
+        if is_minimal:
+            # Config is still being built - don't show validation errors
+            return jsonify({
+                'valid': True,
+                'errors': [],
+                'status': 'incomplete'
+            })
+        
+        # Try to import AppConfig and jsonschema
+        try:
+            from dao_ai.config import AppConfig
+            import jsonschema
+            from jsonschema import Draft7Validator, ValidationError as JsonSchemaValidationError
+        except ImportError as ie:
+            log('error', f"Failed to import validation libraries: {ie}")
+            # If we can't import the validation library, just return valid
+            # The actual deployment will catch any real errors
+            return jsonify({
+                'valid': True,
+                'errors': [],
+                'status': 'skipped',
+                'message': 'Schema validation skipped - validator not available'
+            })
+        
+        # Generate JSON schema from Pydantic model
+        # This gives us the schema without triggering any model validators
+        try:
+            json_schema = AppConfig.model_json_schema()
+            log('debug', f"Generated JSON schema with {len(json_schema.get('$defs', {}))} definitions")
+        except Exception as schema_err:
+            log('error', f"Failed to generate JSON schema: {schema_err}")
+            return jsonify({
+                'valid': True,
+                'errors': [],
+                'status': 'skipped',
+                'message': f'Schema generation failed: {str(schema_err)}'
+            })
+        
+        # Validate config against JSON schema
+        try:
+            # Create validator with format checking
+            validator = Draft7Validator(json_schema)
+            
+            # Collect all validation errors
+            errors = []
+            for error in validator.iter_errors(config_dict):
+                # Build path from error path
+                path_parts = list(error.absolute_path)
+                path = '/' + '/'.join(str(p) for p in path_parts) if path_parts else '/'
+                
+                errors.append({
+                    'path': path,
+                    'message': error.message,
+                    'type': error.validator,
+                    'schema_path': '/'.join(str(p) for p in error.schema_path)
+                })
+            
+            if errors:
+                log('info', f"JSON schema validation found {len(errors)} errors")
+                return jsonify({
+                    'valid': False,
+                    'errors': errors
+                })
+            
+            return jsonify({
+                'valid': True,
+                'errors': []
+            })
+            
+        except Exception as validation_err:
+            import traceback
+            log('error', f"JSON schema validation error: {validation_err}")
+            log('error', f"Traceback: {traceback.format_exc()}")
+            return jsonify({
+                'valid': False,
+                'errors': [{
+                    'path': '/',
+                    'message': f'Validation error: {str(validation_err)}',
+                    'type': 'validation_error'
+                }]
+            })
+        
+    except Exception as e:
+        import traceback
+        log('error', f"Error validating schema: {e}")
+        log('error', f"Traceback: {traceback.format_exc()}")
+        # Return 200 with error details so frontend can display them
+        # instead of a 500 which looks like a server crash
+        return jsonify({
+            'valid': False,
+            'errors': [{
+                'path': '/',
+                'message': f'Validation error: {str(e)}',
+                'type': 'internal_error'
+            }]
+        })
+
+
+@app.route('/api/deploy/quick', methods=['POST'])
+def deploy_quick():
+    """Deploy model and endpoint only (quick deployment).
+    
+    This uses dao_ai's create_agent() and deploy_agent() methods.
+    
+    Request body:
+    - config: The YAML configuration as a dictionary
+    - credentials: Optional credential configuration
+        - type: 'app' | 'obo' | 'manual_sp' | 'manual_pat'
+        - client_id: Required for manual_sp
+        - client_secret: Required for manual_sp
+        - pat: Required for manual_pat
+    
+    Returns deployment job ID and status.
+    """
+    try:
+        import yaml
+        import tempfile
+        import os as os_module
+        import threading
+        import uuid
+        from datetime import datetime
+        
+        data = request.get_json()
+        config = data.get('config')
+        credentials = data.get('credentials', {})
+        
+        if not config:
+            return jsonify({'error': 'config is required'}), 400
+        
+        # Generate a unique deployment ID
+        deployment_id = str(uuid.uuid4())[:8]
+        
+        # Get host
+        host, host_source = get_databricks_host_with_source()
+        
+        # Determine credentials based on credential type
+        cred_type = credentials.get('type', 'obo')  # Default to OBO
+        token = None
+        client_id = None
+        client_secret = None
+        
+        log('info', f"Deployment credential type: {cred_type}")
+        
+        if cred_type == 'manual_pat':
+            # Use manually provided PAT
+            token = credentials.get('pat')
+            if not token:
+                return jsonify({'error': 'PAT is required for manual_pat credential type'}), 400
+            log('info', "Using manually provided PAT for deployment")
+            
+        elif cred_type == 'manual_sp':
+            # Use manually provided service principal
+            client_id = credentials.get('client_id')
+            client_secret = credentials.get('client_secret')
+            if not client_id or not client_secret:
+                return jsonify({'error': 'client_id and client_secret are required for manual_sp credential type'}), 400
+            log('info', "Using manually provided service principal for deployment")
+            
+        elif cred_type == 'app':
+            # Use application service principal from environment
+            client_id = os.environ.get('DATABRICKS_CLIENT_ID')
+            client_secret = os.environ.get('DATABRICKS_CLIENT_SECRET')
+            if not client_id or not client_secret:
+                return jsonify({'error': 'Application service principal not configured'}), 400
+            log('info', "Using application service principal for deployment")
+            
+        else:  # 'obo' or default
+            # Use OBO token or fall back to available token
+            token, token_source = get_databricks_token_with_source()
+            if not token:
+                # Fall back to service principal if no token available
+                client_id = os.environ.get('DATABRICKS_CLIENT_ID')
+                client_secret = os.environ.get('DATABRICKS_CLIENT_SECRET')
+                if not client_id or not client_secret:
+                    return jsonify({
+                        'error': 'No credentials available',
+                        'message': 'No OBO token available and no service principal configured'
+                    }), 400
+                log('info', "No OBO token available, falling back to service principal")
+            else:
+                log('info', f"Using OBO/user token (source: {token_source}) for deployment")
+        
+        # Validate we have some form of authentication
+        if not token and not use_service_principal:
+            return jsonify({
+                'error': 'No authentication available',
+                'message': 'Please configure DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET environment variables for deployment. OAuth tokens have limited scopes and cannot deploy models.'
+            }), 401
+        
+        if not host:
+            return jsonify({
+                'error': 'No Databricks host configured',
+                'message': 'Please configure DATABRICKS_HOST environment variable'
+            }), 400
+        
+        # Initialize status
+        _deployment_status[deployment_id] = {
+            'id': deployment_id,
+            'status': 'starting',
+            'type': 'quick',
+            'started_at': datetime.now().isoformat(),
+            'steps': [
+                {'name': 'validate', 'status': 'pending'},
+                {'name': 'create_agent', 'status': 'pending'},
+                {'name': 'deploy_agent', 'status': 'pending'},
+            ],
+            'current_step': 0,
+            'error': None,
+            'result': None
+        }
+        
+        def run_deployment(deployment_id: str, config: dict, auth_token: str | None, 
+                          auth_host: str, sp_client_id: str | None, sp_client_secret: str | None):
+            """Run deployment in background thread."""
+            try:
+                status = _deployment_status[deployment_id]
+                
+                # Step 1: Validate and load config
+                status['steps'][0]['status'] = 'running'
+                status['current_step'] = 0
+                
+                # Write config to temp file
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+                    yaml.dump(config, f)
+                    config_path = f.name
+                
+                # Save original env vars to restore later
+                orig_env = {
+                    'DATABRICKS_HOST': os_module.environ.get('DATABRICKS_HOST'),
+                    'DATABRICKS_TOKEN': os_module.environ.get('DATABRICKS_TOKEN'),
+                    'DATABRICKS_CLIENT_ID': os_module.environ.get('DATABRICKS_CLIENT_ID'),
+                    'DATABRICKS_CLIENT_SECRET': os_module.environ.get('DATABRICKS_CLIENT_SECRET'),
+                    'MLFLOW_TRACKING_TOKEN': os_module.environ.get('MLFLOW_TRACKING_TOKEN'),
+                }
+                
+                try:
+                    # Import dao_ai, databricks SDK, and mlflow
+                    from dao_ai.config import AppConfig
+                    import mlflow
+                    
+                    # Load config first to access environment_vars
+                    app_config = AppConfig.from_file(config_path)
+                    
+                    # Set environment variables for VectorSearchClient and other SDK clients
+                    # These are needed because when MLflow validates the model by loading agent_as_code.py,
+                    # it creates VectorSearchClient which reads from environment variables
+                    log('info', f"Setting up environment for {'PAT token' if auth_token else 'service principal'} auth")
+                    
+                    # Clear any conflicting auth methods first
+                    for var in ['DATABRICKS_TOKEN', 'DATABRICKS_CLIENT_ID', 'DATABRICKS_CLIENT_SECRET', 'MLFLOW_TRACKING_TOKEN']:
+                        if var in os_module.environ:
+                            del os_module.environ[var]
+                    
+                    # Set the host
+                    os_module.environ['DATABRICKS_HOST'] = auth_host
+                    
+                    # Set the authentication method
+                    if auth_token:
+                        os_module.environ['DATABRICKS_TOKEN'] = auth_token
+                        # Also set MLFLOW_TRACKING_TOKEN for MLflow to use
+                        os_module.environ['MLFLOW_TRACKING_TOKEN'] = auth_token
+                        log('info', "Using PAT token authentication")
+                    elif sp_client_id and sp_client_secret:
+                        os_module.environ['DATABRICKS_CLIENT_ID'] = sp_client_id
+                        os_module.environ['DATABRICKS_CLIENT_SECRET'] = sp_client_secret
+                        log('info', "Using service principal authentication")
+                    
+                    # Set MLflow tracking URI to Databricks
+                    # MLflow will use DATABRICKS_HOST and DATABRICKS_TOKEN env vars for authentication
+                    mlflow.set_tracking_uri("databricks")
+                    mlflow.set_registry_uri("databricks-uc")
+                    log('info', f"Set MLflow tracking URI to 'databricks' with host: {auth_host}")
+                    
+                    # Set any environment_vars from the config
+                    # These are resolved by the config's update_environment_vars validator
+                    if app_config.app and app_config.app.environment_vars:
+                        log('info', f"Setting {len(app_config.app.environment_vars)} environment variables from config")
+                        for key, value in app_config.app.environment_vars.items():
+                            if value is not None:
+                                # Save original value for restoration
+                                if key not in orig_env:
+                                    orig_env[key] = os_module.environ.get(key)
+                                os_module.environ[key] = str(value)
+                                log('info', f"Set environment variable: {key}")
+                    
+                    status['steps'][0]['status'] = 'completed'
+                    
+                    # Step 2: Create agent
+                    # Pass credentials directly to create_agent - the updated dao_ai library
+                    # now supports passing pat/client_id/client_secret/workspace_host directly
+                    status['steps'][1]['status'] = 'running'
+                    status['current_step'] = 1
+                    status['status'] = 'creating_agent'
+                    
+                    # Monkey-patch DatabricksFunctionClient to skip Spark session initialization
+                    # This is needed because the function client tries to create a Spark session
+                    # via Databricks Connect, which requires OAuth scopes that deployment tokens
+                    # typically don't have (Invalid scope error)
+                    original_set_spark = None
+                    try:
+                        from unitycatalog.ai.core.databricks import DatabricksFunctionClient
+                        original_set_spark = DatabricksFunctionClient.set_spark_session
+                        def skip_spark_session(self):
+                            log('info', "Skipping Spark session initialization for deployment")
+                            self.spark = None
+                        DatabricksFunctionClient.set_spark_session = skip_spark_session
+                        log('info', "Patched DatabricksFunctionClient to skip Spark session")
+                    except ImportError:
+                        log('warning', "Could not patch DatabricksFunctionClient - unitycatalog not found")
+                    
+                    log('info', f"Creating agent with {'PAT token' if auth_token else 'service principal'} auth for host: {auth_host}")
+                    try:
+                        app_config.create_agent(
+                            pat=auth_token,
+                            client_id=sp_client_id,
+                            client_secret=sp_client_secret,
+                            workspace_host=auth_host,
+                        )
+                    finally:
+                        # Restore original method
+                        if original_set_spark:
+                            DatabricksFunctionClient.set_spark_session = original_set_spark
+                            log('info', "Restored DatabricksFunctionClient.set_spark_session")
+                    status['steps'][1]['status'] = 'completed'
+                    
+                    # Step 3: Deploy agent
+                    status['steps'][2]['status'] = 'running'
+                    status['current_step'] = 2
+                    status['status'] = 'deploying'
+                    
+                    log('info', f"Deploying agent with {'PAT token' if auth_token else 'service principal'} auth for host: {auth_host}")
+                    app_config.deploy_agent(
+                        pat=auth_token,
+                        client_id=sp_client_id,
+                        client_secret=sp_client_secret,
+                        workspace_host=auth_host,
+                    )
+                    status['steps'][2]['status'] = 'completed'
+                    
+                    # Success
+                    status['status'] = 'completed'
+                    status['completed_at'] = datetime.now().isoformat()
+                    status['result'] = {
+                        'endpoint_name': app_config.app.endpoint_name,
+                        'model_name': app_config.app.registered_model.full_name,
+                        'message': 'Deployment completed successfully'
+                    }
+                    
+                finally:
+                    # Restore original env vars
+                    for var, value in orig_env.items():
+                        if value is not None:
+                            os_module.environ[var] = value
+                        elif var in os_module.environ:
+                            del os_module.environ[var]
+                    
+                    # Cleanup temp file
+                    os_module.unlink(config_path)
+                    
+            except Exception as e:
+                import traceback
+                error_msg = str(e)
+                error_trace = traceback.format_exc()
+                log('error', f"Deployment {deployment_id} failed: {error_msg}")
+                log('error', f"Traceback: {error_trace}")
+                
+                status = _deployment_status.get(deployment_id, {})
+                status['status'] = 'failed'
+                status['error'] = error_msg
+                status['error_trace'] = error_trace
+                status['completed_at'] = datetime.now().isoformat()
+                
+                # Mark current step as failed
+                if 'steps' in status and 'current_step' in status:
+                    current = status['current_step']
+                    if current < len(status['steps']):
+                        status['steps'][current]['status'] = 'failed'
+                        status['steps'][current]['error'] = error_msg
+        
+        # Start deployment in background with auth credentials
+        thread = threading.Thread(
+            target=run_deployment, 
+            args=(deployment_id, config, token, host, client_id, client_secret)
+        )
+        thread.daemon = True
+        thread.start()
+        
+        return jsonify({
+            'deployment_id': deployment_id,
+            'status': 'started',
+            'message': 'Quick deployment started. Use /api/deploy/status/{id} to check progress.',
+            'status_url': f'/api/deploy/status/{deployment_id}'
+        })
+        
+    except Exception as e:
+        import traceback
+        log('error', f"Error starting deployment: {e}")
+        log('error', f"Traceback: {traceback.format_exc()}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/deploy/status/<deployment_id>')
+def get_deployment_status(deployment_id: str):
+    """Get deployment status.
+    
+    Returns the current status of a deployment job.
+    """
+    status = _deployment_status.get(deployment_id)
+    
+    if not status:
+        return jsonify({'error': 'Deployment not found'}), 404
+    
+    return jsonify(status)
+
+
+@app.route('/api/deploy/list')
+def list_deployments():
+    """List all deployment jobs.
+    
+    Returns a list of all deployment jobs with their status.
+    """
+    # Return deployments sorted by start time (newest first)
+    deployments = list(_deployment_status.values())
+    deployments.sort(key=lambda x: x.get('started_at', ''), reverse=True)
+    
+    return jsonify({
+        'deployments': deployments,
+        'count': len(deployments)
+    })
+
+
+# =============================================================================
+# Local Chat with Agent
+# =============================================================================
+
+@app.route('/api/chat', methods=['POST'])
+def chat_with_agent():
+    """Chat locally with the configured agent using streaming.
+    
+    This endpoint creates a ResponsesAgent from the current configuration
+    and streams chat responses using Server-Sent Events (SSE).
+    
+    Request body:
+    - config: The full AppConfig configuration
+    - messages: List of chat messages [{"role": "user/assistant", "content": "..."}]
+    - context: Optional context variables (thread_id, user_id, etc.)
+    
+    Returns:
+    - SSE stream with events: log, delta, done, error
+    """
+    import json as json_module
+    
+    data = request.get_json()
+    config_dict = data.get('config')
+    messages = data.get('messages', [])
+    context = data.get('context', {})
+    
+    def generate():
+        """Generator for SSE stream"""
+        
+        def send_log(level: str, message: str):
+            """Send a log event"""
+            log(level, message)  # Also log to server
+            yield f"data: {json_module.dumps({'type': 'log', 'level': level, 'message': message})}\n\n"
+        
+        def send_delta(content: str):
+            """Send a text delta event"""
+            yield f"data: {json_module.dumps({'type': 'delta', 'content': content})}\n\n"
+        
+        def send_done(full_response: str):
+            """Send completion event"""
+            yield f"data: {json_module.dumps({'type': 'done', 'response': full_response})}\n\n"
+        
+        def send_error(error: str, trace: str = None):
+            """Send error event"""
+            data = {'type': 'error', 'error': error}
+            if trace:
+                data['trace'] = trace
+            yield f"data: {json_module.dumps(data)}\n\n"
+        
+        try:
+            if not config_dict:
+                yield from send_error('Configuration is required')
+                return
+            
+            if not messages:
+                yield from send_error('Messages are required')
+                return
+            
+            yield from send_log('info', f"Chat request received with {len(messages)} messages")
+            
+            # Import dao-ai components
+            try:
+                from dao_ai.config import AppConfig
+                from mlflow.pyfunc import ResponsesAgent
+                yield from send_log('debug', 'Imported dao-ai and mlflow components')
+            except ImportError as e:
+                yield from send_error(f'dao-ai library not available: {e}')
+                return
+            
+            # Create AppConfig from the configuration
+            try:
+                app_config = AppConfig(**config_dict)
+                yield from send_log('info', f"Created AppConfig for app: {app_config.app.name}")
+                
+                # Log agent details
+                agent_names = list(config_dict.get('agents', {}).keys())
+                yield from send_log('debug', f"Agents: {', '.join(agent_names)}")
+                
+                # Log orchestration type
+                orch = config_dict.get('app', {}).get('orchestration', {})
+                if orch.get('supervisor'):
+                    yield from send_log('debug', f"Orchestration: Supervisor ({orch['supervisor'].get('name', 'unnamed')})")
+                elif orch.get('swarm'):
+                    yield from send_log('debug', f"Orchestration: Swarm ({orch['swarm'].get('name', 'unnamed')})")
+            except Exception as e:
+                import traceback
+                yield from send_error(f'Invalid configuration: {str(e)}', traceback.format_exc())
+                return
+            
+            # Create the ResponsesAgent
+            try:
+                yield from send_log('info', 'Creating LangGraph from configuration...')
+                agent: ResponsesAgent = app_config.as_responses_agent()
+                yield from send_log('info', "Created ResponsesAgent successfully")
+            except Exception as e:
+                import traceback
+                yield from send_error(f'Failed to create agent: {str(e)}', traceback.format_exc())
+                return
+            
+            # Build the request for the ResponsesAgent
+            from mlflow.types.responses import ResponsesAgentRequest
+            
+            yield from send_log('debug', 'Building ResponsesAgentRequest...')
+            
+            # Build input items from messages
+            input_items = []
+            for msg in messages:
+                role = msg.get('role', 'user')
+                content = msg.get('content', '')
+                
+                if role == 'user':
+                    input_items.append({
+                        'type': 'message',
+                        'role': 'user',
+                        'content': [{'type': 'input_text', 'text': content}]
+                    })
+                elif role == 'assistant':
+                    input_items.append({
+                        'type': 'message',
+                        'role': 'assistant',
+                        'content': [{'type': 'output_text', 'text': content}]
+                    })
+            
+            # Build context/custom data
+            custom_data = {}
+            if context:
+                custom_data['configurable'] = context
+                yield from send_log('debug', f"Context: thread_id={context.get('thread_id', 'none')}, user_id={context.get('user_id', 'none')}")
+            
+            # Create the request
+            agent_request = ResponsesAgentRequest(
+                input=input_items,
+                custom_inputs=custom_data if custom_data else None
+            )
+            
+            # Stream the response
+            try:
+                yield from send_log('info', "Starting streaming response...")
+                
+                full_response = ""
+                
+                # Check if agent has predict_stream method
+                if hasattr(agent, 'predict_stream'):
+                    yield from send_log('debug', "Using streaming mode")
+                    
+                    for event in agent.predict_stream(agent_request):
+                        # Extract delta content from the event
+                        if hasattr(event, 'type'):
+                            if event.type == 'response.output_text.delta':
+                                # Text delta event
+                                delta = getattr(event, 'delta', '')
+                                if delta:
+                                    full_response += delta
+                                    yield from send_delta(delta)
+                            elif event.type == 'response.output_item.done':
+                                # Item complete - extract full text if available
+                                if hasattr(event, 'item') and hasattr(event.item, 'content'):
+                                    for content_item in event.item.content:
+                                        if hasattr(content_item, 'text'):
+                                            # Use full text if we didn't get deltas
+                                            if not full_response:
+                                                full_response = content_item.text
+                else:
+                    # Fallback to non-streaming mode
+                    yield from send_log('warning', "Streaming not available, using standard mode")
+                    
+                    response = agent.predict(agent_request)
+                    
+                    if response and response.output:
+                        for item in response.output:
+                            if hasattr(item, 'content'):
+                                for content_item in item.content:
+                                    if hasattr(content_item, 'text'):
+                                        full_response += content_item.text
+                                        yield from send_delta(content_item.text)
+                                    elif isinstance(content_item, dict) and 'text' in content_item:
+                                        full_response += content_item['text']
+                                        yield from send_delta(content_item['text'])
+                            elif hasattr(item, 'text'):
+                                full_response += item.text
+                                yield from send_delta(item.text)
+                
+                if not full_response:
+                    yield from send_log('warning', "No response text extracted")
+                    full_response = "No response generated"
+                else:
+                    yield from send_log('info', f"Completed: {len(full_response)} characters")
+                
+                yield from send_done(full_response)
+                
+            except Exception as e:
+                import traceback
+                yield from send_error(f'Agent invocation failed: {str(e)}', traceback.format_exc())
+                return
+                
+        except Exception as e:
+            import traceback
+            yield from send_error(str(e), traceback.format_exc())
+    
+    return Response(generate(), mimetype='text/event-stream', headers={
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no'
     })
 
 
@@ -2407,6 +3906,118 @@ Output ONLY the handoff prompt text, without any additional explanation or forma
     except Exception as e:
         import traceback
         log('error', f"Error generating handoff prompt: {e}")
+        log('error', f"Traceback: {traceback.format_exc()}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ai/generate-supervisor-prompt', methods=['POST'])
+def generate_supervisor_prompt():
+    """Generate an optimized supervisor prompt using Claude.
+    
+    A supervisor prompt guides the orchestrator agent in routing requests
+    to the appropriate specialized agents.
+    
+    Request body:
+    - context: Additional context or requirements for the supervisor (optional)
+    - agents: List of agents with their names, descriptions, and handoff prompts (optional)
+    - existing_prompt: Existing prompt to improve (optional)
+    
+    Returns:
+    - prompt: Generated optimized supervisor prompt
+    """
+    try:
+        data = request.get_json() or {}
+        context = data.get('context', '')
+        agents_data = data.get('agents', [])
+        existing_prompt = data.get('existing_prompt', '')
+        
+        if not agents_data and not existing_prompt and not context:
+            return jsonify({'error': 'At least one of agents, context, or existing_prompt is required'}), 400
+        
+        log('info', "Generating supervisor prompt using Claude with app service principal")
+        
+        # Build the system message for supervisor prompt generation
+        system_message = """You are an expert at designing multi-agent AI orchestration systems. Your task is to generate an effective supervisor prompt that guides an orchestrator agent in routing user requests to specialized agents.
+
+A supervisor prompt should:
+
+1. Clearly define the supervisor's role as a router/orchestrator
+2. List each available agent with a clear description of when to route to them
+3. Include decision-making criteria for ambiguous requests
+4. Define a default agent or fallback behavior
+5. Include instructions for handling multi-step requests that may need multiple agents
+6. Be clear about maintaining conversation context across agent handoffs
+7. Include safety guidelines (don't make up information, admit when unsure)
+
+The prompt should be structured with clear sections:
+- Role Definition
+- Available Agents (with routing criteria for each)
+- Decision Guidelines
+- Response Format Guidelines
+- Safety Guidelines
+
+Output ONLY the prompt text, without any additional explanation or markdown code fences."""
+
+        # Build the user message with agent information
+        user_parts = []
+        
+        if existing_prompt:
+            user_parts.append(f"Please improve and optimize this existing supervisor prompt:\n\n{existing_prompt}")
+        else:
+            user_parts.append("Please create an optimized supervisor prompt for orchestrating the following agents:")
+        
+        if agents_data:
+            user_parts.append("\n\n## Agents to Orchestrate:")
+            for agent in agents_data:
+                agent_name = agent.get('name', 'Unknown')
+                agent_desc = agent.get('description', '')
+                handoff_prompt = agent.get('handoff_prompt', '')
+                
+                user_parts.append(f"\n### {agent_name}")
+                if agent_desc:
+                    user_parts.append(f"Description: {agent_desc}")
+                if handoff_prompt:
+                    user_parts.append(f"When to route here: {handoff_prompt}")
+        
+        if context:
+            user_parts.append(f"\n\n## Additional Requirements:\n{context}")
+        
+        user_message = "\n".join(user_parts)
+        
+        # Call the Databricks serving endpoint using the SDK
+        from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
+        
+        w = get_workspace_client()
+        
+        messages = [
+            ChatMessage(role=ChatMessageRole.SYSTEM, content=system_message),
+            ChatMessage(role=ChatMessageRole.USER, content=user_message)
+        ]
+        
+        log('info', "Calling Claude endpoint for supervisor prompt via SDK serving_endpoints.query()")
+        
+        response = w.serving_endpoints.query(
+            name="databricks-claude-sonnet-4",
+            messages=messages,
+            max_tokens=3000,  # Supervisor prompts can be longer
+            temperature=0.7
+        )
+        
+        # Extract the generated prompt from the response
+        generated_prompt = ''
+        if response.choices and len(response.choices) > 0:
+            generated_prompt = response.choices[0].message.content
+        
+        if not generated_prompt:
+            log('error', f"No content in response: {response}")
+            return jsonify({'error': 'No response generated'}), 500
+        
+        log('info', f"Successfully generated supervisor prompt ({len(generated_prompt)} chars)")
+        return jsonify({'prompt': generated_prompt.strip()})
+            
+    except Exception as e:
+        import traceback
+        log('error', f"Error generating supervisor prompt: {e}")
         log('error', f"Traceback: {traceback.format_exc()}")
         return jsonify({'error': str(e)}), 500
 

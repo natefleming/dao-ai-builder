@@ -8,7 +8,7 @@ interface ModalProps {
   title: string;
   description?: string;
   children: ReactNode;
-  size?: 'sm' | 'md' | 'lg' | 'xl';
+  size?: 'sm' | 'md' | 'lg' | 'xl' | 'full';
 }
 
 export default function Modal({ isOpen, onClose, title, description, children, size = 'md' }: ModalProps) {
@@ -35,6 +35,7 @@ export default function Modal({ isOpen, onClose, title, description, children, s
     md: 'max-w-lg',
     lg: 'max-w-2xl',
     xl: 'max-w-4xl',
+    full: 'max-w-[90vw]',
   };
 
   return (
@@ -69,7 +70,10 @@ export default function Modal({ isOpen, onClose, title, description, children, s
         </div>
         
         {/* Content */}
-        <div className="p-6 max-h-[70vh] overflow-y-auto">
+        <div className={clsx(
+          "p-6 overflow-y-auto",
+          size === 'full' ? 'max-h-[80vh]' : 'max-h-[70vh]'
+        )}>
           {children}
         </div>
       </div>

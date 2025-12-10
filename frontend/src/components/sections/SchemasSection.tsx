@@ -207,29 +207,29 @@ export default function SchemasSection() {
           {/* Mode Toggle */}
           <div className="space-y-2">
             <label className="block text-sm font-medium text-slate-300">Schema Source</label>
-            <div className="flex space-x-2">
+            <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5 w-full">
               <button
                 type="button"
                 onClick={() => setMode('select')}
-                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                className={`flex-1 px-3 py-1.5 text-xs rounded-md font-medium transition-all duration-150 flex items-center justify-center gap-1.5 ${
                   mode === 'select'
-                    ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                    : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                    : 'bg-slate-800/50 text-slate-400 border border-slate-700/50 hover:text-slate-300 hover:border-slate-600'
                 }`}
               >
-                <Database className="w-4 h-4 inline mr-2" />
-                Select Existing
+                <Database className="w-3.5 h-3.5" />
+                Use Existing
               </button>
               <button
                 type="button"
                 onClick={() => setMode('create')}
-                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                className={`flex-1 px-3 py-1.5 text-xs rounded-md font-medium transition-all duration-150 flex items-center justify-center gap-1.5 ${
                   mode === 'create'
-                    ? 'bg-green-500/20 text-green-400 border border-green-500/30'
-                    : 'bg-slate-800 text-slate-400 border border-slate-700 hover:border-slate-600'
+                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                    : 'bg-slate-800/50 text-slate-400 border border-slate-700/50 hover:text-slate-300 hover:border-slate-600'
                 }`}
               >
-                <Plus className="w-4 h-4 inline mr-2" />
+                <Plus className="w-3.5 h-3.5" />
                 Create New
               </button>
             </div>

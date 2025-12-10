@@ -11,6 +11,7 @@
   "dependencies": {
     "@hookform/resolvers": "^3.3.2",
     "@types/react-syntax-highlighter": "^15.5.11",
+    "@xyflow/react": "^12.10.0",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
     "clsx": "^2.0.0",

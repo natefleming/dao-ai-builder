@@ -27,6 +27,9 @@ export interface YamlReferences {
   anchorPaths: Record<string, string>;
   // Map from path suffix to anchor name (for flexible matching)
   pathSuffixToAnchor: Record<string, string>;
+  // Map from key path to its original anchor name (when key differs from anchor)
+  // e.g., "tools.insert_coffee_order_uc_tool" -> "insert_coffee_order_tool"
+  keyToAnchorName: Record<string, string>;
 }
 
 /**
@@ -39,9 +42,12 @@ export function extractYamlReferences(yamlText: string): YamlReferences {
   const aliasUsage: Record<string, string[]> = {};
   const anchorPaths: Record<string, string> = {};
   const pathSuffixToAnchor: Record<string, string> = {};
+  const keyToAnchorName: Record<string, string> = {};
   
   const lines = yamlText.split('\n');
   const pathStack: { indent: number; key: string }[] = [];
+  // Track array indices at each level
+  const arrayIndices: Map<string, number> = new Map();
   
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -59,15 +65,30 @@ export function extractYamlReferences(yamlText: string): YamlReferences {
       pathStack.pop();
     }
     
+    // Check if this is an array item (starts with -)
+    const isArrayItem = /^\s*-/.test(line);
+    
     // Extract key from the line (handle array items too)
     const keyMatch = line.match(/^\s*-?\s*([^:\s]+)\s*:/);
     if (keyMatch) {
       const key = keyMatch[1];
       pathStack.push({ indent, key });
+      // Reset array index tracking for this path
+      const newPath = pathStack.map(p => p.key).join('.');
+      arrayIndices.delete(newPath);
     }
     
-    // Current path
+    // Current path (without array indices)
     const currentPath = pathStack.map(p => p.key).join('.');
+    
+    // For array items with aliases (like "- *genie_tool"), track the index
+    let aliasPath = currentPath;
+    if (isArrayItem && !keyMatch) {
+      // This is a pure array item (no key:value), track its index
+      const currentIndex = arrayIndices.get(currentPath) || 0;
+      aliasPath = `${currentPath}.${currentIndex}`;
+      arrayIndices.set(currentPath, currentIndex + 1);
+    }
     
     // Find anchor definitions (&name)
     const anchorMatch = line.match(/&(\w+)/);
@@ -79,6 +100,16 @@ export function extractYamlReferences(yamlText: string): YamlReferences {
         lineNumber: lineNum,
       });
       anchorPaths[anchorName] = currentPath;
+      
+      // Check if the key name differs from the anchor name
+      // Pattern: "key_name: &anchor_name" where key_name != anchor_name
+      if (keyMatch) {
+        const keyName = keyMatch[1];
+        if (keyName !== anchorName) {
+          // Store the mapping from path to original anchor name
+          keyToAnchorName[currentPath] = anchorName;
+        }
+      }
     }
     
     // Find alias references (*name) - but not within quotes or preceded by __REF__
@@ -91,34 +122,33 @@ export function extractYamlReferences(yamlText: string): YamlReferences {
       
       aliases.push({
         name: aliasName,
-        path: currentPath,
+        path: aliasPath,
         lineNumber: lineNum,
       });
       
       if (!aliasUsage[aliasName]) {
         aliasUsage[aliasName] = [];
       }
-      aliasUsage[aliasName].push(currentPath);
+      aliasUsage[aliasName].push(aliasPath);
       
-      // Store path suffix for flexible matching
-      // e.g., "resources.tables.product_table.schema" -> last 2 parts "product_table.schema"
-      const pathParts = currentPath.split('.');
+      // Store a mapping from the base path + anchor type to the alias name
+      // This helps with matching "agents.X.tools.N" to the correct tool reference
+      // Use a more specific key format: "parentKey.childKey=aliasName"
+      const pathParts = aliasPath.split('.');
       if (pathParts.length >= 2) {
+        // Store with parent context to avoid collisions
+        // e.g., "agents.genie.tools.0" -> store as "genie.tools.0=genie_tool"
+        const contextKey = pathParts.slice(-3).join('.');
+        pathSuffixToAnchor[`${contextKey}=${aliasName}`] = aliasName;
+        
+        // Also store simpler suffix but include the alias name to avoid collisions
         const suffix = pathParts.slice(-2).join('.');
-        pathSuffixToAnchor[suffix] = aliasName;
-      }
-      // Also store just the last part
-      if (pathParts.length >= 1) {
-        const lastPart = pathParts[pathParts.length - 1];
-        // Only store if it's a meaningful key (not an index)
-        if (lastPart && !/^\d+$/.test(lastPart)) {
-          pathSuffixToAnchor[lastPart] = aliasName;
-        }
+        pathSuffixToAnchor[`${suffix}=${aliasName}`] = aliasName;
       }
     }
   }
   
-  return { anchors, aliases, aliasUsage, anchorPaths, pathSuffixToAnchor };
+  return { anchors, aliases, aliasUsage, anchorPaths, pathSuffixToAnchor, keyToAnchorName };
 }
 
 /**
@@ -218,6 +248,7 @@ export function addReference(anchorName: string, anchorPath: string, aliasPath: 
       aliasUsage: {},
       anchorPaths: {},
       pathSuffixToAnchor: {},
+      keyToAnchorName: {},
     };
   }
   
@@ -243,6 +274,17 @@ export function addReference(anchorName: string, anchorPath: string, aliasPath: 
       lineNumber: 0,
     });
   }
+}
+
+/**
+ * Get the original anchor name for a given path.
+ * When a key like "tools.my_tool" was defined with "&different_anchor",
+ * this returns "different_anchor" instead of "my_tool".
+ * Returns null if no custom anchor name was defined.
+ */
+export function getOriginalAnchorName(path: string): string | null {
+  if (!currentReferences || !currentReferences.keyToAnchorName) return null;
+  return currentReferences.keyToAnchorName[path] || null;
 }
 
 /**

@@ -1,6 +1,7 @@
 import { ActiveSection } from '@/App';
 import OverviewSection from '../sections/OverviewSection';
 import { VariablesSection } from '../sections/VariablesSection';
+import ServicePrincipalsSection from '../sections/ServicePrincipalsSection';
 import SchemasSection from '../sections/SchemasSection';
 import ResourcesSection from '../sections/ResourcesSection';
 import RetrieversSection from '../sections/RetrieversSection';
@@ -23,6 +24,8 @@ export default function ConfigPanel({ activeSection, onNavigate }: ConfigPanelPr
         return <OverviewSection onNavigate={onNavigate} />;
       case 'variables':
         return <VariablesSection />;
+      case 'service_principals':
+        return <ServicePrincipalsSection />;
       case 'schemas':
         return <SchemasSection />;
       case 'resources':

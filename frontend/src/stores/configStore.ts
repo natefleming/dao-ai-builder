@@ -18,6 +18,7 @@ import {
   ConnectionModel,
   VectorStoreModel,
   RetrieverModel,
+  ServicePrincipalModel,
 } from '@/types/dao-ai-types';
 
 interface ConfigState {
@@ -78,6 +79,11 @@ interface ConfigState {
   updateConnection: (name: string, updates: Partial<ConnectionModel>) => void;
   removeConnection: (name: string) => void;
   
+  // Service Principals
+  addServicePrincipal: (name: string, sp: ServicePrincipalModel) => void;
+  updateServicePrincipal: (name: string, updates: Partial<ServicePrincipalModel>) => void;
+  removeServicePrincipal: (name: string) => void;
+  
   // Vector Stores
   addVectorStore: (name: string, vectorStore: VectorStoreModel) => void;
   updateVectorStore: (name: string, updates: Partial<VectorStoreModel>) => void;
@@ -104,9 +110,9 @@ interface ConfigState {
   removePrompt: (refName: string) => void;
   
   // Agents
-  addAgent: (agent: AgentModel) => void;
-  updateAgent: (name: string, updates: Partial<AgentModel>) => void;
-  removeAgent: (name: string) => void;
+  addAgent: (refName: string, agent: AgentModel) => void;
+  updateAgent: (refName: string, updates: Partial<AgentModel>) => void;
+  removeAgent: (refName: string) => void;
   
   // App config
   updateApp: (updates: Partial<AppConfig['app']>) => void;
@@ -600,6 +606,44 @@ export const useConfigStore = create<ConfigState>((set) => ({
       };
     }),
   
+  // Service Principals (top-level, like schemas)
+  addServicePrincipal: (name, sp) =>
+    set((state) => ({
+      config: {
+        ...state.config,
+        service_principals: {
+          ...state.config.service_principals,
+          [name]: sp,
+        },
+      },
+    })),
+  
+  updateServicePrincipal: (name, updates) =>
+    set((state) => {
+      const service_principals = { ...state.config.service_principals };
+      if (service_principals?.[name]) {
+        service_principals[name] = { ...service_principals[name], ...updates };
+      }
+      return {
+        config: {
+          ...state.config,
+          service_principals,
+        },
+      };
+    }),
+  
+  removeServicePrincipal: (name) =>
+    set((state) => {
+      const service_principals = { ...state.config.service_principals };
+      delete service_principals?.[name];
+      return {
+        config: {
+          ...state.config,
+          service_principals,
+        },
+      };
+    }),
+  
   // Vector Stores
   addVectorStore: (name, vectorStore) =>
     set((state) => ({
@@ -796,9 +840,9 @@ export const useConfigStore = create<ConfigState>((set) => ({
       };
     }),
   
-  addAgent: (agent) =>
+  addAgent: (refName, agent) =>
     set((state) => {
-      const agents = { ...state.config.agents, [agent.name]: agent };
+      const agents = { ...state.config.agents, [refName]: agent };
       const appAgents = [...(state.config.app?.agents || []), agent];
       
       return {

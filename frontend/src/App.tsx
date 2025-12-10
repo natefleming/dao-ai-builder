@@ -5,7 +5,7 @@ import ConfigPanel from './components/layout/ConfigPanel';
 import PreviewPanel from './components/layout/PreviewPanel';
 import Header from './components/layout/Header';
 
-export type ActiveSection = 'overview' | 'variables' | 'schemas' | 'resources' | 'retrievers' | 'tools' | 'guardrails' | 'memory' | 'prompts' | 'agents' | 'app';
+export type ActiveSection = 'overview' | 'variables' | 'service_principals' | 'schemas' | 'resources' | 'retrievers' | 'tools' | 'guardrails' | 'memory' | 'prompts' | 'agents' | 'app';
 
 function App() {
   const [activeSection, setActiveSection] = useState<ActiveSection>('overview');

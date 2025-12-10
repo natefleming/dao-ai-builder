@@ -18,7 +18,7 @@ export interface DatabricksConfig {
   host: string;
   token: string;
   isAutoDetected?: boolean;
-  source?: 'oauth' | 'obo' | 'sdk' | 'header' | 'env' | 'manual';
+  source?: 'oauth' | 'obo' | 'sdk' | 'header' | 'forwarded' | 'env' | 'manual';
 }
 
 // Store configuration in memory
@@ -133,7 +133,7 @@ interface AuthContextResponse {
     ip: string | null;
   } | null;
   host: string | null;
-  host_source: 'oauth' | 'header' | 'sdk' | 'env' | null;
+  host_source: 'oauth' | 'header' | 'forwarded' | 'sdk' | 'env' | null;
   auth_method: 'oauth' | 'obo' | 'sdk' | 'env' | 'manual';
   token_source: 'oauth' | 'manual' | 'obo' | 'sdk' | 'env' | null;
   oauth: {
@@ -193,7 +193,7 @@ export async function tryAutoDetectConfig(): Promise<{
   hasToken: boolean;
   inDatabricksApp: boolean;
   user?: { email: string | null; username: string | null } | null;
-  source?: 'oauth' | 'obo' | 'sdk' | 'env' | 'manual' | null;
+  source?: 'oauth' | 'obo' | 'sdk' | 'forwarded' | 'env' | 'manual' | null;
   oauth?: { configured: boolean; authenticated: boolean; scopes: string[] };
   error?: string;
 }> {
@@ -568,7 +568,7 @@ export interface ConnectionStatus {
   host?: string;
   error?: string;
   isAutoDetected?: boolean;
-  source?: 'oauth' | 'obo' | 'sdk' | 'header' | 'env' | 'manual';
+  source?: 'oauth' | 'obo' | 'sdk' | 'header' | 'forwarded' | 'env' | 'manual';
 }
 
 // ============================================================================
@@ -836,15 +836,17 @@ export const databricksNativeApi = {
   },
 
   /**
-   * List all vector search indexes for an endpoint.
+   * List vector search indexes.
+   * If endpointName is provided, returns indexes for that endpoint.
+   * If endpointName is null, returns ALL indexes across all endpoints.
    * Uses WorkspaceClient with default auth (not OBO scopes).
    */
-  async listVectorSearchIndexes(endpointName: string): Promise<VectorSearchIndex[]> {
+  async listVectorSearchIndexes(endpointName: string | null): Promise<VectorSearchIndex[]> {
     try {
-      const response = await fetch(
-        `/api/uc/vector-search-indexes?endpoint=${encodeURIComponent(endpointName)}`,
-        { credentials: 'include' }
-      );
+      const url = endpointName 
+        ? `/api/uc/vector-search-indexes?endpoint=${encodeURIComponent(endpointName)}`
+        : `/api/uc/vector-search-indexes`;
+      const response = await fetch(url, { credentials: 'include' });
       if (!response.ok) {
         return [];
       }
@@ -894,13 +896,39 @@ export const databricksNativeApi = {
   /**
    * List all MLflow prompts in a catalog.schema.
    * Uses MLflow SDK to search for prompts.
+   * 
+   * @param catalogName - The catalog name
+   * @param schemaName - The schema name
+   * @param servicePrincipal - Optional service principal config for authentication
    */
-  async listPrompts(catalogName: string, schemaName: string): Promise<MLflowPrompt[]> {
+  async listPrompts(
+    catalogName: string, 
+    schemaName: string,
+    servicePrincipal?: { client_id: unknown; client_secret: unknown } | null
+  ): Promise<MLflowPrompt[]> {
     try {
-      const response = await fetch(
-        `/api/uc/prompts?catalog=${encodeURIComponent(catalogName)}&schema=${encodeURIComponent(schemaName)}`,
-        { credentials: 'include' }
-      );
+      let response: Response;
+      
+      if (servicePrincipal) {
+        // Use POST to send service principal config
+        response = await fetch('/api/uc/prompts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            catalog: catalogName,
+            schema: schemaName,
+            service_principal: servicePrincipal,
+          }),
+        });
+      } else {
+        // Use GET for simple requests
+        response = await fetch(
+          `/api/uc/prompts?catalog=${encodeURIComponent(catalogName)}&schema=${encodeURIComponent(schemaName)}`,
+          { credentials: 'include' }
+        );
+      }
+      
       if (!response.ok) {
         const error = await response.json().catch(() => ({ error: response.statusText }));
         console.error('[listPrompts] Error:', error);
@@ -916,13 +944,36 @@ export const databricksNativeApi = {
 
   /**
    * Get detailed information about a specific prompt including versions, aliases, and template.
+   * 
+   * @param fullName - The full prompt name (catalog.schema.name)
+   * @param servicePrincipal - Optional service principal config for authentication
    */
-  async getPromptDetails(fullName: string): Promise<PromptDetails | null> {
+  async getPromptDetails(
+    fullName: string,
+    servicePrincipal?: { client_id: unknown; client_secret: unknown } | null
+  ): Promise<PromptDetails | null> {
     try {
-      const response = await fetch(
-        `/api/uc/prompt-details?name=${encodeURIComponent(fullName)}`,
-        { credentials: 'include' }
-      );
+      let response: Response;
+      
+      if (servicePrincipal) {
+        // Use POST to send service principal config
+        response = await fetch('/api/uc/prompt-details', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            name: fullName,
+            service_principal: servicePrincipal,
+          }),
+        });
+      } else {
+        // Use GET for simple requests
+        response = await fetch(
+          `/api/uc/prompt-details?name=${encodeURIComponent(fullName)}`,
+          { credentials: 'include' }
+        );
+      }
+      
       if (!response.ok) {
         const error = await response.json().catch(() => ({ error: response.statusText }));
         console.error('[getPromptDetails] Error:', error);
@@ -937,25 +988,66 @@ export const databricksNativeApi = {
 
   /**
    * Get the template content for a specific prompt version or alias.
+   * @param fullName - Full prompt name (catalog.schema.name)
+   * @param version - Version number (optional)
+   * @param alias - Alias name like 'latest', 'champion', 'default' (optional)
+   * @param servicePrincipal - Optional service principal config for authentication
    */
-  async getPromptTemplate(fullName: string, version?: string, alias?: string): Promise<{ template: string; version: string } | null> {
+  async getPromptTemplate(
+    fullName: string, 
+    version?: string, 
+    alias?: string,
+    servicePrincipal?: { client_id: unknown; client_secret: unknown } | null
+  ): Promise<{ template: string; version: string; error?: string; alias_not_found?: boolean; version_not_found?: boolean } | null> {
     try {
-      let url = `/api/uc/prompt-template?name=${encodeURIComponent(fullName)}`;
-      if (version) {
-        url += `&version=${encodeURIComponent(version)}`;
-      } else if (alias) {
-        url += `&alias=${encodeURIComponent(alias)}`;
+      let response: Response;
+      
+      if (servicePrincipal) {
+        // Use POST to send service principal config
+        response = await fetch('/api/uc/prompt-template', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            name: fullName,
+            version: version || undefined,
+            alias: alias || undefined,
+            service_principal: servicePrincipal,
+          }),
+        });
+      } else {
+        // Use GET for simple requests
+        let url = `/api/uc/prompt-template?name=${encodeURIComponent(fullName)}`;
+        if (version) {
+          url += `&version=${encodeURIComponent(version)}`;
+        } else if (alias) {
+          url += `&alias=${encodeURIComponent(alias)}`;
+        }
+        response = await fetch(url, { credentials: 'include' });
       }
-      const response = await fetch(url, { credentials: 'include' });
+      
+      const data = await response.json().catch(() => ({ error: response.statusText }));
+      
       if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: response.statusText }));
-        console.error('[getPromptTemplate] Error:', error);
-        return null;
+        console.error('[getPromptTemplate] Error:', data);
+        // Return the error data so the caller can handle it
+        return {
+          template: '',
+          version: '',
+          error: data.error || 'Failed to load template',
+          alias_not_found: data.alias_not_found,
+          version_not_found: data.version_not_found,
+        };
       }
-      return await response.json();
+      
+      return data;
     } catch (err) {
       console.error('[getPromptTemplate] Error:', err);
-      return null;
+      return {
+        template: '',
+        version: '',
+        error: err instanceof Error ? err.message : 'Unknown error',
+      };
     }
   },
 };
