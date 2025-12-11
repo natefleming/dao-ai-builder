@@ -2049,6 +2049,178 @@ def get_prompt_template():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/uc/register-prompt', methods=['POST'])
+def register_prompt():
+    """Register a new prompt in the MLflow Prompt Registry.
+    
+    JSON body:
+    - name: The prompt name (will be combined with catalog.schema) (required)
+    - catalog_name: The catalog name (required)
+    - schema_name: The schema name (required)
+    - template: The prompt template content (required)
+    - description: Description/commit message for the prompt (optional)
+    - alias: Alias to set for the new version (optional, e.g., 'champion', 'default')
+    - tags: Optional tags dict (optional)
+    - service_principal: Optional service principal config for authentication
+    
+    Returns the registered prompt info including version number.
+    """
+    data = request.get_json() or {}
+    name = data.get('name')
+    catalog_name = data.get('catalog_name')
+    schema_name = data.get('schema_name')
+    template = data.get('template')
+    description = data.get('description', '')
+    alias = data.get('alias')
+    tags = data.get('tags', {})
+    service_principal = data.get('service_principal')
+    
+    # Validate required fields
+    if not name:
+        return jsonify({'error': 'name parameter required'}), 400
+    if not catalog_name:
+        return jsonify({'error': 'catalog_name parameter required'}), 400
+    if not schema_name:
+        return jsonify({'error': 'schema_name parameter required'}), 400
+    if not template:
+        return jsonify({'error': 'template parameter required'}), 400
+    
+    # Build full prompt name
+    full_name = f"{catalog_name}.{schema_name}.{name}"
+    
+    try:
+        log('info', f"Registering prompt: {full_name}")
+        
+        # Get host
+        host, host_source = get_databricks_host_with_source()
+        
+        if not host:
+            log('warning', f"No Databricks host available.")
+            return jsonify({
+                'error': 'No Databricks host configured',
+            }), 401
+        
+        # Normalize host
+        host = host.rstrip('/')
+        
+        # Determine which credentials to use for SP auth
+        sp_client_id: str | None = None
+        sp_client_secret: str | None = None
+        use_sp_auth: bool = False
+        
+        if service_principal:
+            log('info', f"Using service principal for prompt registration")
+            obo_token, _ = get_databricks_token_with_source()
+            sp_client_id, sp_client_secret = get_service_principal_credentials(
+                service_principal, obo_token
+            )
+            if sp_client_id and sp_client_secret:
+                use_sp_auth = True
+                log('info', f"Resolved service principal credentials: client_id={sp_client_id[:8]}...")
+        
+        # Save original environment variables to restore later
+        orig_env: dict[str, str | None] = {}
+        env_vars_to_manage = ['DATABRICKS_HOST', 'DATABRICKS_TOKEN', 'DATABRICKS_CLIENT_ID', 'DATABRICKS_CLIENT_SECRET']
+        for var in env_vars_to_manage:
+            orig_env[var] = os.environ.get(var)
+        
+        try:
+            # Clear all auth-related env vars first
+            for var in env_vars_to_manage:
+                if var in os.environ:
+                    del os.environ[var]
+            
+            # Set DATABRICKS_HOST
+            os.environ['DATABRICKS_HOST'] = host
+            
+            if use_sp_auth:
+                # Use service principal authentication
+                os.environ['DATABRICKS_CLIENT_ID'] = sp_client_id
+                os.environ['DATABRICKS_CLIENT_SECRET'] = sp_client_secret
+                log('info', f"Set DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET for SP auth")
+            else:
+                # Fall back to user's token
+                token, token_source = get_databricks_token_with_source()
+                if token:
+                    os.environ['DATABRICKS_TOKEN'] = token
+                    log('info', f"Set DATABRICKS_TOKEN from {token_source}")
+                else:
+                    log('warning', "No authentication token available")
+                    return jsonify({'error': 'No authentication token available'}), 401
+            
+            # Use MLflow SDK to register the prompt
+            import mlflow
+            mlflow.set_tracking_uri("databricks")
+            
+            log('info', f"Registering prompt with MLflow SDK: {full_name}")
+            
+            # Prepare tags
+            prompt_tags = dict(tags) if tags else {}
+            prompt_tags['dao_ai_builder'] = 'true'  # Mark as created by the builder
+            
+            # Register the prompt
+            commit_message = description or f"Registered via DAO AI Builder"
+            prompt_version = mlflow.genai.register_prompt(
+                name=full_name,
+                template=template,
+                commit_message=commit_message,
+                tags=prompt_tags,
+            )
+            
+            log('info', f"Successfully registered prompt '{full_name}' version {prompt_version.version}")
+            
+            # Set alias if specified
+            aliases_set: list[str] = []
+            if alias:
+                try:
+                    mlflow.genai.set_prompt_alias(
+                        name=full_name,
+                        alias=alias,
+                        version=prompt_version.version,
+                    )
+                    aliases_set.append(alias)
+                    log('info', f"Set alias '{alias}' for prompt version {prompt_version.version}")
+                except Exception as alias_err:
+                    log('warning', f"Failed to set alias '{alias}': {alias_err}")
+            
+            # Always try to set 'latest' alias as well
+            try:
+                mlflow.genai.set_prompt_alias(
+                    name=full_name,
+                    alias='latest',
+                    version=prompt_version.version,
+                )
+                aliases_set.append('latest')
+                log('info', f"Set 'latest' alias for prompt version {prompt_version.version}")
+            except Exception as latest_err:
+                log('warning', f"Failed to set 'latest' alias: {latest_err}")
+            
+            result = {
+                'success': True,
+                'name': name,
+                'full_name': full_name,
+                'version': prompt_version.version,
+                'aliases': aliases_set,
+                'message': f"Successfully registered prompt '{full_name}' version {prompt_version.version}",
+            }
+            
+            return jsonify(result)
+            
+        finally:
+            # Restore original environment variables
+            for var in env_vars_to_manage:
+                if orig_env[var] is not None:
+                    os.environ[var] = orig_env[var]
+                elif var in os.environ:
+                    del os.environ[var]
+        
+    except Exception as e:
+        import traceback
+        log('error', f"Error registering prompt {full_name}: {e}")
+        log('error', f"Traceback: {traceback.format_exc()}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/uc/genie-spaces')
 def list_genie_spaces():
     """List Genie spaces/rooms using user's token for proper permissions.

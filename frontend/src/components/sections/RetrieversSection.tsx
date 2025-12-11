@@ -37,14 +37,7 @@ function generateFilterId(): string {
   return `filter_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
 }
 
-// Helper function to generate a reference name from a display name
-function generateRefName(name: string): string {
-  return name
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, '_')
-    .replace(/[^a-z0-9_]/g, '');
-}
+import { normalizeRefName, normalizeRefNameWhileTyping } from '@/utils/name-utils';
 
 // Common reranking models available in FlashRank
 const RERANK_MODELS = [
@@ -314,7 +307,7 @@ export default function RetrieversSection() {
       
       // Generate refName if empty
       if (!prev.refName && value) {
-        newData.refName = `${generateRefName(value)}_retriever`;
+        newData.refName = `${normalizeRefName(value)}_retriever`;
       }
       
       return newData;
@@ -543,9 +536,9 @@ export default function RetrieversSection() {
                 label="Reference Name"
                 name="refName"
                 value={formData.refName}
-                onChange={handleChange}
-                placeholder="products_retriever"
-                hint="Unique identifier for this retriever"
+                onChange={(e) => setFormData(prev => ({ ...prev, refName: normalizeRefNameWhileTyping(e.target.value) }))}
+                placeholder="Products Retriever"
+                hint="Type naturally - spaces become underscores"
                 required
               />
               

@@ -11,6 +11,7 @@
  * - Connections (UC connections)
  */
 import { useState, ChangeEvent } from 'react';
+import { normalizeRefNameWhileTyping } from '@/utils/name-utils';
 
 /**
  * Safely check if a value is a string that starts with a prefix.
@@ -711,10 +712,10 @@ function LLMsPanel() {
         <form onSubmit={handleSubmit} className="space-y-4">
           <Input
             label="Reference Name"
-            placeholder="e.g., default_llm"
+            placeholder="e.g., Default LLM"
             value={formData.name}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, name: e.target.value })}
-            hint={editingKey ? "Changing this will update all references in the YAML" : "A unique identifier for this LLM in your config"}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, name: normalizeRefNameWhileTyping(e.target.value) })}
+            hint="Type naturally - spaces become underscores"
             required
           />
 
@@ -1093,9 +1094,9 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
           <Input
             label="Reference Name"
             value={formData.refName}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, refName: e.target.value })}
-            placeholder="retail_genie"
-            hint={editingKey ? "Changing this will update all references in the YAML" : "Unique key to reference this resource"}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, refName: normalizeRefNameWhileTyping(e.target.value) })}
+            placeholder="Retail Genie"
+            hint="Type naturally - spaces become underscores"
             required
           />
           
@@ -1484,9 +1485,9 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
           <Input
             label="Reference Name"
             value={formData.refName}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, refName: e.target.value })}
-            placeholder="main_warehouse"
-            hint={editingKey ? "Changing this will update all references in the YAML" : "Unique key to reference this resource"}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, refName: normalizeRefNameWhileTyping(e.target.value) })}
+            placeholder="Main Warehouse"
+            hint="Type naturally - spaces become underscores"
             required
           />
           
@@ -1876,9 +1877,9 @@ function TablesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose
           <Input
             label="Reference Name"
             value={formData.refName}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, refName: e.target.value })}
-            placeholder="sales_data"
-            hint={editingKey ? "Changing this will update all references in the YAML" : "Unique key to reference this resource"}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, refName: normalizeRefNameWhileTyping(e.target.value) })}
+            placeholder="Sales Data"
+            hint="Type naturally - spaces become underscores"
             required
           />
           
@@ -2227,9 +2228,9 @@ function VolumesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClos
           <Input
             label="Reference Name"
             value={formData.refName}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, refName: e.target.value })}
-            placeholder="data_volume"
-            hint={editingKey ? "Changing this will update all references in the YAML" : "Unique key to reference this resource"}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, refName: normalizeRefNameWhileTyping(e.target.value) })}
+            placeholder="Data Volume"
+            hint="Type naturally - spaces become underscores"
             required
           />
           
@@ -2561,9 +2562,9 @@ function FunctionsPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
           <Input
             label="Reference Name"
             value={formData.refName}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, refName: e.target.value })}
-            placeholder="uc_functions"
-            hint={editingKey ? "Changing this will update all references in the YAML" : "Unique key to reference this resource"}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, refName: normalizeRefNameWhileTyping(e.target.value) })}
+            placeholder="UC Functions"
+            hint="Type naturally - spaces become underscores"
             required
           />
           
@@ -2840,9 +2841,9 @@ function ConnectionsPanel({ showForm, setShowForm, editingKey, setEditingKey, on
           <Input
             label="Reference Name"
             value={formData.refName}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, refName: e.target.value })}
-            placeholder="external_api"
-            hint={editingKey ? "Changing this will update all references in the YAML" : "Unique key to reference this resource"}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, refName: normalizeRefNameWhileTyping(e.target.value) })}
+            placeholder="External API"
+            hint="Type naturally - spaces become underscores"
             required
           />
           
@@ -3273,9 +3274,9 @@ function DatabasesPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
           <Input
             label="Reference Name"
             value={formData.refName}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, refName: e.target.value })}
-            placeholder="retail_database"
-            hint={editingKey ? "Changing this will update all references in the YAML" : "Unique key to reference this resource"}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, refName: normalizeRefNameWhileTyping(e.target.value) })}
+            placeholder="Retail Database"
+            hint="Type naturally - spaces become underscores"
             required
           />
           
@@ -4368,9 +4369,9 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
           <Input
             label="Reference Name"
             value={formData.refName}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, refName: e.target.value })}
-            placeholder="products_vector_store"
-            hint={editingKey ? "Changing this will update all references in the YAML" : "Unique key to reference this resource"}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, refName: normalizeRefNameWhileTyping(e.target.value) })}
+            placeholder="Products Vector Store"
+            hint="Type naturally - spaces become underscores"
             required
           />
           

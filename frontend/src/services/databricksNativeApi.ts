@@ -1051,6 +1051,73 @@ export const databricksNativeApi = {
       };
     }
   },
+
+  /**
+   * Register a new prompt in the MLflow Prompt Registry.
+   * @param name - The prompt name (will be combined with catalog.schema)
+   * @param catalogName - The catalog name
+   * @param schemaName - The schema name
+   * @param template - The prompt template content
+   * @param description - Optional description/commit message
+   * @param alias - Optional alias to set (e.g., 'champion', 'default')
+   * @param tags - Optional tags dict
+   * @param servicePrincipal - Optional service principal for authentication
+   * @returns Registration result with version info
+   */
+  async registerPrompt(
+    name: string,
+    catalogName: string,
+    schemaName: string,
+    template: string,
+    description?: string,
+    alias?: string,
+    tags?: Record<string, string>,
+    servicePrincipal?: { client_id: unknown; client_secret: unknown } | null
+  ): Promise<{
+    success: boolean;
+    name?: string;
+    full_name?: string;
+    version?: number;
+    aliases?: string[];
+    message?: string;
+    error?: string;
+  }> {
+    try {
+      const response = await fetch('/api/uc/register-prompt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          name,
+          catalog_name: catalogName,
+          schema_name: schemaName,
+          template,
+          description: description || undefined,
+          alias: alias || undefined,
+          tags: tags || undefined,
+          service_principal: servicePrincipal || undefined,
+        }),
+      });
+
+      const data = await response.json().catch(() => ({ error: response.statusText }));
+
+      if (!response.ok) {
+        console.error('[registerPrompt] Error:', data);
+        return {
+          success: false,
+          error: data.error || 'Failed to register prompt',
+        };
+      }
+
+      return data;
+    } catch (err) {
+      console.error('[registerPrompt] Error:', err);
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : 'Unknown error',
+      };
+    }
+  },
 };
 
 export default databricksNativeApi;

@@ -2,6 +2,7 @@ import { useState, ChangeEvent } from 'react';
 import { Key, Plus, Edit2, Trash2 } from 'lucide-react';
 import { useConfigStore } from '@/stores/configStore';
 import { ServicePrincipalModel, AppConfig } from '@/types/dao-ai-types';
+import { normalizeRefNameWhileTyping } from '@/utils/name-utils';
 import Card from '../ui/Card';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
@@ -234,9 +235,9 @@ export default function ServicePrincipalsSection() {
             <Input
               label="Reference Name"
               value={formData.refName}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, refName: e.target.value })}
-              placeholder="my_service_principal"
-              hint={editingKey ? "Changing this will update all references in the YAML" : "Unique key to reference this service principal (e.g., *my_service_principal)"}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, refName: normalizeRefNameWhileTyping(e.target.value) })}
+              placeholder="My Service Principal"
+              hint="Type naturally - spaces become underscores"
               required
             />
             

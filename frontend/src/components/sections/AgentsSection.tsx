@@ -10,6 +10,7 @@ import Modal from '../ui/Modal';
 import Badge from '../ui/Badge';
 import MultiSelect from '../ui/MultiSelect';
 import { AgentModel, AppConfig, PromptModel } from '@/types/dao-ai-types';
+import { normalizeRefNameWhileTyping } from '@/utils/name-utils';
 
 /**
  * Check if a reference name already exists in the config.
@@ -608,10 +609,10 @@ function AgentModal({
         <div className="grid grid-cols-2 gap-4">
           <Input
             label="Reference Name"
-            placeholder="e.g., customer_service_agent"
+            placeholder="e.g., Customer Service Agent"
             value={formData.refName}
-            onChange={(e) => setFormData({ ...formData, refName: e.target.value })}
-            hint={editingKey ? "Changing this will update all references in the YAML" : "Unique key to reference this agent in YAML"}
+            onChange={(e) => setFormData({ ...formData, refName: normalizeRefNameWhileTyping(e.target.value) })}
+            hint="Type naturally - spaces become underscores"
             required
           />
           <Select

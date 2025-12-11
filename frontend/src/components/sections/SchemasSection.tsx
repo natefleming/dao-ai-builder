@@ -10,22 +10,16 @@ import { CatalogSelect, SchemaSelect } from '../ui/DatabricksSelect';
 import { useCatalogs, useSchemas } from '@/hooks/useDatabricks';
 import { isDatabricksConfigured } from '@/services/databricksNativeApi';
 import { SchemaModel } from '@/types/dao-ai-types';
+import { normalizeRefName, normalizeRefNameWhileTyping } from '@/utils/name-utils';
 
 type SchemaMode = 'select' | 'create';
 
 /**
  * Generate a normalized reference name from a schema path.
- * - Converts to lowercase
- * - Replaces consecutive whitespace/special chars with single underscore
- * - Removes leading/trailing underscores
  */
-function generateRefName(catalogName: string, schemaName: string): string {
+function generateRefNameFromSchema(catalogName: string, schemaName: string): string {
   const combined = `${catalogName}_${schemaName}`;
-  return combined
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/_+/g, '_')
-    .replace(/^_|_$/g, '');
+  return normalizeRefName(combined);
 }
 
 export default function SchemasSection() {
@@ -196,10 +190,10 @@ export default function SchemasSection() {
         <form onSubmit={handleSubmit} className="space-y-4">
           <Input
             label="Reference Name"
-            placeholder="e.g., retail_schema"
+            placeholder="e.g., Retail Schema"
             value={formData.name}
-            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-            hint="A unique identifier for this schema in your config"
+            onChange={(e) => setFormData({ ...formData, name: normalizeRefNameWhileTyping(e.target.value) })}
+            hint="Type naturally - spaces become underscores"
             required
             disabled={!!editingKey}
           />
@@ -270,7 +264,7 @@ export default function SchemasSection() {
                 onChange={(value) => setFormData({ 
                   ...formData, 
                   schemaName: value,
-                  name: formData.name || generateRefName(formData.catalogName, value),
+                  name: formData.name || generateRefNameFromSchema(formData.catalogName, value),
                 })}
                 catalog={formData.catalogName || null}
                 hint="Select a schema within the catalog"
@@ -336,7 +330,7 @@ export default function SchemasSection() {
                         setFormData({ 
                           ...formData, 
                           schemaName: newSchemaName,
-                          name: formData.name || generateRefName(formData.catalogName, newSchemaName),
+                          name: formData.name || generateRefNameFromSchema(formData.catalogName, newSchemaName),
                         });
                       }}
                       placeholder="e.g., hardware_store"
@@ -351,7 +345,7 @@ export default function SchemasSection() {
                             setFormData({ 
                               ...formData, 
                               schemaName: e.target.value,
-                              name: formData.name || generateRefName(formData.catalogName, e.target.value),
+                              name: formData.name || generateRefNameFromSchema(formData.catalogName, e.target.value),
                             });
                           }
                         }}

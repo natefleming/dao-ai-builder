@@ -59,25 +59,11 @@ You are a helpful assistant. Your role is to provide accurate and useful informa
 - Always prioritize user safety
 `;
 
-// Helper function to convert a string to snake_case
-function toSnakeCase(str: string): string {
-  return str
-    .trim()
-    // Insert underscore before uppercase letters and convert to lowercase
-    .replace(/([a-z])([A-Z])/g, '$1_$2')
-    .toLowerCase()
-    // Replace spaces, hyphens, and multiple underscores with single underscore
-    .replace(/[\s-]+/g, '_')
-    .replace(/_+/g, '_')
-    // Remove any characters that aren't alphanumeric or underscore
-    .replace(/[^a-z0-9_]/g, '')
-    // Remove leading/trailing underscores
-    .replace(/^_+|_+$/g, '');
-}
+import { normalizeRefName, normalizeRefNameWhileTyping } from '@/utils/name-utils';
 
 // Helper function to generate a reference name from a prompt name
 function generateRefName(name: string): string {
-  return toSnakeCase(name);
+  return normalizeRefName(name);
 }
 
 type SchemaSource = 'reference' | 'direct';
@@ -114,6 +100,11 @@ export default function PromptsSection() {
   const [newTagKey, setNewTagKey] = useState('');
   const [newTagValue, setNewTagValue] = useState('');
   const [loadingTemplate, setLoadingTemplate] = useState(false);
+  
+  // Registration state
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [registrationError, setRegistrationError] = useState<string | null>(null);
+  const [registrationSuccess, setRegistrationSuccess] = useState<string | null>(null);
   
   // AI Assistant state
   const [isGeneratingPrompt, setIsGeneratingPrompt] = useState(false);
@@ -402,6 +393,8 @@ export default function PromptsSection() {
     setNewTagValue('');
     setEditingKey(null);
     setRefNameManuallyEdited(false);
+    setRegistrationError(null);
+    setRegistrationSuccess(null);
   };
 
   // Handle selecting a configured schema (for existing prompts)
@@ -486,29 +479,85 @@ export default function PromptsSection() {
     setIsModalOpen(true);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!formData.refName || !formData.name) return;
 
+    // Finalize the name - clean up any trailing underscores
+    const finalName = normalizeRefName(formData.name);
+    if (!finalName) return;
+
+    // Clear previous messages
+    setRegistrationError(null);
+    setRegistrationSuccess(null);
+
     // Build schema
     let schema: SchemaModel | undefined;
+    let catalogName = '';
+    let schemaName = '';
+    
     if (schemaSource === 'reference' && formData.schemaRef && configuredSchemas[formData.schemaRef]) {
       schema = configuredSchemas[formData.schemaRef];
+      catalogName = schema.catalog_name;
+      schemaName = schema.schema_name;
     } else if (formData.catalog_name && formData.schema_name) {
       schema = {
         catalog_name: formData.catalog_name,
         schema_name: formData.schema_name,
       };
+      catalogName = formData.catalog_name;
+      schemaName = formData.schema_name;
+    }
+
+    // For new prompts with a schema, register in MLflow Prompt Registry first
+    const shouldRegisterInRegistry = promptSource === 'new' && 
+                                      !editingKey && 
+                                      catalogName && 
+                                      schemaName && 
+                                      formData.default_template;
+
+    let registeredVersion: number | undefined;
+
+    if (shouldRegisterInRegistry) {
+      setIsRegistering(true);
+      try {
+        const result = await databricksNativeApi.registerPrompt(
+          finalName,
+          catalogName,
+          schemaName,
+          formData.default_template,
+          formData.description || undefined,
+          formData.alias || undefined,
+          Object.keys(formData.tags).length > 0 ? formData.tags : undefined,
+          servicePrincipalConfig
+        );
+
+        if (!result.success) {
+          setRegistrationError(result.error || 'Failed to register prompt in registry');
+          setIsRegistering(false);
+          return; // Don't proceed if registration failed
+        }
+
+        registeredVersion = result.version;
+        setRegistrationSuccess(result.message || `Registered prompt version ${result.version}`);
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'Unknown error during registration';
+        setRegistrationError(errorMessage);
+        setIsRegistering(false);
+        return; // Don't proceed if registration failed
+      }
+      setIsRegistering(false);
     }
 
     const prompt: PromptModel = {
-      name: formData.name,
+      name: finalName,
       schema,
       description: formData.description || undefined,
       default_template: formData.default_template || undefined,
       alias: formData.alias || undefined,
-      version: formData.version ? parseInt(formData.version) : undefined,
+      // Use the registered version if we just registered, otherwise use form value
+      version: registeredVersion ?? (formData.version ? parseInt(formData.version) : undefined),
       tags: Object.keys(formData.tags).length > 0 ? formData.tags : undefined,
       // Note: service_principal is used for authentication when fetching prompts,
       // but should not be saved as part of the prompt configuration
@@ -1005,36 +1054,44 @@ export default function PromptsSection() {
           {/* Reference Name */}
           <Input
             label="Reference Name"
-            placeholder="e.g., general_prompt"
+            placeholder="e.g., General Prompt"
             value={formData.refName}
             onChange={(e: ChangeEvent<HTMLInputElement>) => {
-              setFormData({ ...formData, refName: e.target.value });
+              setFormData({ ...formData, refName: normalizeRefNameWhileTyping(e.target.value) });
               setRefNameManuallyEdited(true);
             }}
-            hint={editingKey ? "Changing this will update all references in the YAML" : "Unique key to reference this prompt in agents (use &anchor)"}
+            hint="Type naturally - spaces become underscores"
             required
           />
 
           {/* Prompt Name */}
-          <Input
-            label="Prompt Name"
-            placeholder="e.g., general_prompt"
-            value={formData.name}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => {
-              // Normalize to snake_case for MLflow registry compatibility
-              const name = toSnakeCase(e.target.value);
-              // Only auto-generate refName if not manually edited and not editing existing
-              const shouldAutoGenerateRef = !editingKey && !refNameManuallyEdited;
-              setFormData({ 
-                ...formData, 
-                name,
-                refName: shouldAutoGenerateRef ? generateRefName(name) : formData.refName,
-              });
-            }}
-            hint="MLflow prompt name (auto-converted to snake_case)"
-            required
-            disabled={promptSource === 'existing' && !!formData.existingPromptFullName}
-          />
+          <div className="space-y-1.5">
+            <Input
+              label="Prompt Name"
+              placeholder="e.g., My New Prompt"
+              value={formData.name}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                const rawValue = e.target.value;
+                // Normalize while typing - spaces become underscores, keeps case
+                const name = normalizeRefNameWhileTyping(rawValue);
+                // Only auto-generate refName if not manually edited and not editing existing
+                const shouldAutoGenerateRef = !editingKey && !refNameManuallyEdited;
+                setFormData({ 
+                  ...formData, 
+                  name,
+                  refName: shouldAutoGenerateRef ? generateRefName(name) : formData.refName,
+                });
+              }}
+              hint="Type naturally - spaces become underscores"
+              required
+              disabled={promptSource === 'existing' && !!formData.existingPromptFullName}
+            />
+            {formData.name && formData.name.endsWith('_') && (
+              <p className="text-xs text-slate-400">
+                Continue typing to complete the name...
+              </p>
+            )}
+          </div>
 
           {/* Description */}
           <Input
@@ -1381,13 +1438,49 @@ export default function PromptsSection() {
             </div>
           )}
 
+          {/* Registration Status Messages */}
+          {registrationError && (
+            <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
+              <p className="text-sm text-red-400 font-medium">Registration Failed</p>
+              <p className="text-xs text-red-300 mt-1">{registrationError}</p>
+            </div>
+          )}
+          
+          {registrationSuccess && (
+            <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg">
+              <p className="text-sm text-emerald-400">✓ {registrationSuccess}</p>
+            </div>
+          )}
+
+          {/* Registry Info for new prompts with schema */}
+          {promptSource === 'new' && !editingKey && (formData.catalog_name || formData.schemaRef) && formData.name && formData.default_template && (
+            <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+              <p className="text-xs text-blue-300">
+                <span className="font-medium">Registry:</span> This prompt will be registered in MLflow Prompt Registry at{' '}
+                <span className="font-mono text-blue-200">
+                  {formData.schemaRef && configuredSchemas[formData.schemaRef]
+                    ? `${configuredSchemas[formData.schemaRef].catalog_name}.${configuredSchemas[formData.schemaRef].schema_name}.${formData.name}`
+                    : `${formData.catalog_name}.${formData.schema_name}.${formData.name}`
+                  }
+                </span>
+              </p>
+            </div>
+          )}
+
           {/* Form Actions */}
           <div className="flex justify-end space-x-3 pt-4">
-            <Button variant="secondary" type="button" onClick={() => { resetForm(); setIsModalOpen(false); }}>
+            <Button variant="secondary" type="button" onClick={() => { resetForm(); setIsModalOpen(false); }} disabled={isRegistering}>
               Cancel
             </Button>
-            <Button type="submit" disabled={!formData.refName || !formData.name}>
-              {editingKey ? 'Update' : 'Add'} Prompt
+            <Button type="submit" disabled={!formData.refName || !formData.name || isRegistering}>
+              {isRegistering ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+                  Registering...
+                </>
+              ) : (
+                editingKey ? 'Update Prompt' : 'Add Prompt'
+              )}
             </Button>
           </div>
         </form>
