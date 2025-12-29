@@ -7,6 +7,7 @@ import ResourcesSection from '../sections/ResourcesSection';
 import RetrieversSection from '../sections/RetrieversSection';
 import ToolsSection from '../sections/ToolsSection';
 import GuardrailsSection from '../sections/GuardrailsSection';
+import MiddlewareSection from '../sections/MiddlewareSection';
 import MemorySection from '../sections/MemorySection';
 import PromptsSection from '../sections/PromptsSection';
 import AgentsSection from '../sections/AgentsSection';
@@ -36,6 +37,8 @@ export default function ConfigPanel({ activeSection, onNavigate }: ConfigPanelPr
         return <ToolsSection />;
       case 'guardrails':
         return <GuardrailsSection />;
+      case 'middleware':
+        return <MiddlewareSection />;
       case 'memory':
         return <MemorySection />;
       case 'prompts':

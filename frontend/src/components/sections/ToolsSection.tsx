@@ -274,23 +274,17 @@ const defaultMCPFormData: MCPFormData = {
 interface HITLFormData {
   enabled: boolean;
   reviewPrompt: string;
-  allowAccept: boolean;
+  allowApprove: boolean;
   allowEdit: boolean;
-  allowRespond: boolean;
-  allowDecline: boolean;
-  declineMessage: string;
-  customActions: { key: string; value: string }[];
+  allowReject: boolean;
 }
 
 const defaultHITLFormData: HITLFormData = {
   enabled: false,
   reviewPrompt: 'Please review the tool call',
-  allowAccept: true,
+  allowApprove: true,
   allowEdit: true,
-  allowRespond: true,
-  allowDecline: true,
-  declineMessage: 'Tool call declined by user',
-  customActions: [],
+  allowReject: true,
 };
 
 // Helper function to generate a tool name from a function name
@@ -566,25 +560,15 @@ export default function ToolsSection() {
   const buildHITLConfig = (): HumanInTheLoopModel | undefined => {
     if (!hitlForm.enabled) return undefined;
 
-    const config: HumanInTheLoopModel = {
-      review_prompt: hitlForm.reviewPrompt,
-      interrupt_config: {
-        allow_accept: hitlForm.allowAccept,
-        allow_edit: hitlForm.allowEdit,
-        allow_respond: hitlForm.allowRespond,
-        allow_decline: hitlForm.allowDecline,
-      },
-      decline_message: hitlForm.declineMessage,
-    };
+    const allowedDecisions: ("approve" | "edit" | "reject")[] = [];
+    if (hitlForm.allowApprove) allowedDecisions.push("approve");
+    if (hitlForm.allowEdit) allowedDecisions.push("edit");
+    if (hitlForm.allowReject) allowedDecisions.push("reject");
 
-    if (hitlForm.customActions.length > 0) {
-      config.custom_actions = {};
-      hitlForm.customActions.forEach(action => {
-        if (action.key && action.value) {
-          config.custom_actions![action.key] = action.value;
-        }
-      });
-    }
+    const config: HumanInTheLoopModel = {
+      review_prompt: hitlForm.reviewPrompt || undefined,
+      allowed_decisions: allowedDecisions.length > 0 ? allowedDecisions : undefined,
+    };
 
     return config;
   };
@@ -1015,19 +999,14 @@ export default function ToolsSection() {
       // Handle HITL config
       if (func.human_in_the_loop) {
         const hitl = func.human_in_the_loop;
-        const interruptConfig = hitl.interrupt_config as Record<string, boolean> | undefined;
+        const allowedDecisions = hitl.allowed_decisions || ['approve', 'edit', 'reject'];
         setShowHitlConfig(true);
         setHitlForm({
           enabled: true,
           reviewPrompt: hitl.review_prompt || 'Please review the tool call',
-          allowAccept: interruptConfig?.allow_accept ?? true,
-          allowEdit: interruptConfig?.allow_edit ?? true,
-          allowRespond: interruptConfig?.allow_respond ?? true,
-          allowDecline: interruptConfig?.allow_decline ?? true,
-          declineMessage: hitl.decline_message || 'Tool call declined by user',
-          customActions: hitl.custom_actions 
-            ? Object.entries(hitl.custom_actions).map(([key, value]) => ({ key, value }))
-            : [],
+          allowApprove: allowedDecisions.includes('approve'),
+          allowEdit: allowedDecisions.includes('edit'),
+          allowReject: allowedDecisions.includes('reject'),
         });
       }
       
@@ -2475,18 +2454,21 @@ export default function ToolsSection() {
                       hint="Message shown to the reviewer"
                     />
 
-                    {/* Interrupt Config */}
+                    {/* Allowed Decisions */}
                     <div>
-                      <label className="block text-sm font-medium text-slate-300 mb-2">Allowed Actions</label>
-                      <div className="grid grid-cols-2 gap-2">
+                      <label className="block text-sm font-medium text-slate-300 mb-2">Allowed Decisions</label>
+                      <p className="text-xs text-slate-500 mb-3">
+                        Select which decision types the reviewer can choose from
+                      </p>
+                      <div className="grid grid-cols-3 gap-2">
                         <label className="flex items-center space-x-2 cursor-pointer">
                           <input
                             type="checkbox"
-                            checked={hitlForm.allowAccept}
-                            onChange={(e) => setHitlForm({ ...hitlForm, allowAccept: e.target.checked })}
+                            checked={hitlForm.allowApprove}
+                            onChange={(e) => setHitlForm({ ...hitlForm, allowApprove: e.target.checked })}
                             className="rounded border-slate-600 bg-slate-800 text-green-500 focus:ring-green-500"
                           />
-                          <span className="text-sm text-slate-400">Accept</span>
+                          <span className="text-sm text-slate-400">Approve</span>
                         </label>
                         <label className="flex items-center space-x-2 cursor-pointer">
                           <input
@@ -2500,89 +2482,17 @@ export default function ToolsSection() {
                         <label className="flex items-center space-x-2 cursor-pointer">
                           <input
                             type="checkbox"
-                            checked={hitlForm.allowRespond}
-                            onChange={(e) => setHitlForm({ ...hitlForm, allowRespond: e.target.checked })}
-                            className="rounded border-slate-600 bg-slate-800 text-yellow-500 focus:ring-yellow-500"
-                          />
-                          <span className="text-sm text-slate-400">Respond</span>
-                        </label>
-                        <label className="flex items-center space-x-2 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={hitlForm.allowDecline}
-                            onChange={(e) => setHitlForm({ ...hitlForm, allowDecline: e.target.checked })}
+                            checked={hitlForm.allowReject}
+                            onChange={(e) => setHitlForm({ ...hitlForm, allowReject: e.target.checked })}
                             className="rounded border-slate-600 bg-slate-800 text-red-500 focus:ring-red-500"
                           />
-                          <span className="text-sm text-slate-400">Decline</span>
+                          <span className="text-sm text-slate-400">Reject</span>
                         </label>
                       </div>
-                    </div>
-
-                    {/* Decline Message */}
-                    <Input
-                      label="Decline Message"
-                      value={hitlForm.declineMessage}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) => setHitlForm({ ...hitlForm, declineMessage: e.target.value })}
-                      placeholder="Tool call declined by user"
-                      hint="Message returned when the user declines"
-                    />
-
-                    {/* Custom Actions */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <label className="block text-sm font-medium text-slate-300">Custom Actions</label>
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          type="button"
-                          onClick={() => setHitlForm({
-                            ...hitlForm,
-                            customActions: [...hitlForm.customActions, { key: '', value: '' }]
-                          })}
-                        >
-                          <Plus className="w-4 h-4 mr-1" />
-                          Add Action
-                        </Button>
-                      </div>
-                      {hitlForm.customActions.map((action, index) => (
-                        <div key={index} className="flex items-center space-x-2">
-                          <Input
-                            placeholder="Action key"
-                            value={action.key}
-                            onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                              const newActions = [...hitlForm.customActions];
-                              newActions[index].key = e.target.value;
-                              setHitlForm({ ...hitlForm, customActions: newActions });
-                            }}
-                            className="flex-1"
-                          />
-                          <Input
-                            placeholder="Action description"
-                            value={action.value}
-                            onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                              const newActions = [...hitlForm.customActions];
-                              newActions[index].value = e.target.value;
-                              setHitlForm({ ...hitlForm, customActions: newActions });
-                            }}
-                            className="flex-1"
-                          />
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            type="button"
-                            onClick={() => {
-                              setHitlForm({
-                                ...hitlForm,
-                                customActions: hitlForm.customActions.filter((_, i) => i !== index)
-                              });
-                            }}
-                          >
-                            <Trash2 className="w-4 h-4 text-red-400" />
-                          </Button>
-                        </div>
-                      ))}
-                      <p className="text-xs text-slate-500">
-                        Custom actions allow you to define additional buttons/responses for the reviewer.
+                      <p className="text-xs text-slate-500 mt-2">
+                        <strong>Approve:</strong> Execute with original arguments • 
+                        <strong> Edit:</strong> Modify arguments before execution • 
+                        <strong> Reject:</strong> Skip execution
                       </p>
                     </div>
                   </>

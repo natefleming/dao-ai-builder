@@ -64,6 +64,11 @@ import Select from '@/components/ui/Select';
 import Badge from '@/components/ui/Badge';
 import Modal from '@/components/ui/Modal';
 import { StatusSelect, StatusSelectOption, StatusType } from '@/components/ui/StatusSelect';
+import { 
+  ResourceAuthSection, 
+  parseResourceAuth, 
+  applyResourceAuth
+} from '@/components/ui/ResourceAuthSection';
 import { useConfigStore } from '@/stores/configStore';
 import { 
   AppConfig,
@@ -496,7 +501,23 @@ function LLMsPanel() {
     temperature: '0.1',
     maxTokens: '8192',
     onBehalfOfUser: false,
+    useResponseApi: false,
     fallbacks: [] as string[],
+    // Authentication fields
+    authMethod: 'default' as 'default' | 'service_principal' | 'oauth' | 'pat',
+    servicePrincipalRef: '',
+    clientIdSource: 'variable' as 'variable' | 'manual',
+    clientSecretSource: 'variable' as 'variable' | 'manual',
+    workspaceHostSource: 'variable' as 'variable' | 'manual',
+    patSource: 'variable' as 'variable' | 'manual',
+    client_id: '',
+    client_secret: '',
+    workspace_host: '',
+    pat: '',
+    clientIdVariable: '',
+    clientSecretVariable: '',
+    workspaceHostVariable: '',
+    patVariable: '',
   });
 
   const { data: endpoints, loading: endpointsLoading, refetch: refetchEndpoints } = useServingEndpoints();
@@ -511,7 +532,22 @@ function LLMsPanel() {
       temperature: '0.1',
       maxTokens: '8192',
       onBehalfOfUser: false,
+      useResponseApi: false,
       fallbacks: [],
+      authMethod: 'default',
+      servicePrincipalRef: '',
+      clientIdSource: 'variable',
+      clientSecretSource: 'variable',
+      workspaceHostSource: 'variable',
+      patSource: 'variable',
+      client_id: '',
+      client_secret: '',
+      workspace_host: '',
+      pat: '',
+      clientIdVariable: '',
+      clientSecretVariable: '',
+      workspaceHostVariable: '',
+      patVariable: '',
     });
     setModelSource('preset');
     setShowAdvanced(false);
@@ -531,6 +567,9 @@ function LLMsPanel() {
       return fallbackName;
     });
     
+    // Parse authentication data
+    const authData = parseResourceAuth(llm, safeStartsWith, safeString);
+    
     setFormData({
       name: key,
       modelName: llm.name,
@@ -538,7 +577,9 @@ function LLMsPanel() {
       temperature: String(llm.temperature ?? 0.1),
       maxTokens: String(llm.max_tokens ?? 8192),
       onBehalfOfUser: llm.on_behalf_of_user ?? false,
+      useResponseApi: llm.use_response_api ?? false,
       fallbacks: convertedFallbacks,
+      ...authData,
     });
     
     // Detect model source
@@ -550,7 +591,8 @@ function LLMsPanel() {
       setModelSource('custom');
     }
     
-    setShowAdvanced(!!(llm.on_behalf_of_user || (llm.fallbacks && llm.fallbacks.length > 0)));
+    const hasAuth = authData.authMethod !== 'default';
+    setShowAdvanced(!!(llm.on_behalf_of_user || llm.use_response_api || (llm.fallbacks && llm.fallbacks.length > 0) || hasAuth));
     setIsModalOpen(true);
   };
 
@@ -581,9 +623,16 @@ function LLMsPanel() {
         llmConfig.on_behalf_of_user = true;
       }
 
+      if (formData.useResponseApi) {
+        llmConfig.use_response_api = true;
+      }
+
       if (formData.fallbacks.length > 0) {
         llmConfig.fallbacks = formData.fallbacks;
       }
+
+      // Apply authentication configuration
+      applyResourceAuth(llmConfig, formData as any);
 
       if (editingKey) {
         // If key changed, remove old and add new
@@ -853,32 +902,38 @@ function LLMsPanel() {
           >
             {showAdvanced ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
             <span>Advanced Options</span>
-            {(formData.onBehalfOfUser || formData.fallbacks.length > 0) && (
+            {(formData.onBehalfOfUser || formData.useResponseApi || formData.fallbacks.length > 0 || formData.authMethod !== 'default') && (
               <Badge variant="info" className="ml-2">
-                {(formData.onBehalfOfUser ? 1 : 0) + (formData.fallbacks.length > 0 ? 1 : 0)} configured
+                {(formData.onBehalfOfUser ? 1 : 0) + (formData.useResponseApi ? 1 : 0) + (formData.fallbacks.length > 0 ? 1 : 0) + (formData.authMethod !== 'default' ? 1 : 0)} configured
               </Badge>
             )}
           </button>
 
           {showAdvanced && (
             <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
-              {/* On Behalf of User */}
-              <div className="flex items-start space-x-3">
-                <input
-                  type="checkbox"
-                  id="onBehalfOfUser"
-                  checked={formData.onBehalfOfUser}
-                  onChange={(e) => setFormData({ ...formData, onBehalfOfUser: e.target.checked })}
-                  className="mt-1 rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500"
-                />
-                <div>
-                  <label htmlFor="onBehalfOfUser" className="block text-sm font-medium text-slate-300 cursor-pointer">
-                    On Behalf of User
-                  </label>
-                  <p className="text-xs text-slate-500 mt-1">
-                    When enabled, API calls will use the requesting user's credentials.
-                  </p>
-                </div>
+              {/* Authentication Section */}
+              <ResourceAuthSection
+                formData={formData as any}
+                setFormData={(data) => setFormData({ ...formData, ...data })}
+                servicePrincipals={config.service_principals || {}}
+                variables={config.variables || {}}
+                variableNames={Object.keys(config.variables || {})}
+              />
+
+              {/* Response API Option */}
+              <div className="space-y-2">
+                <label className="flex items-center space-x-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.useResponseApi}
+                    onChange={(e) => setFormData({ ...formData, useResponseApi: e.target.checked })}
+                    className="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500"
+                  />
+                  <span className="text-sm text-slate-300">Use Response API</span>
+                </label>
+                <p className="text-xs text-slate-500 ml-6">
+                  Enable when using the Databricks response API for streaming and enhanced features
+                </p>
               </div>
 
               {/* Fallbacks */}
@@ -978,6 +1033,21 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
     space_id: '',
     space_id_variable: '', // For variable reference
     on_behalf_of_user: false,
+    // Authentication fields
+    authMethod: 'default' as 'default' | 'service_principal' | 'oauth' | 'pat',
+    servicePrincipalRef: '',
+    clientIdSource: 'variable' as 'variable' | 'manual',
+    clientSecretSource: 'variable' as 'variable' | 'manual',
+    workspaceHostSource: 'variable' as 'variable' | 'manual',
+    patSource: 'variable' as 'variable' | 'manual',
+    client_id: '',
+    client_secret: '',
+    workspace_host: '',
+    pat: '',
+    clientIdVariable: '',
+    clientSecretVariable: '',
+    workspaceHostVariable: '',
+    patVariable: '',
   });
 
   const handleEdit = (key: string) => {
@@ -989,6 +1059,9 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
     const isVariable = safeStartsWith(spaceId, '*');
     const isInList = genieSpaces?.some(s => s.space_id === spaceId);
     
+    // Parse authentication data
+    const authData = parseResourceAuth(room, safeStartsWith, safeString);
+    
     setSpaceIdSource(isVariable ? 'variable' : (isInList ? 'select' : 'manual'));
     setFormData({
       refName: key,
@@ -996,7 +1069,7 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
       description: room.description || '',
       space_id: isVariable ? '' : spaceId,
       space_id_variable: isVariable ? spaceId.substring(1) : '',
-      on_behalf_of_user: room.on_behalf_of_user || false,
+      ...authData,
     });
     setEditingKey(key);
     setShowForm(true);
@@ -1016,6 +1089,9 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
       on_behalf_of_user: formData.on_behalf_of_user,
     };
     
+    // Apply authentication configuration
+    applyResourceAuth(genieRoom, formData as any);
+    
     if (editingKey) {
       // If key changed, remove old and add new
       if (editingKey !== formData.refName) {
@@ -1029,7 +1105,28 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
     }
     
     setSpaceIdSource('select');
-    setFormData({ refName: '', name: '', description: '', space_id: '', space_id_variable: '', on_behalf_of_user: false });
+    setFormData({ 
+      refName: '', 
+      name: '', 
+      description: '', 
+      space_id: '', 
+      space_id_variable: '', 
+      on_behalf_of_user: false,
+      authMethod: 'default',
+      servicePrincipalRef: '',
+      clientIdSource: 'variable',
+      clientSecretSource: 'variable',
+      workspaceHostSource: 'variable',
+      patSource: 'variable',
+      client_id: '',
+      client_secret: '',
+      workspace_host: '',
+      pat: '',
+      clientIdVariable: '',
+      clientSecretVariable: '',
+      workspaceHostVariable: '',
+      patVariable: '',
+    });
     onClose();
   };
 
@@ -1052,7 +1149,7 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
           <MessageSquare className="w-5 h-5 text-purple-400" />
           <h3 className="text-lg font-semibold text-slate-100">Genie Rooms</h3>
         </div>
-        <Button variant="secondary" size="sm" onClick={() => { setSpaceIdSource('select'); setFormData({ refName: '', name: '', description: '', space_id: '', space_id_variable: '', on_behalf_of_user: false }); setEditingKey(null); setShowForm(true); }}>
+        <Button variant="secondary" size="sm" onClick={() => { setSpaceIdSource('select'); setFormData({ refName: '', name: '', description: '', space_id: '', space_id_variable: '', on_behalf_of_user: false, authMethod: 'default', servicePrincipalRef: '', clientIdSource: 'variable', clientSecretSource: 'variable', workspaceHostSource: 'variable', patSource: 'variable', client_id: '', client_secret: '', workspace_host: '', pat: '', clientIdVariable: '', clientSecretVariable: '', workspaceHostVariable: '', patVariable: '' }); setEditingKey(null); setShowForm(true); }}>
           <Plus className="w-4 h-4 mr-1" />
           Add Genie Room
         </Button>
@@ -1277,17 +1374,14 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
             />
           </div>
           
-          <label className="flex items-center space-x-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={formData.on_behalf_of_user}
-              onChange={(e) => setFormData({ ...formData, on_behalf_of_user: e.target.checked })}
-              className="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500"
-            />
-            <UserCheck className="w-4 h-4 text-blue-400" />
-            <span className="text-sm text-slate-300">On Behalf of User</span>
-            <span className="text-xs text-slate-500">(Use requesting user's credentials)</span>
-          </label>
+          {/* Authentication Section */}
+          <ResourceAuthSection
+            formData={formData as any}
+            setFormData={(data) => setFormData({ ...formData, ...data })}
+            servicePrincipals={config.service_principals || {}}
+            variables={config.variables || {}}
+            variableNames={Object.keys(config.variables || {})}
+          />
           
           {/* Duplicate reference name warning */}
           {formData.refName && isRefNameDuplicate(formData.refName, config, editingKey) && (
@@ -1337,6 +1431,21 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
     warehouse_id: '',
     warehouse_id_variable: '',
     on_behalf_of_user: false,
+    // Authentication fields
+    authMethod: 'default' as 'default' | 'service_principal' | 'oauth' | 'pat',
+    servicePrincipalRef: '',
+    clientIdSource: 'variable' as 'variable' | 'manual',
+    clientSecretSource: 'variable' as 'variable' | 'manual',
+    workspaceHostSource: 'variable' as 'variable' | 'manual',
+    patSource: 'variable' as 'variable' | 'manual',
+    client_id: '',
+    client_secret: '',
+    workspace_host: '',
+    pat: '',
+    clientIdVariable: '',
+    clientSecretVariable: '',
+    workspaceHostVariable: '',
+    patVariable: '',
   });
 
   const handleEdit = (key: string) => {
@@ -1356,6 +1465,9 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
       source = 'select';
     }
     
+    // Parse authentication data
+    const authData = parseResourceAuth(wh, safeStartsWith, safeString);
+    
     setWarehouseIdSource(source);
     setFormData({
       refName: key,
@@ -1363,7 +1475,7 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
       description: wh.description || '',
       warehouse_id: directId,
       warehouse_id_variable: variableName,
-      on_behalf_of_user: wh.on_behalf_of_user || false,
+      ...authData,
     });
     setEditingKey(key);
     setShowForm(true);
@@ -1383,6 +1495,9 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
       on_behalf_of_user: formData.on_behalf_of_user,
     };
     
+    // Apply authentication configuration
+    applyResourceAuth(warehouse, formData as any);
+    
     if (editingKey) {
       if (editingKey !== formData.refName) {
         removeWarehouse(editingKey);
@@ -1394,7 +1509,28 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
       addWarehouse(formData.refName, warehouse);
     }
     
-    setFormData({ refName: '', name: '', description: '', warehouse_id: '', warehouse_id_variable: '', on_behalf_of_user: false });
+    setFormData({ 
+      refName: '', 
+      name: '', 
+      description: '', 
+      warehouse_id: '', 
+      warehouse_id_variable: '', 
+      on_behalf_of_user: false,
+      authMethod: 'default',
+      servicePrincipalRef: '',
+      clientIdSource: 'variable',
+      clientSecretSource: 'variable',
+      workspaceHostSource: 'variable',
+      patSource: 'variable',
+      client_id: '',
+      client_secret: '',
+      workspace_host: '',
+      pat: '',
+      clientIdVariable: '',
+      clientSecretVariable: '',
+      workspaceHostVariable: '',
+      patVariable: '',
+    });
     setWarehouseIdSource('select');
     onClose();
   };
@@ -1437,7 +1573,7 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
           <Database className="w-5 h-5 text-emerald-400" />
           <h3 className="text-lg font-semibold text-slate-100">SQL Warehouses</h3>
         </div>
-        <Button variant="secondary" size="sm" onClick={() => { setFormData({ refName: '', name: '', description: '', warehouse_id: '', warehouse_id_variable: '', on_behalf_of_user: false }); setWarehouseIdSource('select'); setEditingKey(null); setShowForm(true); }}>
+        <Button variant="secondary" size="sm" onClick={() => { setFormData({ refName: '', name: '', description: '', warehouse_id: '', warehouse_id_variable: '', on_behalf_of_user: false, authMethod: 'default', servicePrincipalRef: '', clientIdSource: 'variable', clientSecretSource: 'variable', workspaceHostSource: 'variable', patSource: 'variable', client_id: '', client_secret: '', workspace_host: '', pat: '', clientIdVariable: '', clientSecretVariable: '', workspaceHostVariable: '', patVariable: '' }); setWarehouseIdSource('select'); setEditingKey(null); setShowForm(true); }}>
           <Plus className="w-4 h-4 mr-1" />
           Add Warehouse
         </Button>
@@ -1662,17 +1798,14 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
             placeholder="Primary warehouse for analytics queries"
           />
           
-          <label className="flex items-center space-x-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={formData.on_behalf_of_user}
-              onChange={(e) => setFormData({ ...formData, on_behalf_of_user: e.target.checked })}
-              className="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500"
-            />
-            <UserCheck className="w-4 h-4 text-blue-400" />
-            <span className="text-sm text-slate-300">On Behalf of User</span>
-            <span className="text-xs text-slate-500">(Use requesting user's credentials)</span>
-          </label>
+          {/* Authentication Section */}
+          <ResourceAuthSection
+            formData={formData as any}
+            setFormData={(data) => setFormData({ ...formData, ...data })}
+            servicePrincipals={config.service_principals || {}}
+            variables={config.variables || {}}
+            variableNames={Object.keys(config.variables || {})}
+          />
           
           {/* Duplicate reference name warning */}
           {formData.refName && isRefNameDuplicate(formData.refName, config, editingKey) && (
@@ -1712,6 +1845,8 @@ function TablesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose
   const { config, addTable, updateTable, removeTable } = useConfigStore();
   const tables = config.resources?.tables || {};
   const configuredSchemas = config.schemas || {};
+  const variables = config.variables || {};
+  const servicePrincipals = config.service_principals || {};
   const { data: catalogs } = useCatalogs();
   
   // Default to 'reference' (Use Configured Schema) initially
@@ -1725,6 +1860,21 @@ function TablesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose
     schema_name: '',
     name: '',
     on_behalf_of_user: false,
+    // Authentication fields
+    authMethod: 'default' as 'default' | 'service_principal' | 'oauth' | 'pat',
+    servicePrincipalRef: '',
+    clientIdSource: 'variable' as 'variable' | 'manual',
+    clientSecretSource: 'variable' as 'variable' | 'manual',
+    workspaceHostSource: 'variable' as 'variable' | 'manual',
+    patSource: 'variable' as 'variable' | 'manual',
+    client_id: '',
+    client_secret: '',
+    workspace_host: '',
+    pat: '',
+    clientIdVariable: '',
+    clientSecretVariable: '',
+    workspaceHostVariable: '',
+    patVariable: '',
   });
 
   const { data: schemas, loading: schemasLoading } = useSchemas(formData.catalog_name || null);
@@ -1751,7 +1901,8 @@ function TablesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose
       catalog_name: table.schema?.catalog_name || '',
       schema_name: table.schema?.schema_name || '',
       name: table.name || '',
-      on_behalf_of_user: table.on_behalf_of_user || false,
+      // Parse authentication data (includes on_behalf_of_user)
+      ...parseResourceAuth(table, safeStartsWith, safeString),
     });
     setEditingKey(key);
     setShowForm(true);
@@ -1762,6 +1913,9 @@ function TablesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose
       name: formData.name || undefined,
       on_behalf_of_user: formData.on_behalf_of_user,
     };
+    
+    // Apply authentication configuration
+    applyResourceAuth(table, formData as any);
     
     if (schemaSource === 'reference' && formData.schemaRef) {
       const ref = configuredSchemas[formData.schemaRef];
@@ -1804,7 +1958,21 @@ function TablesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose
       catalog_name: formData.catalog_name, 
       schema_name: formData.schema_name, 
       name: '', 
-      on_behalf_of_user: false 
+      on_behalf_of_user: false,
+      authMethod: 'default',
+      servicePrincipalRef: '',
+      clientIdSource: 'variable',
+      clientSecretSource: 'variable',
+      workspaceHostSource: 'variable',
+      patSource: 'variable',
+      client_id: '',
+      client_secret: '',
+      workspace_host: '',
+      pat: '',
+      clientIdVariable: '',
+      clientSecretVariable: '',
+      workspaceHostVariable: '',
+      patVariable: '',
     });
     // Keep schemaSource as is
     onClose();
@@ -1831,7 +1999,21 @@ function TablesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose
             catalog_name: lastUsedSchema.catalog_name, 
             schema_name: lastUsedSchema.schema_name, 
             name: '', 
-            on_behalf_of_user: false 
+            on_behalf_of_user: false,
+            authMethod: 'default',
+            servicePrincipalRef: '',
+            clientIdSource: 'variable',
+            clientSecretSource: 'variable',
+            workspaceHostSource: 'variable',
+            patSource: 'variable',
+            client_id: '',
+            client_secret: '',
+            workspace_host: '',
+            pat: '',
+            clientIdVariable: '',
+            clientSecretVariable: '',
+            workspaceHostVariable: '',
+            patVariable: '',
           }); 
           // Use last used schema source (defaults to 'reference')
           setSchemaSource(lastUsedSchema.source);
@@ -1862,6 +2044,24 @@ function TablesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose
                   <Badge variant="success" title="On Behalf of User">
                     <User className="w-3 h-3 mr-1" />
                     OBO
+                  </Badge>
+                )}
+                {!table.on_behalf_of_user && table.service_principal && (
+                  <Badge variant="info" title="Service Principal">
+                    <Key className="w-3 h-3 mr-1" />
+                    SP
+                  </Badge>
+                )}
+                {!table.on_behalf_of_user && (table.client_id || table.client_secret) && (
+                  <Badge variant="warning" title="OAuth2 / M2M">
+                    <Key className="w-3 h-3 mr-1" />
+                    OAuth
+                  </Badge>
+                )}
+                {!table.on_behalf_of_user && table.pat && (
+                  <Badge variant="default" title="Personal Access Token">
+                    <Key className="w-3 h-3 mr-1" />
+                    PAT
                   </Badge>
                 )}
                 <Button variant="ghost" size="sm" onClick={() => handleEdit(key)}>
@@ -2028,16 +2228,14 @@ function TablesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose
             hint="Leave empty for all tables in schema"
           />
           
-          <label className="flex items-center space-x-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={formData.on_behalf_of_user}
-              onChange={(e) => setFormData({ ...formData, on_behalf_of_user: e.target.checked })}
-              className="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500"
-            />
-            <UserCheck className="w-4 h-4 text-blue-400" />
-            <span className="text-sm text-slate-300">On Behalf of User</span>
-          </label>
+          {/* Authentication Section */}
+          <ResourceAuthSection
+            formData={formData}
+            setFormData={setFormData as any}
+            variables={variables}
+            servicePrincipals={servicePrincipals}
+            variableNames={Object.keys(variables)}
+          />
           
           {/* Duplicate reference name warning */}
           {formData.refName && isRefNameDuplicate(formData.refName, config, editingKey) && (
@@ -2802,15 +3000,34 @@ function ConnectionsPanel({ showForm, setShowForm, editingKey, setEditingKey, on
     refName: '',
     name: '',
     on_behalf_of_user: false,
+    // Authentication fields
+    authMethod: 'default' as 'default' | 'service_principal' | 'oauth' | 'pat',
+    servicePrincipalRef: '',
+    clientIdSource: 'variable' as 'variable' | 'manual',
+    clientSecretSource: 'variable' as 'variable' | 'manual',
+    workspaceHostSource: 'variable' as 'variable' | 'manual',
+    patSource: 'variable' as 'variable' | 'manual',
+    client_id: '',
+    client_secret: '',
+    workspace_host: '',
+    pat: '',
+    clientIdVariable: '',
+    clientSecretVariable: '',
+    workspaceHostVariable: '',
+    patVariable: '',
   });
 
   const handleEdit = (key: string) => {
     scrollToAsset(key);
     const conn = connections[key];
+    
+    // Parse authentication data
+    const authData = parseResourceAuth(conn, safeStartsWith, safeString);
+    
     setFormData({
       refName: key,
       name: conn.name,
-      on_behalf_of_user: conn.on_behalf_of_user || false,
+      ...authData,
     });
     setEditingKey(key);
     setShowForm(true);
@@ -2821,6 +3038,9 @@ function ConnectionsPanel({ showForm, setShowForm, editingKey, setEditingKey, on
       name: formData.name,
       on_behalf_of_user: formData.on_behalf_of_user,
     };
+    
+    // Apply authentication configuration
+    applyResourceAuth(connection, formData as any);
     
     if (editingKey) {
       if (editingKey !== formData.refName) {
@@ -2833,7 +3053,25 @@ function ConnectionsPanel({ showForm, setShowForm, editingKey, setEditingKey, on
       addConnection(formData.refName, connection);
     }
     
-    setFormData({ refName: '', name: '', on_behalf_of_user: false });
+    setFormData({ 
+      refName: '', 
+      name: '', 
+      on_behalf_of_user: false,
+      authMethod: 'default',
+      servicePrincipalRef: '',
+      clientIdSource: 'variable',
+      clientSecretSource: 'variable',
+      workspaceHostSource: 'variable',
+      patSource: 'variable',
+      client_id: '',
+      client_secret: '',
+      workspace_host: '',
+      pat: '',
+      clientIdVariable: '',
+      clientSecretVariable: '',
+      workspaceHostVariable: '',
+      patVariable: '',
+    });
     onClose();
   };
 
@@ -2848,7 +3086,7 @@ function ConnectionsPanel({ showForm, setShowForm, editingKey, setEditingKey, on
           <Link className="w-5 h-5 text-indigo-400" />
           <h3 className="text-lg font-semibold text-slate-100">Connections</h3>
         </div>
-        <Button variant="secondary" size="sm" onClick={() => { setFormData({ refName: '', name: '', on_behalf_of_user: false }); setEditingKey(null); setShowForm(true); }}>
+        <Button variant="secondary" size="sm" onClick={() => { setFormData({ refName: '', name: '', on_behalf_of_user: false, authMethod: 'default', servicePrincipalRef: '', clientIdSource: 'variable', clientSecretSource: 'variable', workspaceHostSource: 'variable', patSource: 'variable', client_id: '', client_secret: '', workspace_host: '', pat: '', clientIdVariable: '', clientSecretVariable: '', workspaceHostVariable: '', patVariable: '' }); setEditingKey(null); setShowForm(true); }}>
           <Plus className="w-4 h-4 mr-1" />
           Add Connection
         </Button>
@@ -2926,16 +3164,14 @@ function ConnectionsPanel({ showForm, setShowForm, editingKey, setEditingKey, on
             required
           />
           
-          <label className="flex items-center space-x-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={formData.on_behalf_of_user}
-              onChange={(e) => setFormData({ ...formData, on_behalf_of_user: e.target.checked })}
-              className="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500"
-            />
-            <UserCheck className="w-4 h-4 text-blue-400" />
-            <span className="text-sm text-slate-300">On Behalf of User</span>
-          </label>
+          {/* Authentication Section */}
+          <ResourceAuthSection
+            formData={formData as any}
+            setFormData={(data) => setFormData({ ...formData, ...data })}
+            servicePrincipals={config.service_principals || {}}
+            variables={config.variables || {}}
+            variableNames={Object.keys(config.variables || {})}
+          />
           
           {/* Duplicate reference name warning */}
           {formData.refName && isRefNameDuplicate(formData.refName, config, editingKey) && (
@@ -2964,6 +3200,7 @@ type CredentialSource = 'manual' | 'variable';
 interface DatabaseFormData {
   refName: string;
   name: string;
+  type: 'postgres' | 'lakebase';
   instanceSource: 'existing' | 'new';
   instance_name: string;
   description: string;
@@ -2993,6 +3230,7 @@ interface DatabaseFormData {
 const defaultDatabaseForm: DatabaseFormData = {
   refName: '',
   name: '',
+  type: 'lakebase',
   instanceSource: 'existing',
   instance_name: '',
   description: '',
@@ -3018,6 +3256,11 @@ const defaultDatabaseForm: DatabaseFormData = {
   passwordVariable: '',
   on_behalf_of_user: false,
 };
+
+const databaseTypeOptions = [
+  { value: 'lakebase', label: 'Lakebase (Databricks-managed PostgreSQL)' },
+  { value: 'postgres', label: 'PostgreSQL (External)' },
+];
 
 const capacityOptions = [
   { value: 'CU_1', label: 'CU_1 (Small)' },
@@ -3184,6 +3427,7 @@ function DatabasesPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
       setFormData({
         refName: key,
         name: db.name,
+        type: db.type || 'lakebase',
         instanceSource: 'existing',
         instance_name: db.instance_name || '',
         description: db.description || '',
@@ -3228,6 +3472,7 @@ function DatabasesPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
   const handleSave = () => {
     const db: DatabaseModel = {
       name: formData.name,
+      type: formData.type,
       instance_name: formData.instance_name || undefined,
       description: formData.description || undefined,
       capacity: formData.capacity,
@@ -3337,6 +3582,15 @@ function DatabasesPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
             placeholder="Retail Database"
             hint="Type naturally - spaces become underscores"
             required
+          />
+          
+          {/* Database Type Selection */}
+          <Select
+            label="Database Type"
+            value={formData.type}
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, type: e.target.value as 'postgres' | 'lakebase' })}
+            options={databaseTypeOptions}
+            hint={formData.type === 'lakebase' ? 'Databricks-managed Lakebase supports ambient/OBO authentication' : 'External PostgreSQL requires explicit credentials'}
           />
           
           {/* Lakebase Instance Selection */}
@@ -3469,7 +3723,16 @@ function DatabasesPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
             value={formData.authMethod}
             onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, authMethod: e.target.value as 'oauth' | 'user' | 'service_principal' })}
             options={authMethodOptions}
+            hint={formData.type === 'postgres' ? 'PostgreSQL requires explicit authentication' : 'Lakebase supports ambient/OBO authentication'}
           />
+          
+          {formData.type === 'postgres' && (
+            <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg">
+              <p className="text-xs text-amber-400">
+                <strong>Note:</strong> PostgreSQL databases require explicit authentication (user/password or OAuth2 credentials).
+              </p>
+            </div>
+          )}
           
           {formData.authMethod === 'service_principal' ? (
             <div className="space-y-4 p-3 bg-slate-900/50 rounded border border-slate-600">
@@ -3650,6 +3913,21 @@ interface VectorStoreFormData {
   checkpointPathVolumeName: string;  // Volume name within the selected schema
   checkpointPathPath: string;  // Path within the volume
   on_behalf_of_user: boolean;
+  // Authentication fields
+  authMethod: 'default' | 'service_principal' | 'oauth' | 'pat';
+  servicePrincipalRef: string;
+  clientIdSource: 'variable' | 'manual';
+  clientSecretSource: 'variable' | 'manual';
+  workspaceHostSource: 'variable' | 'manual';
+  patSource: 'variable' | 'manual';
+  client_id: string;
+  client_secret: string;
+  workspace_host: string;
+  pat: string;
+  clientIdVariable: string;
+  clientSecretVariable: string;
+  workspaceHostVariable: string;
+  patVariable: string;
 }
 
 const defaultVectorStoreForm: VectorStoreFormData = {
@@ -3687,6 +3965,21 @@ const defaultVectorStoreForm: VectorStoreFormData = {
   checkpointPathVolumeName: '',
   checkpointPathPath: '',
   on_behalf_of_user: false,
+  // Authentication fields
+  authMethod: 'default',
+  servicePrincipalRef: '',
+  clientIdSource: 'variable',
+  clientSecretSource: 'variable',
+  workspaceHostSource: 'variable',
+  patSource: 'variable',
+  client_id: '',
+  client_secret: '',
+  workspace_host: '',
+  pat: '',
+  clientIdVariable: '',
+  clientSecretVariable: '',
+  workspaceHostVariable: '',
+  patVariable: '',
 };
 
 // Volume Paths Section Component
@@ -4004,6 +4297,8 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
   const configuredLLMs = config.resources?.llms || {};
   const configuredSchemas = config.schemas || {};
   const configuredVolumes = config.resources?.volumes || {};
+  const variables = config.variables || {};
+  const servicePrincipals = config.service_principals || {};
   
   // Fetch data from Databricks
   const { data: vsEndpoints, loading: endpointsLoading, refetch: refetchEndpoints } = useVectorSearchEndpoints();
@@ -4208,7 +4503,8 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
         checkpointPathVolumeSchema,
         checkpointPathVolumeName,
         checkpointPathPath,
-        on_behalf_of_user: vs.on_behalf_of_user || false,
+        // Parse authentication data (includes on_behalf_of_user)
+        ...parseResourceAuth(vs, safeStartsWith, safeString),
       });
       setColumnsInput((vs.columns || []).join(', '));
       setEditingKey(key);
@@ -4233,6 +4529,9 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
       doc_uri: formData.doc_uri || undefined,
       on_behalf_of_user: formData.on_behalf_of_user || undefined,
     };
+    
+    // Apply authentication configuration
+    applyResourceAuth(vs, formData as any);
     
     // Source table is optional - only add if specified
     if (formData.source_table && formData.source_catalog && formData.source_schema) {
@@ -4403,6 +4702,24 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
                   <Badge variant="success" title="On Behalf of User">
                     <User className="w-3 h-3 mr-1" />
                     OBO
+                  </Badge>
+                )}
+                {!vs.on_behalf_of_user && vs.service_principal && (
+                  <Badge variant="info" title="Service Principal">
+                    <Key className="w-3 h-3 mr-1" />
+                    SP
+                  </Badge>
+                )}
+                {!vs.on_behalf_of_user && (vs.client_id || vs.client_secret) && (
+                  <Badge variant="warning" title="OAuth2 / M2M">
+                    <Key className="w-3 h-3 mr-1" />
+                    OAuth
+                  </Badge>
+                )}
+                {!vs.on_behalf_of_user && vs.pat && (
+                  <Badge variant="default" title="Personal Access Token">
+                    <Key className="w-3 h-3 mr-1" />
+                    PAT
                   </Badge>
                 )}
                 <Button variant="ghost" size="sm" onClick={() => handleEdit(key)}>
@@ -4884,16 +5201,14 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
             checkpointPathVolumesLoading={checkpointPathVolumesLoading}
           />
           
-          <label className="flex items-center space-x-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={formData.on_behalf_of_user}
-              onChange={(e) => setFormData({ ...formData, on_behalf_of_user: e.target.checked })}
-              className="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500"
-            />
-            <UserCheck className="w-4 h-4 text-blue-400" />
-            <span className="text-sm text-slate-300">On Behalf of User</span>
-          </label>
+          {/* Authentication Section */}
+          <ResourceAuthSection
+            formData={formData}
+            setFormData={setFormData as any}
+            variables={variables}
+            servicePrincipals={servicePrincipals}
+            variableNames={Object.keys(variables)}
+          />
           
           {/* Duplicate reference name warning */}
           {formData.refName && isRefNameDuplicate(formData.refName, config, editingKey) && (

@@ -1479,12 +1479,53 @@ export function generateYAML(config: AppConfig): string {
     });
   }
 
+  // Middleware
+  if (config.middleware && Object.keys(config.middleware).length > 0) {
+    yamlConfig.middleware = {};
+    Object.entries(config.middleware).forEach(([key, mw]) => {
+      // Process args, keeping arrays and objects as-is
+      let processedArgs: Record<string, any> | undefined;
+      if (mw.args && Object.keys(mw.args).length > 0) {
+        processedArgs = {};
+        Object.entries(mw.args).forEach(([argKey, argValue]) => {
+          // If it's already an object or array, keep it as-is
+          if (typeof argValue === 'object' && argValue !== null) {
+            processedArgs![argKey] = argValue;
+          } else if (typeof argValue === 'string') {
+            // Try to parse as JSON for strings that look like JSON
+            if ((argValue.startsWith('[') && argValue.endsWith(']')) || 
+                (argValue.startsWith('{') && argValue.endsWith('}'))) {
+              try {
+                processedArgs![argKey] = JSON.parse(argValue);
+              } catch {
+                // Not valid JSON, keep as string
+                processedArgs![argKey] = argValue;
+              }
+            } else {
+              // Regular string, keep as-is
+              processedArgs![argKey] = argValue;
+            }
+          } else {
+            // Numbers, booleans, etc - keep as-is
+            processedArgs![argKey] = argValue;
+          }
+        });
+      }
+      
+      yamlConfig.middleware[key] = {
+        name: mw.name,
+        ...(processedArgs && Object.keys(processedArgs).length > 0 && { args: processedArgs }),
+      };
+    });
+  }
+
   // Agents
   if (config.agents && Object.keys(config.agents).length > 0) {
     const definedLLMs = config.resources?.llms || {};
     const definedPrompts = config.prompts || {};
     const definedTools = config.tools || {};
     const definedGuardrails = config.guardrails || {};
+    const definedMiddleware = config.middleware || {};
     yamlConfig.agents = {};
     Object.entries(config.agents).forEach(([key, agent]) => {
       // Format prompt - either inline string or reference to configured prompt
@@ -1597,14 +1638,74 @@ export function generateYAML(config: AppConfig): string {
         }).filter((ref): ref is string => ref !== null);
       }
       
+      // Format middleware as references - middleware should be referenced using *middleware_key (YAML key)
+      let middlewareValue: string[] | undefined;
+      if (agent.middleware && agent.middleware.length > 0) {
+        middlewareValue = agent.middleware.map((mw, idx) => {
+          // First check if this was originally a reference in imported YAML
+          const originalRef = findOriginalReference(`agents.${key}.middleware.${idx}`, mw);
+          if (originalRef && definedMiddleware[originalRef]) {
+            return createReference(originalRef);
+          }
+          
+          // Middleware are stored as MiddlewareModel objects - find the key by matching name
+          const mwObj = typeof mw === 'object' ? mw : null;
+          const mwName = typeof mw === 'string' ? mw : mw.name;
+          
+          // Strategy 1: Check if mwName is already a valid key in definedMiddleware
+          if (definedMiddleware[mwName]) {
+            return createReference(mwName);
+          }
+          
+          // Strategy 2: Find by deep comparison (most accurate)
+          if (mwObj) {
+            const matchedByObject = Object.entries(definedMiddleware).find(
+              ([, m]) => JSON.stringify(m) === JSON.stringify(mwObj)
+            );
+            if (matchedByObject) {
+              return createReference(matchedByObject[0]);
+            }
+          }
+          
+          // Strategy 3: Find the key in definedMiddleware that matches this middleware's name
+          const matchedByName = Object.entries(definedMiddleware).find(
+            ([, m]) => m.name === mwName
+          );
+          if (matchedByName) {
+            return createReference(matchedByName[0]);
+          }
+          
+          // Fallback: The middleware doesn't exist in definedMiddleware - skip this reference
+          console.warn(`Could not find middleware key for middleware with name "${mwName}". Middleware may have been deleted.`);
+          return null;
+        }).filter((ref): ref is string => ref !== null);
+      }
+      
+      // Format response_format
+      let responseFormatValue: any = undefined;
+      if (agent.response_format) {
+        if (typeof agent.response_format === 'string') {
+          // Simple mode: just the schema string
+          responseFormatValue = agent.response_format;
+        } else if (typeof agent.response_format === 'object') {
+          // Advanced mode: ResponseFormatModel with response_schema and use_tool
+          responseFormatValue = {
+            ...(agent.response_format.response_schema && { response_schema: agent.response_format.response_schema }),
+            ...(agent.response_format.use_tool !== null && agent.response_format.use_tool !== undefined && { use_tool: agent.response_format.use_tool }),
+          };
+        }
+      }
+
       yamlConfig.agents[key] = {
         name: agent.name,
         model: formatModelReference(agent.model, definedLLMs, `agents.${key}.model`),
         ...(agent.description && { description: agent.description }),
         ...(toolsValue && toolsValue.length > 0 && { tools: toolsValue }),
         ...(guardrailsValue && guardrailsValue.length > 0 && { guardrails: guardrailsValue }),
+        ...(middlewareValue && middlewareValue.length > 0 && { middleware: middlewareValue }),
         ...(promptValue && { prompt: promptValue }),
         ...(agent.handoff_prompt && { handoff_prompt: agent.handoff_prompt }),
+        ...(responseFormatValue && { response_format: responseFormatValue }),
       };
     });
   }
@@ -1719,6 +1820,21 @@ export function generateYAML(config: AppConfig): string {
       const definedLLMs = config.resources?.llms || {};
       const definedTools = config.tools || {};
       yamlConfig.app.orchestration = formatOrchestration(config.app.orchestration, definedLLMs, definedTools);
+    }
+    
+    // Format chat_history
+    if (config.app.chat_history) {
+      const definedLLMs = config.resources?.llms || {};
+      yamlConfig.app.chat_history = {
+        model: formatModelReference(config.app.chat_history.model, definedLLMs, 'app.chat_history.model'),
+        max_tokens: config.app.chat_history.max_tokens,
+        ...(config.app.chat_history.max_tokens_before_summary && { 
+          max_tokens_before_summary: config.app.chat_history.max_tokens_before_summary 
+        }),
+        ...(config.app.chat_history.max_messages_before_summary && { 
+          max_messages_before_summary: config.app.chat_history.max_messages_before_summary 
+        }),
+      };
     }
   }
 

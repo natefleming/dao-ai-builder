@@ -162,6 +162,12 @@ export default function AgentsSection() {
     label: gr.name,
   }));
 
+  const middleware = config.middleware || {};
+  const middlewareOptions = Object.entries(middleware).map(([key, mw]) => ({
+    value: key,
+    label: key,
+  }));
+
   const promptOptions = Object.entries(prompts).map(([key, prompt]) => ({
     value: key,
     label: `${key} (${prompt.name})`,
@@ -236,6 +242,9 @@ export default function AgentsSection() {
                     {typeof agent.model === 'object' ? agent.model.name : agent.model}
                   </Badge>
                   <Badge variant="default">{agent.tools?.length || 0} tools</Badge>
+                  {agent.response_format && (
+                    <Badge variant="success">Structured Output</Badge>
+                  )}
                   
                   {/* Edit button */}
                   <Button
@@ -294,10 +303,12 @@ export default function AgentsSection() {
         llmOptions={llmOptions}
         toolOptions={toolOptions}
         guardrailOptions={guardrailOptions}
+        middlewareOptions={middlewareOptions}
         promptOptions={promptOptions}
         llms={llms}
         tools={tools}
         guardrails={guardrails}
+        middleware={middleware}
         prompts={prompts}
         onAdd={addAgent}
         onUpdate={updateAgent}
@@ -315,10 +326,12 @@ interface AgentModalProps {
   llmOptions: { value: string; label: string }[];
   toolOptions: { value: string; label: string }[];
   guardrailOptions: { value: string; label: string }[];
+  middlewareOptions: { value: string; label: string }[];
   promptOptions: { value: string; label: string }[];
   llms: Record<string, any>;
   tools: Record<string, any>;
   guardrails: Record<string, any>;
+  middleware: Record<string, any>;
   prompts: Record<string, PromptModel>;
   onAdd: (refName: string, agent: AgentModel) => void;
   onUpdate: (refName: string, updates: Partial<AgentModel>) => void;
@@ -347,10 +360,12 @@ function AgentModal({
   llmOptions,
   toolOptions,
   guardrailOptions,
+  middlewareOptions,
   promptOptions,
   llms,
   tools,
   guardrails,
+  middleware,
   prompts,
   onAdd,
   onUpdate,
@@ -374,6 +389,12 @@ function AgentModal({
     handoffPrompt: '',
     selectedTools: [] as string[],
     selectedGuardrails: [] as string[],
+    selectedMiddleware: [] as string[],
+    // Response format configuration
+    enableResponseFormat: false,
+    responseFormatType: 'simple' as 'simple' | 'advanced',
+    responseSchema: '',
+    useTool: null as boolean | null,
   });
   
   // Store initial form data for comparison (to detect changes)
@@ -476,6 +497,28 @@ function AgentModal({
         Object.entries(guardrails).find(([, gr]) => gr.name === g.name)?.[0] || ''
       ).filter(Boolean) || [];
       
+      const selectedMiddlewareList = editingAgent.middleware?.map((m) =>
+        Object.entries(middleware).find(([, mw]) => mw.name === m.name)?.[0] || ''
+      ).filter(Boolean) || [];
+      
+      // Parse response_format if present
+      let enableResponseFormat = false;
+      let responseFormatType: 'simple' | 'advanced' = 'simple';
+      let responseSchema = '';
+      let useTool: boolean | null = null;
+      
+      if (editingAgent.response_format) {
+        enableResponseFormat = true;
+        if (typeof editingAgent.response_format === 'string') {
+          responseFormatType = 'simple';
+          responseSchema = editingAgent.response_format;
+        } else if (typeof editingAgent.response_format === 'object') {
+          responseFormatType = 'advanced';
+          responseSchema = editingAgent.response_format.response_schema || '';
+          useTool = editingAgent.response_format.use_tool ?? null;
+        }
+      }
+      
       const newFormData = {
         refName: editingKey, // Use the existing key as refName
         name: editingAgent.name,
@@ -486,6 +529,11 @@ function AgentModal({
         handoffPrompt: editingAgent.handoff_prompt || '',
         selectedTools: selectedToolsList,
         selectedGuardrails: selectedGuardrailsList,
+        selectedMiddleware: selectedMiddlewareList,
+        enableResponseFormat,
+        responseFormatType,
+        responseSchema,
+        useTool,
       };
       
       // Create a separate copy for initial state comparison
@@ -499,6 +547,11 @@ function AgentModal({
         handoffPrompt: editingAgent.handoff_prompt || '',
         selectedTools: [...selectedToolsList],
         selectedGuardrails: [...selectedGuardrailsList],
+        selectedMiddleware: [...selectedMiddlewareList],
+        enableResponseFormat,
+        responseFormatType,
+        responseSchema,
+        useTool,
       };
       
       setPromptSource(detectedPromptSource);
@@ -517,6 +570,11 @@ function AgentModal({
         handoffPrompt: '',
         selectedTools: [] as string[],
         selectedGuardrails: [] as string[],
+        selectedMiddleware: [] as string[],
+        enableResponseFormat: false,
+        responseFormatType: 'simple' as 'simple' | 'advanced',
+        responseSchema: '',
+        useTool: null as boolean | null,
       };
       setPromptSource('inline');
       setFormData(defaultFormData);
@@ -540,6 +598,21 @@ function AgentModal({
       promptValue = formData.prompt || undefined;
     }
 
+    // Build response_format if enabled
+    let responseFormat: any = undefined;
+    if (formData.enableResponseFormat && formData.responseSchema) {
+      if (formData.responseFormatType === 'simple') {
+        // Simple mode: just pass the schema string
+        responseFormat = formData.responseSchema;
+      } else {
+        // Advanced mode: full ResponseFormatModel
+        responseFormat = {
+          response_schema: formData.responseSchema,
+          use_tool: formData.useTool,
+        };
+      }
+    }
+
     const agent: AgentModel = {
       name: formData.name,
       description: formData.description || undefined,
@@ -548,6 +621,8 @@ function AgentModal({
       handoff_prompt: formData.handoffPrompt || undefined,
       tools: formData.selectedTools.map((key) => tools[key]).filter(Boolean),
       guardrails: formData.selectedGuardrails.map((key) => guardrails[key]).filter(Boolean),
+      middleware: formData.selectedMiddleware.map((key) => middleware[key]).filter(Boolean),
+      response_format: responseFormat,
     };
 
     if (editingKey) {
@@ -579,12 +654,21 @@ function AgentModal({
     if (formData.promptRef !== initialFormData.promptRef) return true;
     if (promptSource !== initialPromptSource) return true;
     
+    // Compare response format fields
+    if (formData.enableResponseFormat !== initialFormData.enableResponseFormat) return true;
+    if (formData.responseFormatType !== initialFormData.responseFormatType) return true;
+    if (formData.responseSchema !== initialFormData.responseSchema) return true;
+    if (formData.useTool !== initialFormData.useTool) return true;
+    
     // Compare arrays (tools and guardrails)
     if (formData.selectedTools.length !== initialFormData.selectedTools.length) return true;
     if (!formData.selectedTools.every((t, i) => t === initialFormData.selectedTools[i])) return true;
     
     if (formData.selectedGuardrails.length !== initialFormData.selectedGuardrails.length) return true;
     if (!formData.selectedGuardrails.every((g, i) => g === initialFormData.selectedGuardrails[i])) return true;
+    
+    if (formData.selectedMiddleware.length !== initialFormData.selectedMiddleware.length) return true;
+    if (!formData.selectedMiddleware.every((m, i) => m === initialFormData.selectedMiddleware[i])) return true;
     
     return false;
   }, [formData, initialFormData, promptSource, initialPromptSource, editingKey]);
@@ -929,6 +1013,110 @@ function AgentModal({
             placeholder="Select guardrails..."
             hint="Safety checks for this agent"
           />
+        </div>
+
+        <MultiSelect
+          label="Middleware"
+          options={middlewareOptions}
+          value={formData.selectedMiddleware}
+          onChange={(value) => setFormData({ ...formData, selectedMiddleware: value })}
+          placeholder="Select middleware..."
+          hint="Middleware to customize agent execution behavior"
+        />
+
+        {/* Response Format Configuration */}
+        <div className="space-y-3 p-4 bg-slate-800/30 rounded-lg border border-slate-700/50">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <label className="text-sm font-medium text-slate-300">Response Format</label>
+              <Badge variant="secondary" className="text-xs">Optional</Badge>
+            </div>
+            <label className="flex items-center space-x-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={formData.enableResponseFormat}
+                onChange={(e) => setFormData({ ...formData, enableResponseFormat: e.target.checked })}
+                className="rounded border-slate-600 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-900"
+              />
+              <span className="text-xs text-slate-400">Enable</span>
+            </label>
+          </div>
+          
+          {formData.enableResponseFormat && (
+            <div className="space-y-3 pt-2">
+              <p className="text-xs text-slate-400">
+                Configure structured response output. The response schema can be a fully qualified type name (e.g., <code className="px-1 py-0.5 bg-slate-900/50 rounded text-violet-400">myapp.models.MyModel</code>) or a JSON schema string.
+              </p>
+              
+              {/* Response Format Type Toggle */}
+              <div className="flex items-center space-x-2">
+                <label className="text-xs font-medium text-slate-400">Mode:</label>
+                <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, responseFormatType: 'simple' })}
+                    className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${
+                      formData.responseFormatType === 'simple'
+                        ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                        : 'text-slate-400 border border-transparent hover:text-slate-300'
+                    }`}
+                  >
+                    Simple
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, responseFormatType: 'advanced' })}
+                    className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${
+                      formData.responseFormatType === 'advanced'
+                        ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                        : 'text-slate-400 border border-transparent hover:text-slate-300'
+                    }`}
+                  >
+                    Advanced
+                  </button>
+                </div>
+              </div>
+
+              {/* Response Schema Input */}
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-slate-400">Response Schema</label>
+                <Textarea
+                  value={formData.responseSchema}
+                  onChange={(e) => setFormData({ ...formData, responseSchema: e.target.value })}
+                  rows={3}
+                  placeholder="myapp.models.ResponseModel or JSON schema string..."
+                  hint={formData.responseFormatType === 'simple' 
+                    ? "Fully qualified type name or JSON schema. Will auto-detect strategy." 
+                    : "Type name or JSON schema with manual strategy control"}
+                />
+              </div>
+
+              {/* Advanced Options */}
+              {formData.responseFormatType === 'advanced' && (
+                <div className="space-y-2 p-3 bg-slate-900/50 rounded-lg border border-slate-700/30">
+                  <label className="text-xs font-medium text-slate-400">Strategy (use_tool)</label>
+                  <Select
+                    value={formData.useTool === null ? 'auto' : formData.useTool ? 'tool' : 'provider'}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setFormData({ 
+                        ...formData, 
+                        useTool: val === 'auto' ? null : val === 'tool' ? true : false 
+                      });
+                    }}
+                    options={[
+                      { value: 'auto', label: 'Auto-detect (recommended)' },
+                      { value: 'provider', label: 'Provider Strategy (native)' },
+                      { value: 'tool', label: 'Tool Strategy (function calling)' },
+                    ]}
+                  />
+                  <p className="text-xs text-slate-500">
+                    Auto-detect lets LangChain choose the best strategy based on model capabilities. Provider uses native structured output, Tool uses function calling.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Duplicate reference name warning */}

@@ -300,6 +300,26 @@ export default function AppConfigSection() {
     return '';
   });
 
+  // Chat History state
+  const [enableChatHistory, setEnableChatHistory] = useState(!!app?.chat_history);
+  const [chatHistoryLLM, setChatHistoryLLM] = useState(() => {
+    const existingModel = app?.chat_history?.model?.name;
+    if (existingModel) {
+      const found = Object.entries(llms).find(([, llm]) => llm.name === existingModel);
+      return found ? found[0] : '';
+    }
+    return '';
+  });
+  const [chatHistoryMaxTokens, setChatHistoryMaxTokens] = useState(app?.chat_history?.max_tokens || 2048);
+  const [chatHistoryUsesTokens, setChatHistoryUsesTokens] = useState(() => {
+    // Determine initial toggle state based on existing config
+    if (app?.chat_history?.max_tokens_before_summary) return true;
+    if (app?.chat_history?.max_messages_before_summary) return false;
+    return true; // Default to tokens
+  });
+  const [chatHistoryMaxTokensBeforeSummary, setChatHistoryMaxTokensBeforeSummary] = useState(app?.chat_history?.max_tokens_before_summary || 20480);
+  const [chatHistoryMaxMessagesBeforeSummary, setChatHistoryMaxMessagesBeforeSummary] = useState(app?.chat_history?.max_messages_before_summary || 10);
+
   // Determine if there are unsaved changes
   const hasChanges = (() => {
     // Check basic form fields
@@ -779,6 +799,22 @@ export default function AppConfigSection() {
       }
     });
 
+    // Build chat_history config
+    let chatHistory: any = undefined;
+    if (enableChatHistory && chatHistoryLLM && llms[chatHistoryLLM]) {
+      chatHistory = {
+        model: llms[chatHistoryLLM],
+        max_tokens: chatHistoryMaxTokens,
+      };
+      
+      // Add threshold based on toggle selection (mutually exclusive)
+      if (chatHistoryUsesTokens) {
+        chatHistory.max_tokens_before_summary = chatHistoryMaxTokensBeforeSummary;
+      } else {
+        chatHistory.max_messages_before_summary = chatHistoryMaxMessagesBeforeSummary;
+      }
+    }
+
     updateApp({
       name: formData.name,
       description: formData.description || undefined,
@@ -796,6 +832,7 @@ export default function AppConfigSection() {
       tags: Object.keys(tags).length > 0 ? tags : undefined,
       permissions: permissions.length > 0 ? permissions : undefined,
       environment_vars: Object.keys(environmentVars).length > 0 ? environmentVars : undefined,
+      chat_history: chatHistory,
     });
   };
 
@@ -1596,6 +1633,122 @@ export default function AppConfigSection() {
             </div>
           </div>
         </div>
+      </Card>
+
+      {/* Chat History Configuration */}
+      <Card className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <Bot className="w-5 h-5 text-slate-400" />
+            <h3 className="font-medium text-white">Chat History Summarization</h3>
+          </div>
+          <label className="flex items-center space-x-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={enableChatHistory}
+              onChange={(e) => setEnableChatHistory(e.target.checked)}
+              className="rounded border-slate-600 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-900"
+            />
+            <span className="text-xs text-slate-400">Enable</span>
+          </label>
+        </div>
+        <p className="text-sm text-slate-400">
+          Configure automatic chat history summarization to manage long conversations and reduce token usage
+        </p>
+
+        {enableChatHistory && (
+          <div className="space-y-4 p-4 bg-slate-800/30 rounded-lg border border-slate-700/50">
+            <div className="grid grid-cols-2 gap-4">
+              <Select
+                label="Summary Model"
+                value={chatHistoryLLM}
+                onChange={(e) => setChatHistoryLLM(e.target.value)}
+                options={[
+                  { value: '', label: 'Select an LLM...' },
+                  ...Object.entries(llms).map(([key, llm]) => ({
+                    value: key,
+                    label: llm.name || key,
+                  })),
+                ]}
+                hint="LLM for chat history summarization"
+                required
+              />
+
+              <Input
+                label="Max Summary Tokens"
+                type="number"
+                value={chatHistoryMaxTokens}
+                onChange={(e) => setChatHistoryMaxTokens(parseInt(e.target.value) || 2048)}
+                hint="Max tokens for the summary"
+                min={1}
+              />
+            </div>
+
+            {Object.keys(llms).length === 0 && (
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 text-amber-400 text-sm">
+                No LLMs configured. Add an LLM in Resources section first.
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <label className="block text-sm font-medium text-slate-300">Trigger Threshold</label>
+              <div className="flex items-center space-x-6 mb-3">
+                <label className="flex items-center space-x-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    checked={chatHistoryUsesTokens}
+                    onChange={() => setChatHistoryUsesTokens(true)}
+                    className="text-purple-500 focus:ring-purple-500 focus:ring-offset-slate-900"
+                  />
+                  <span className="text-sm text-slate-300">By Tokens</span>
+                </label>
+                <label className="flex items-center space-x-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    checked={!chatHistoryUsesTokens}
+                    onChange={() => setChatHistoryUsesTokens(false)}
+                    className="text-purple-500 focus:ring-purple-500 focus:ring-offset-slate-900"
+                  />
+                  <span className="text-sm text-slate-300">By Messages</span>
+                </label>
+              </div>
+              
+              {chatHistoryUsesTokens ? (
+                <Input
+                  label="Max Tokens Before Summary"
+                  type="number"
+                  value={chatHistoryMaxTokensBeforeSummary}
+                  onChange={(e) => setChatHistoryMaxTokensBeforeSummary(parseInt(e.target.value) || 20480)}
+                  hint="Trigger when history exceeds this token count"
+                  min={1}
+                />
+              ) : (
+                <Input
+                  label="Max Messages Before Summary"
+                  type="number"
+                  value={chatHistoryMaxMessagesBeforeSummary}
+                  onChange={(e) => setChatHistoryMaxMessagesBeforeSummary(parseInt(e.target.value) || 10)}
+                  hint="Trigger when history exceeds this message count"
+                  min={1}
+                />
+              )}
+            </div>
+
+            <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3 text-sm text-blue-300">
+              <div className="flex items-start space-x-2">
+                <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                <div className="space-y-1">
+                  <p className="font-medium">How it works:</p>
+                  <ul className="list-disc list-inside space-y-1 text-xs text-blue-200/80">
+                    <li>When the threshold is exceeded, older messages are summarized using the selected LLM</li>
+                    <li>Recent messages (up to <strong>{chatHistoryMaxTokens}</strong> tokens) are preserved for context</li>
+                    <li>The summary replaces older messages, reducing overall token usage</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </Card>
 
       {/* Environment Variables */}

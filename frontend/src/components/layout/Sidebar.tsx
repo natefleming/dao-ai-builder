@@ -12,7 +12,8 @@ import {
   FileText,
   LayoutDashboard,
   Search,
-  UserCheck
+  UserCheck,
+  Layers
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { ActiveSection } from '@/App';
@@ -42,6 +43,7 @@ const navItems: NavItem[] = [
   { id: 'retrievers', label: 'Retrievers', icon: Search, description: 'Vector search retrievers' },
   { id: 'tools', label: 'Tools', icon: Wrench, description: 'Agent tools' },
   { id: 'guardrails', label: 'Guardrails', icon: Shield, description: 'Safety checks' },
+  { id: 'middleware', label: 'Middleware', icon: Layers, description: 'Agent middleware' },
   { id: 'memory', label: 'Memory', icon: HardDrive, description: 'Persistence & storage' },
   { id: 'prompts', label: 'Prompts', icon: FileText, description: 'MLflow prompts' },
   { id: 'agents', label: 'Agents', icon: Bot, description: 'AI agents', required: true },
@@ -86,6 +88,8 @@ export default function Sidebar({ activeSection, onSectionChange, config }: Side
         return Object.keys(config.tools || {}).length;
       case 'guardrails':
         return Object.keys(config.guardrails || {}).length;
+      case 'middleware':
+        return Object.keys(config.middleware || {}).length;
       case 'memory':
         return (config.memory?.checkpointer ? 1 : 0) + (config.memory?.store ? 1 : 0);
       case 'prompts':

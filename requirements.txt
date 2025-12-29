@@ -2,8 +2,8 @@
 flask>=3.0.0
 gunicorn>=21.0.0
 requests>=2.31.0
-python-dotenv>=1.0.0
-databricks-sdk>=0.73.0
-mlflow[databricks]>=3.6.0
-dao-ai>=0.0.36
+python-dotenv>=1.2.1
+databricks-sdk>=0.74.0
+mlflow[databricks]>=3.8.1
+dao-ai>=0.1.1
 jsonschema>=4.0.0

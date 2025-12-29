@@ -6,6 +6,7 @@ import {
   LLMModel, 
   SchemaModel, 
   GuardrailModel, 
+  MiddlewareModel,
   PromptModel, 
   VariableModel, 
   MemoryModel, 
@@ -103,6 +104,11 @@ interface ConfigState {
   addGuardrail: (refName: string, guardrail: GuardrailModel) => void;
   updateGuardrail: (refName: string, updates: Partial<GuardrailModel>) => void;
   removeGuardrail: (refName: string) => void;
+  
+  // Middleware
+  addMiddleware: (refName: string, middleware: MiddlewareModel) => void;
+  updateMiddleware: (refName: string, updates: Partial<MiddlewareModel>) => void;
+  removeMiddleware: (refName: string) => void;
   
   // Prompts
   addPrompt: (refName: string, prompt: PromptModel) => void;
@@ -799,6 +805,43 @@ export const useConfigStore = create<ConfigState>((set) => ({
         config: {
           ...state.config,
           guardrails,
+        },
+      };
+    }),
+
+  addMiddleware: (refName, middleware) =>
+    set((state) => ({
+      config: {
+        ...state.config,
+        middleware: {
+          ...state.config.middleware,
+          [refName]: middleware,
+        },
+      },
+    })),
+  
+  updateMiddleware: (name, updates) =>
+    set((state) => {
+      const middleware = { ...state.config.middleware };
+      if (middleware?.[name]) {
+        middleware[name] = { ...middleware[name], ...updates };
+      }
+      return {
+        config: {
+          ...state.config,
+          middleware,
+        },
+      };
+    }),
+  
+  removeMiddleware: (name) =>
+    set((state) => {
+      const middleware = { ...state.config.middleware };
+      delete middleware?.[name];
+      return {
+        config: {
+          ...state.config,
+          middleware,
         },
       };
     }),
