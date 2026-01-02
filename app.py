@@ -18,7 +18,9 @@ import sys
 import json
 import secrets
 import logging
+import threading
 import urllib.parse
+from datetime import datetime
 from pathlib import Path
 from functools import lru_cache
 
@@ -2892,6 +2894,8 @@ def debug_info():
 
 # Track deployment status in memory (in production, use a database or distributed cache)
 _deployment_status = {}
+# Lock to protect status updates from race conditions between cancel endpoint and deployment thread
+_deployment_status_lock = threading.Lock()
 
 @app.route('/api/deploy/validate', methods=['POST'])
 def validate_deployment():
@@ -3367,17 +3371,18 @@ def deploy_quick():
                     
                     status['steps'][0]['status'] = 'completed'
                     
-                    # Check for cancellation
-                    if status.get('cancelled'):
-                        log('info', f"Deployment {deployment_id} cancelled after validation")
-                        return
-                    
                     # Step 2: Create agent
                     # Pass credentials directly to create_agent - the updated dao_ai library
                     # now supports passing pat/client_id/client_secret/workspace_host directly
-                    status['steps'][1]['status'] = 'running'
-                    status['current_step'] = 1
-                    status['status'] = 'creating_agent'
+                    # Use lock to atomically check cancelled flag and update status
+                    with _deployment_status_lock:
+                        if status.get('cancelled'):
+                            log('info', f"Deployment {deployment_id} cancelled before agent creation")
+                            # Status already set to 'cancelled' by cancel endpoint
+                            return
+                        status['steps'][1]['status'] = 'running'
+                        status['current_step'] = 1
+                        status['status'] = 'creating_agent'
                     
                     # Monkey-patch DatabricksFunctionClient to skip Spark session initialization
                     # This is needed because the function client tries to create a Spark session
@@ -3408,21 +3413,18 @@ def deploy_quick():
                         if original_set_spark:
                             DatabricksFunctionClient.set_spark_session = original_set_spark
                             log('info', "Restored DatabricksFunctionClient.set_spark_session")
-                    # Check for cancellation - even if step completed, respect cancellation request
-                    if status.get('cancelled'):
-                        log('info', f"Deployment {deployment_id} cancelled during/after agent creation")
-                        status['steps'][1]['status'] = 'failed'
-                        status['steps'][1]['error'] = 'Cancelled by user'
-                        status['status'] = 'cancelled'
-                        status['completed_at'] = datetime.now().isoformat()
-                        return
-                    
-                    status['steps'][1]['status'] = 'completed'
-                    
                     # Step 3: Deploy agent
-                    status['steps'][2]['status'] = 'running'
-                    status['current_step'] = 2
-                    status['status'] = 'deploying'
+                    # Use lock to atomically check cancelled flag and update status
+                    with _deployment_status_lock:
+                        if status.get('cancelled'):
+                            log('info', f"Deployment {deployment_id} cancelled before deployment")
+                            # Status already set to 'cancelled' by cancel endpoint
+                            return
+                        # Mark step 1 as completed and start step 2
+                        status['steps'][1]['status'] = 'completed'
+                        status['steps'][2]['status'] = 'running'
+                        status['current_step'] = 2
+                        status['status'] = 'deploying'
                     
                     log('info', f"Deploying agent with {'PAT token' if auth_token else 'service principal'} auth for host: {auth_host}")
                     app_config.deploy_agent(
@@ -3432,24 +3434,21 @@ def deploy_quick():
                         workspace_host=auth_host,
                     )
                     # Check for cancellation - even if step completed, respect cancellation request
-                    if status.get('cancelled'):
-                        log('info', f"Deployment {deployment_id} cancelled during/after deployment")
-                        status['steps'][2]['status'] = 'failed'
-                        status['steps'][2]['error'] = 'Cancelled by user'
-                        status['status'] = 'cancelled'
+                    # Use lock to ensure consistent state
+                    with _deployment_status_lock:
+                        if status.get('cancelled'):
+                            log('info', f"Deployment {deployment_id} cancelled during/after deployment")
+                            # Status already set to 'cancelled' by cancel endpoint
+                            return
+                        
+                        status['steps'][2]['status'] = 'completed'
+                        status['status'] = 'completed'
                         status['completed_at'] = datetime.now().isoformat()
-                        return
-                    
-                    status['steps'][2]['status'] = 'completed'
-                    
-                    # Success
-                    status['status'] = 'completed'
-                    status['completed_at'] = datetime.now().isoformat()
-                    status['result'] = {
-                        'endpoint_name': app_config.app.endpoint_name,
-                        'model_name': app_config.app.registered_model.full_name,
-                        'message': 'Deployment completed successfully'
-                    }
+                        status['result'] = {
+                            'endpoint_name': app_config.app.endpoint_name,
+                            'model_name': app_config.app.registered_model.full_name,
+                            'message': 'Deployment completed successfully'
+                        }
                     
                 finally:
                     # Restore original env vars
@@ -3509,13 +3508,21 @@ def get_deployment_status(deployment_id: str):
     """Get deployment status.
     
     Returns the current status of a deployment job.
+    Uses a lock to ensure we get a consistent snapshot of the status.
     """
     status = _deployment_status.get(deployment_id)
     
     if not status:
         return jsonify({'error': 'Deployment not found'}), 404
     
-    return jsonify(status)
+    # Take a snapshot under lock to avoid reading partially updated status
+    with _deployment_status_lock:
+        status_copy = dict(status)
+        # Deep copy steps to avoid issues with nested list
+        if 'steps' in status_copy:
+            status_copy['steps'] = [dict(step) for step in status_copy['steps']]
+    
+    return jsonify(status_copy)
 
 
 @app.route('/api/deploy/list')
@@ -3539,36 +3546,51 @@ def cancel_deployment(deployment_id: str):
     """Cancel a running deployment.
     
     This sets a cancel flag that the deployment thread will check.
+    Uses a lock to prevent race conditions with the deployment thread.
     """
+    log('info', f"Cancel request received for deployment {deployment_id}")
+    
     status = _deployment_status.get(deployment_id)
     
     if not status:
+        log('warning', f"Cancel failed: deployment {deployment_id} not found")
         return jsonify({'error': 'Deployment not found'}), 404
     
-    # Only cancel if deployment is in progress
-    if status['status'] not in ['starting', 'creating_agent', 'deploying']:
-        return jsonify({
-            'error': 'Deployment cannot be cancelled',
-            'message': f"Deployment is {status['status']}"
-        }), 400
+    # Use lock to prevent race condition with deployment thread
+    with _deployment_status_lock:
+        # Re-check status under lock
+        current_status = status['status']
+        log('info', f"Current status before cancel: {current_status}")
+        
+        # Only cancel if deployment is in progress
+        if current_status not in ['starting', 'creating_agent', 'deploying']:
+            log('warning', f"Cancel failed: deployment is {current_status}")
+            return jsonify({
+                'error': 'Deployment cannot be cancelled',
+                'message': f"Deployment is {current_status}"
+            }), 400
+        
+        # Set cancelled flag atomically with status update
+        status['cancelled'] = True
+        status['status'] = 'cancelled'
+        status['completed_at'] = datetime.now().isoformat()
+        
+        # Mark current step as failed with cancellation message
+        if 'steps' in status and 'current_step' in status:
+            current = status['current_step']
+            if current < len(status['steps']):
+                status['steps'][current]['status'] = 'failed'
+                status['steps'][current]['error'] = 'Cancelled by user'
+        
+        # Return a copy of status to avoid concurrent modification during serialization
+        status_copy = dict(status)
     
-    # Set cancelled flag
-    status['cancelled'] = True
-    status['status'] = 'cancelled'
-    status['completed_at'] = datetime.now().isoformat()
-    
-    # Mark current step as failed with cancellation message
-    if 'steps' in status and 'current_step' in status:
-        current = status['current_step']
-        if current < len(status['steps']):
-            status['steps'][current]['status'] = 'failed'
-            status['steps'][current]['error'] = 'Cancelled by user'
-    
-    log('info', f"Deployment {deployment_id} cancelled by user")
+    log('info', f"Deployment {deployment_id} cancelled successfully. Status is now: {status_copy['status']}")
     
     return jsonify({
         'message': 'Deployment cancelled',
-        'deployment_id': deployment_id
+        'deployment_id': deployment_id,
+        'status': status_copy  # Include full status in response for immediate frontend update
     })
 
 

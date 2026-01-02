@@ -285,12 +285,47 @@ export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
         method: 'POST',
       });
       console.log('[DeploymentPanel] Cancel request response:', response.status);
-      // The regular polling (every 2 seconds) will detect when the backend
-      // status changes to 'cancelled' and update the UI accordingly.
-      // We don't need a separate polling loop here.
+      
+      const data = await response.json().catch(() => ({}));
+      
+      if (response.ok) {
+        // Cancel succeeded - use the status from the response directly
+        console.log('[DeploymentPanel] Cancel succeeded, status:', data.status?.status);
+        if (data.status) {
+          setDeploymentStatus(data.status as DeploymentStatus);
+        } else {
+          // Fallback: fetch the status if not included in response
+          const statusResponse = await fetch(`/api/deploy/status/${deploymentId}`);
+          if (statusResponse.ok) {
+            const status: DeploymentStatus = await statusResponse.json();
+            console.log('[DeploymentPanel] Got updated status after cancel:', status.status);
+            setDeploymentStatus(status);
+          }
+        }
+      } else {
+        // Cancel failed - check why
+        console.error('[DeploymentPanel] Cancel failed:', response.status, data);
+        
+        // If already cancelled/completed/failed, fetch current status to update UI
+        const statusResponse = await fetch(`/api/deploy/status/${deploymentId}`);
+        if (statusResponse.ok) {
+          const status: DeploymentStatus = await statusResponse.json();
+          console.log('[DeploymentPanel] Got status after cancel failure:', status.status);
+          setDeploymentStatus(status);
+        }
+      }
     } catch (err) {
       console.error('Failed to send cancel request:', err);
-      // Keep isCancelling true - the regular polling will handle it
+      // On network error, still try to fetch status to sync UI
+      try {
+        const statusResponse = await fetch(`/api/deploy/status/${deploymentId}`);
+        if (statusResponse.ok) {
+          const status: DeploymentStatus = await statusResponse.json();
+          setDeploymentStatus(status);
+        }
+      } catch {
+        // Ignore - polling will eventually sync
+      }
     }
   };
 
@@ -855,12 +890,7 @@ export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
                 disabled={!validation.valid || isDeploying || isCancelling}
                 className="min-w-[120px]"
               >
-                {isCancelling ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Cancelling...
-                  </>
-                ) : isDeploying ? (
+                {isDeploying && !isCancelling ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
                     Deploying...

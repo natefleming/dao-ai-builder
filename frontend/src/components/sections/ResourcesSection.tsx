@@ -4012,6 +4012,7 @@ interface VectorStoreFormData {
   // Configuration mode: 'use_existing' (just reference an existing index) or 'provision' (create new from source table)
   configMode: 'use_existing' | 'provision';
   // Endpoint (optional - auto-detected if not specified)
+  endpointSource: 'select' | 'manual';
   endpoint_name: string;
   endpoint_type: 'STANDARD' | 'OPTIMIZED_STORAGE';
   // Index - schema source (uses SchemaSource type defined earlier)
@@ -4073,6 +4074,7 @@ interface VectorStoreFormData {
 const defaultVectorStoreForm: VectorStoreFormData = {
   refName: '',
   configMode: 'use_existing',  // Default to simpler mode
+  endpointSource: 'select',  // Default to selecting from list
   endpoint_name: '',
   endpoint_type: 'STANDARD',
   indexSchemaSource: 'direct',
@@ -4485,6 +4487,29 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
     }
   }, [tableColumns]);
   
+  // Track if we've already done the initial endpoint source detection
+  const [initialEndpointSourceSet, setInitialEndpointSourceSet] = useState(false);
+  
+  // Update endpointSource when vsEndpoints first loads (for imports where endpoints might load after form data is set)
+  // Only run once per edit session to avoid overriding user's manual selection
+  useEffect(() => {
+    if (vsEndpoints && formData.endpoint_name && !initialEndpointSourceSet && editingKey) {
+      // Check if the endpoint exists in the loaded list
+      const endpointExists = vsEndpoints.some(ep => ep.name === formData.endpoint_name);
+      if (endpointExists && formData.endpointSource === 'manual') {
+        setFormData(prev => ({ ...prev, endpointSource: 'select' }));
+      }
+      setInitialEndpointSourceSet(true);
+    }
+  }, [vsEndpoints, formData.endpoint_name, initialEndpointSourceSet, editingKey]);
+  
+  // Reset the flag when starting a new edit or closing the form
+  useEffect(() => {
+    if (!showForm) {
+      setInitialEndpointSourceSet(false);
+    }
+  }, [showForm]);
+  
   // Vector search indexes for selected endpoint (used in "Create New" mode) - currently unused but may be useful for future enhancements
   const _vsIndexesResult = useVectorSearchIndexes(formData.endpoint_name || null);
   void _vsIndexesResult; // Suppress unused warning
@@ -4623,10 +4648,15 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
       // If source_table exists, it's provisioning mode; otherwise use_existing
       const configMode: 'use_existing' | 'provision' = vs.source_table ? 'provision' : 'use_existing';
       
+      // Check if the endpoint exists in the available endpoints list
+      const endpointName = vs.endpoint?.name || '';
+      const endpointExistsInList = endpointName && vsEndpoints?.some(ep => ep.name === endpointName);
+      
       setFormData({
         refName: key,
         configMode,
-        endpoint_name: vs.endpoint?.name || '',
+        endpointSource: endpointName && !endpointExistsInList ? 'manual' : 'select',
+        endpoint_name: endpointName,
         endpoint_type: vs.endpoint?.type || 'STANDARD',
         indexSchemaSource: indexSchemaRef ? 'reference' : 'direct',
         indexSchemaRefName: indexSchemaRef ? indexSchemaRef[0] : '',
@@ -4984,33 +5014,62 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
                 <p className="text-sm text-slate-300 font-medium">Vector Search Endpoint <span className="text-slate-500 font-normal">(Optional)</span></p>
                 <p className="text-xs text-slate-500">Auto-detected if not specified</p>
               </div>
-              <button
-                type="button"
-                onClick={() => refetchEndpoints()}
-                className="text-xs text-slate-400 hover:text-white flex items-center space-x-1"
-                disabled={endpointsLoading}
-              >
-                <RefreshCw className={`w-3 h-3 ${endpointsLoading ? 'animate-spin' : ''}`} />
-                <span>Refresh</span>
-              </button>
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setFormData({ ...formData, endpointSource: 'select' })}
+                  className={`text-xs px-2 py-1 rounded ${formData.endpointSource === 'select' ? 'bg-blue-500/30 text-blue-300' : 'text-slate-400 hover:text-white'}`}
+                >
+                  Select
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFormData({ ...formData, endpointSource: 'manual' })}
+                  className={`text-xs px-2 py-1 rounded ${formData.endpointSource === 'manual' ? 'bg-blue-500/30 text-blue-300' : 'text-slate-400 hover:text-white'}`}
+                >
+                  Manual
+                </button>
+                {formData.endpointSource === 'select' && (
+                  <button
+                    type="button"
+                    onClick={() => refetchEndpoints()}
+                    className="text-xs text-slate-400 hover:text-white flex items-center space-x-1"
+                    disabled={endpointsLoading}
+                  >
+                    <RefreshCw className={`w-3 h-3 ${endpointsLoading ? 'animate-spin' : ''}`} />
+                    <span>Refresh</span>
+                  </button>
+                )}
+              </div>
             </div>
-            <StatusSelect
-              options={endpointOptions}
-              value={formData.endpoint_name}
-              onChange={(value) => {
-                const selectedEndpoint = vsEndpoints?.find(ep => ep.name === value);
-                const detectedType = selectedEndpoint?.endpoint_type === 'OPTIMIZED_STORAGE' 
-                  ? 'OPTIMIZED_STORAGE' 
-                  : 'STANDARD';
-                
-                setFormData({ 
-                  ...formData, 
-                  endpoint_name: value,
-                  endpoint_type: value ? detectedType : formData.endpoint_type,
-                });
-              }}
-              placeholder="Select an endpoint (or leave empty for auto-detection)..."
-            />
+            
+            {formData.endpointSource === 'select' ? (
+              <StatusSelect
+                options={endpointOptions}
+                value={formData.endpoint_name}
+                onChange={(value) => {
+                  const selectedEndpoint = vsEndpoints?.find(ep => ep.name === value);
+                  const detectedType = selectedEndpoint?.endpoint_type === 'OPTIMIZED_STORAGE' 
+                    ? 'OPTIMIZED_STORAGE' 
+                    : 'STANDARD';
+                  
+                  setFormData({ 
+                    ...formData, 
+                    endpoint_name: value,
+                    endpoint_type: value ? detectedType : formData.endpoint_type,
+                  });
+                }}
+                placeholder="Select an endpoint (or leave empty for auto-detection)..."
+              />
+            ) : (
+              <Input
+                label=""
+                placeholder="Enter endpoint name..."
+                value={formData.endpoint_name}
+                onChange={(e) => setFormData({ ...formData, endpoint_name: e.target.value })}
+              />
+            )}
+            
             <Select
               label="Endpoint Type"
               value={formData.endpoint_type}
@@ -5019,8 +5078,8 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
                 { value: 'STANDARD', label: 'Standard' },
                 { value: 'OPTIMIZED_STORAGE', label: 'Optimized Storage' },
               ]}
-              hint={formData.endpoint_name ? 'Auto-detected from selected endpoint' : 'Only used if endpoint is specified'}
-              disabled={!!formData.endpoint_name}
+              hint={formData.endpointSource === 'select' && formData.endpoint_name ? 'Auto-detected from selected endpoint' : 'Only used if endpoint is specified'}
+              disabled={formData.endpointSource === 'select' && !!formData.endpoint_name}
             />
           </div>
           )}
@@ -5124,7 +5183,7 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
                 <div className="flex items-center space-x-2">
                   <button
                     type="button"
-                    onClick={() => setFormData({ ...formData, indexNameSource: 'select', index_name: '' })}
+                    onClick={() => setFormData({ ...formData, indexNameSource: 'select' })}
                     className={`px-2 py-1 text-xs rounded ${
                       formData.indexNameSource === 'select' ? 'bg-blue-500/30 text-blue-300' : 'bg-slate-700 text-slate-400'
                     }`}
