@@ -1222,7 +1222,11 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
       {Object.keys(genieRooms).length > 0 && (
         <div className="space-y-2 mb-4">
           {Object.entries(genieRooms).map(([key, room]) => (
-            <div key={key} className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700">
+            <div 
+              key={key} 
+              className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700 cursor-pointer hover:bg-slate-800/70 transition-colors"
+              onClick={() => handleEdit(key)}
+            >
               <div className="flex items-center space-x-3">
                 <MessageSquare className="w-4 h-4 text-purple-400" />
                 <div>
@@ -1239,10 +1243,10 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
                     OBO
                   </Badge>
                 )}
-                <Button variant="ghost" size="sm" onClick={() => handleEdit(key)}>
+                <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleEdit(key); }}>
                   <Edit2 className="w-4 h-4" />
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => handleDelete(key)}>
+                <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleDelete(key); }}>
                   <Trash2 className="w-4 h-4 text-red-400" />
                 </Button>
               </div>
@@ -1652,7 +1656,11 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
               ? `$${warehouseId.substring(7)}` 
               : `${warehouseId?.substring(0, 12)}...`;
             return (
-              <div key={key} className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700">
+              <div 
+                key={key} 
+                className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700 cursor-pointer hover:bg-slate-800/70 transition-colors"
+                onClick={() => handleEdit(key)}
+              >
                 <div className="flex items-center space-x-3">
                   <Database className="w-4 h-4 text-emerald-400" />
                   <div>
@@ -1669,10 +1677,10 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
                       OBO
                     </Badge>
                   )}
-                  <Button variant="ghost" size="sm" onClick={() => handleEdit(key)}>
+                  <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleEdit(key); }}>
                     <Edit2 className="w-4 h-4" />
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={() => handleDelete(key)}>
+                  <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleDelete(key); }}>
                     <Trash2 className="w-4 h-4 text-red-400" />
                   </Button>
                 </div>
@@ -2092,7 +2100,11 @@ function TablesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose
       {Object.keys(tables).length > 0 && (
         <div className="space-y-2 mb-4">
           {Object.entries(tables).map(([key, table]) => (
-            <div key={key} className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700">
+            <div 
+              key={key} 
+              className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700 cursor-pointer hover:bg-slate-800/70 transition-colors"
+              onClick={() => handleEdit(key)}
+            >
               <div className="flex items-center space-x-3">
                 <Table2 className="w-4 h-4 text-cyan-400" />
                 <div>
@@ -2127,10 +2139,10 @@ function TablesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose
                     PAT
                   </Badge>
                 )}
-                <Button variant="ghost" size="sm" onClick={() => handleEdit(key)}>
+                <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleEdit(key); }}>
                   <Edit2 className="w-4 h-4" />
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => handleDelete(key)}>
+                <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleDelete(key); }}>
                   <Trash2 className="w-4 h-4 text-red-400" />
                 </Button>
               </div>
@@ -2460,7 +2472,11 @@ function VolumesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClos
       {Object.keys(volumes).length > 0 && (
         <div className="space-y-2 mb-4">
           {Object.entries(volumes).map(([key, volume]) => (
-            <div key={key} className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700">
+            <div 
+              key={key} 
+              className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700 cursor-pointer hover:bg-slate-800/70 transition-colors"
+              onClick={() => handleEdit(key)}
+            >
               <div className="flex items-center space-x-3">
                 <FolderOpen className="w-4 h-4 text-amber-400" />
                 <div>
@@ -2477,10 +2493,10 @@ function VolumesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClos
                     OBO
                   </Badge>
                 )}
-                <Button variant="ghost" size="sm" onClick={() => handleEdit(key)}>
+                <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleEdit(key); }}>
                   <Edit2 className="w-4 h-4" />
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => handleDelete(key)}>
+                <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleDelete(key); }}>
                   <Trash2 className="w-4 h-4 text-red-400" />
                 </Button>
               </div>
@@ -2839,7 +2855,11 @@ function FunctionsPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
       {Object.keys(functions).length > 0 && (
         <div className="space-y-2 mb-4">
           {Object.entries(functions).map(([key, func]) => (
-            <div key={key} className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700">
+            <div 
+              key={key} 
+              className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700 cursor-pointer hover:bg-slate-800/70 transition-colors"
+              onClick={() => handleEdit(key)}
+            >
               <div className="flex items-center space-x-3">
                 <Code2 className="w-4 h-4 text-pink-400" />
                 <div>
@@ -2856,10 +2876,10 @@ function FunctionsPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
                     OBO
                   </Badge>
                 )}
-                <Button variant="ghost" size="sm" onClick={() => handleEdit(key)}>
+                <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleEdit(key); }}>
                   <Edit2 className="w-4 h-4" />
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => handleDelete(key)}>
+                <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleDelete(key); }}>
                   <Trash2 className="w-4 h-4 text-red-400" />
                 </Button>
               </div>
@@ -3159,7 +3179,11 @@ function ConnectionsPanel({ showForm, setShowForm, editingKey, setEditingKey, on
       {Object.keys(connections).length > 0 && (
         <div className="space-y-2 mb-4">
           {Object.entries(connections).map(([key, conn]) => (
-            <div key={key} className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700">
+            <div 
+              key={key} 
+              className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700 cursor-pointer hover:bg-slate-800/70 transition-colors"
+              onClick={() => handleEdit(key)}
+            >
               <div className="flex items-center space-x-3">
                 <Link className="w-4 h-4 text-indigo-400" />
                 <div>
@@ -3176,10 +3200,10 @@ function ConnectionsPanel({ showForm, setShowForm, editingKey, setEditingKey, on
                     OBO
                   </Badge>
                 )}
-                <Button variant="ghost" size="sm" onClick={() => handleEdit(key)}>
+                <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleEdit(key); }}>
                   <Edit2 className="w-4 h-4" />
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => handleDelete(key)}>
+                <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleDelete(key); }}>
                   <Trash2 className="w-4 h-4 text-red-400" />
                 </Button>
               </div>
@@ -3609,7 +3633,11 @@ function DatabasesPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
       {Object.keys(databases).length > 0 && (
         <div className="space-y-2 mb-4">
           {Object.entries(databases).map(([key, db]) => (
-            <div key={key} className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700">
+            <div 
+              key={key} 
+              className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700 cursor-pointer hover:bg-slate-800/70 transition-colors"
+              onClick={() => handleEdit(key)}
+            >
               <div className="flex items-center space-x-3">
                 <Server className="w-4 h-4 text-emerald-400" />
                 <div>
@@ -3627,10 +3655,10 @@ function DatabasesPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
                     OBO
                   </Badge>
                 )}
-                <Button variant="ghost" size="sm" onClick={() => handleEdit(key)}>
+                <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleEdit(key); }}>
                   <Edit2 className="w-4 h-4" />
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => handleDelete(key)}>
+                <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleDelete(key); }}>
                   <Trash2 className="w-4 h-4 text-red-400" />
                 </Button>
               </div>
@@ -3981,18 +4009,20 @@ function DatabasesPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
 // =============================================================================
 interface VectorStoreFormData {
   refName: string;
+  // Configuration mode: 'use_existing' (just reference an existing index) or 'provision' (create new from source table)
+  configMode: 'use_existing' | 'provision';
   // Endpoint (optional - auto-detected if not specified)
   endpoint_name: string;
   endpoint_type: 'STANDARD' | 'OPTIMIZED_STORAGE';
   // Index - schema source (uses SchemaSource type defined earlier)
-  // Index is optional - auto-generated from source_table name if not specified
+  // Required for 'use_existing' mode, optional (auto-generated from source_table) for 'provision' mode
   indexSchemaSource: SchemaSource;
   indexSchemaRefName: string;
   index_catalog: string;
   index_schema: string;
   indexNameSource: 'select' | 'manual';
   index_name: string;
-  // Source Table - schema source (optional for existing indexes, required for new)
+  // Source Table - schema source (required for 'provision' mode only)
   sourceSchemaSource: SchemaSource;
   sourceSchemaRefName: string;
   source_catalog: string;
@@ -4000,7 +4030,7 @@ interface VectorStoreFormData {
   source_table: string;
   // Fields
   primary_key: string;  // Optional - auto-detected from table
-  embedding_source_column: string;  // REQUIRED
+  embedding_source_column: string;  // Required for 'provision' mode only
   columns: string[];  // Optional
   doc_uri: string;  // Optional
   // Embedding model (optional - defaults to databricks-gte-large-en)
@@ -4042,6 +4072,7 @@ interface VectorStoreFormData {
 
 const defaultVectorStoreForm: VectorStoreFormData = {
   refName: '',
+  configMode: 'use_existing',  // Default to simpler mode
   endpoint_name: '',
   endpoint_type: 'STANDARD',
   indexSchemaSource: 'direct',
@@ -4588,8 +4619,13 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
         checkpointPathVolumeName = volumeName;
       }
       
+      // Determine config mode based on presence of source_table
+      // If source_table exists, it's provisioning mode; otherwise use_existing
+      const configMode: 'use_existing' | 'provision' = vs.source_table ? 'provision' : 'use_existing';
+      
       setFormData({
         refName: key,
+        configMode,
         endpoint_name: vs.endpoint?.name || '',
         endpoint_type: vs.endpoint?.type || 'STANDARD',
         indexSchemaSource: indexSchemaRef ? 'reference' : 'direct',
@@ -4639,95 +4675,114 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
     // Parse columns from input
     const columns = columnsInput.split(',').map(c => c.trim()).filter(c => c);
     
+    // Initialize model with common fields
     const vs: VectorStoreModel = {
-      // Embedding source column is required
-      embedding_source_column: formData.embedding_source_column,
-      // Optional fields
-      primary_key: formData.primary_key || undefined,
-      columns: columns.length > 0 ? columns : undefined,
-      doc_uri: formData.doc_uri || undefined,
       on_behalf_of_user: formData.on_behalf_of_user || undefined,
     };
     
     // Apply authentication configuration
     applyResourceAuth(vs, formData as any);
     
-    // Source table is optional - only add if specified
-    if (formData.source_table && formData.source_catalog && formData.source_schema) {
-      vs.source_table = {
-        schema: {
-          catalog_name: formData.source_catalog,
-          schema_name: formData.source_schema,
-        },
-        name: formData.source_table,
-      };
-    }
-    
-    // Add endpoint only if specified (optional - auto-detected if not provided)
-    if (formData.endpoint_name) {
-      vs.endpoint = {
-        name: formData.endpoint_name,
-        type: formData.endpoint_type,
-      };
-    }
-    
-    // Add index only if specified (optional - auto-generated from source_table if not provided)
-    if (formData.index_name || formData.index_catalog || formData.index_schema) {
+    if (formData.configMode === 'use_existing') {
+      // Use Existing Index mode - only index is required
       vs.index = {
         schema: {
-          catalog_name: formData.index_catalog || formData.source_catalog,
-          schema_name: formData.index_schema || formData.source_schema,
+          catalog_name: formData.index_catalog,
+          schema_name: formData.index_schema,
         },
-        name: formData.index_name || `${formData.source_table}_index`,
+        name: formData.index_name,
       };
-    }
-    
-    // Add embedding model if specified
-    if (formData.embedding_model) {
-      vs.embedding_model = { name: formData.embedding_model };
-    }
-    
-    // Add optional path fields as VolumePathModel
-    if (formData.sourcePathEnabled && formData.sourcePathVolumeName) {
-      const sourcePathModel: any = {
-        volume: {
-          // If using a configured schema reference, include it for YAML generation
-          ...(formData.sourcePathSchemaSource === 'reference' && formData.sourcePathSchemaRef
-            ? { _schemaRef: formData.sourcePathSchemaRef }
-            : { schema: {
-                catalog_name: formData.sourcePathVolumeCatalog,
-                schema_name: formData.sourcePathVolumeSchema,
-              }
-            }
-          ),
-          name: formData.sourcePathVolumeName,
-        },
-      };
-      if (formData.sourcePathPath) {
-        sourcePathModel.path = formData.sourcePathPath;
+      // Optional fields for use_existing mode
+      if (formData.primary_key) {
+        vs.primary_key = formData.primary_key;
       }
-      vs.source_path = sourcePathModel;
-    }
-    
-    if (formData.checkpointPathEnabled && formData.checkpointPathVolumeName) {
-      const checkpointPathModel: any = {
-        volume: {
-          // If using a configured schema reference, include it for YAML generation
-          ...(formData.checkpointPathSchemaSource === 'reference' && formData.checkpointPathSchemaRef
-            ? { _schemaRef: formData.checkpointPathSchemaRef }
-            : { schema: {
-                catalog_name: formData.checkpointPathVolumeCatalog,
-                schema_name: formData.checkpointPathVolumeSchema,
-              }
-            }
-          ),
-          name: formData.checkpointPathVolumeName,
-        },
-      };
-      if (formData.checkpointPathPath) {
-        checkpointPathModel.path = formData.checkpointPathPath;
+      if (columns.length > 0) {
+        vs.columns = columns;
       }
-      vs.checkpoint_path = checkpointPathModel;
+    } else {
+      // Provision mode - source_table and embedding_source_column are required
+      vs.embedding_source_column = formData.embedding_source_column;
+      vs.primary_key = formData.primary_key || undefined;
+      vs.columns = columns.length > 0 ? columns : undefined;
+      vs.doc_uri = formData.doc_uri || undefined;
+      
+      // Source table is required for provisioning
+      if (formData.source_table && formData.source_catalog && formData.source_schema) {
+        vs.source_table = {
+          schema: {
+            catalog_name: formData.source_catalog,
+            schema_name: formData.source_schema,
+          },
+          name: formData.source_table,
+        };
+      }
+      
+      // Add endpoint only if specified (optional - auto-detected if not provided)
+      if (formData.endpoint_name) {
+        vs.endpoint = {
+          name: formData.endpoint_name,
+          type: formData.endpoint_type,
+        };
+      }
+      
+      // Add index only if specified (optional - auto-generated from source_table if not provided)
+      if (formData.index_name || formData.index_catalog || formData.index_schema) {
+        vs.index = {
+          schema: {
+            catalog_name: formData.index_catalog || formData.source_catalog,
+            schema_name: formData.index_schema || formData.source_schema,
+          },
+          name: formData.index_name || `${formData.source_table}_index`,
+        };
+      }
+      
+      // Add embedding model if specified
+      if (formData.embedding_model) {
+        vs.embedding_model = { name: formData.embedding_model };
+      }
+    
+      // Add optional path fields as VolumePathModel (provision mode only)
+      if (formData.sourcePathEnabled && formData.sourcePathVolumeName) {
+        const sourcePathModel: any = {
+          volume: {
+            // If using a configured schema reference, include it for YAML generation
+            ...(formData.sourcePathSchemaSource === 'reference' && formData.sourcePathSchemaRef
+              ? { _schemaRef: formData.sourcePathSchemaRef }
+              : { schema: {
+                  catalog_name: formData.sourcePathVolumeCatalog,
+                  schema_name: formData.sourcePathVolumeSchema,
+                }
+              }
+            ),
+            name: formData.sourcePathVolumeName,
+          },
+        };
+        if (formData.sourcePathPath) {
+          sourcePathModel.path = formData.sourcePathPath;
+        }
+        vs.source_path = sourcePathModel;
+      }
+      
+      if (formData.checkpointPathEnabled && formData.checkpointPathVolumeName) {
+        const checkpointPathModel: any = {
+          volume: {
+            // If using a configured schema reference, include it for YAML generation
+            ...(formData.checkpointPathSchemaSource === 'reference' && formData.checkpointPathSchemaRef
+              ? { _schemaRef: formData.checkpointPathSchemaRef }
+              : { schema: {
+                  catalog_name: formData.checkpointPathVolumeCatalog,
+                  schema_name: formData.checkpointPathVolumeSchema,
+                }
+              }
+            ),
+            name: formData.checkpointPathVolumeName,
+          },
+        };
+        if (formData.checkpointPathPath) {
+          checkpointPathModel.path = formData.checkpointPathPath;
+        }
+        vs.checkpoint_path = checkpointPathModel;
+      }
     }
     
     if (editingKey) {
@@ -4806,7 +4861,11 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
       {Object.keys(vectorStores).length > 0 && (
         <div className="space-y-2 mb-4">
           {Object.entries(vectorStores).map(([key, vs]) => (
-            <div key={key} className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700">
+            <div 
+              key={key} 
+              className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700 cursor-pointer hover:bg-slate-800/70 transition-colors"
+              onClick={() => handleEdit(key)}
+            >
               <div className="flex items-center space-x-3">
                 <Layers className="w-4 h-4 text-violet-400" />
                 <div>
@@ -4841,10 +4900,10 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
                     PAT
                   </Badge>
                 )}
-                <Button variant="ghost" size="sm" onClick={() => handleEdit(key)}>
+                <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleEdit(key); }}>
                   <Edit2 className="w-4 h-4" />
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => handleDelete(key)}>
+                <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleDelete(key); }}>
                   <Trash2 className="w-4 h-4 text-red-400" />
                 </Button>
               </div>
@@ -4871,7 +4930,54 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
             required
           />
           
-          {/* Vector Search Endpoint (Optional) */}
+          {/* Configuration Mode Toggle */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium text-slate-300">Configuration Mode</label>
+              <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setFormData({ 
+                    ...formData, 
+                    configMode: 'use_existing',
+                    // Don't clear fields - just switch mode, preserving values
+                  })}
+                  className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${
+                    formData.configMode === 'use_existing'
+                      ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                      : 'text-slate-400 border border-transparent hover:text-slate-300'
+                  }`}
+                >
+                  Use Existing
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFormData({ 
+                    ...formData, 
+                    configMode: 'provision',
+                    // Set default embedding model if not already set
+                    embedding_model: formData.embedding_model || 'databricks-gte-large-en',
+                  })}
+                  className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${
+                    formData.configMode === 'provision'
+                      ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                      : 'text-slate-400 border border-transparent hover:text-slate-300'
+                  }`}
+                >
+                  Provision New
+                </button>
+              </div>
+            </div>
+            <p className="text-xs text-slate-500">
+              {formData.configMode === 'use_existing' 
+                ? 'Reference an existing vector search index'
+                : 'Create a new index from a source table'
+              }
+            </p>
+          </div>
+          
+          {/* Vector Search Endpoint (Optional - only for provision mode) */}
+          {formData.configMode === 'provision' && (
           <div className="space-y-3 p-3 bg-slate-900/50 rounded border border-slate-600">
             <div className="flex items-center justify-between">
               <div>
@@ -4917,6 +5023,23 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
               disabled={!!formData.endpoint_name}
             />
           </div>
+          )}
+          
+          {/* Index Configuration - Required for use_existing, Optional for provision */}
+          <div className="space-y-3 p-3 bg-slate-900/50 rounded border border-slate-600">
+            <div>
+              <p className="text-sm text-slate-300 font-medium">
+                Vector Search Index 
+                {formData.configMode === 'use_existing' && <span className="text-red-400 font-normal ml-1">(Required)</span>}
+                {formData.configMode === 'provision' && <span className="text-slate-500 font-normal ml-1">(Optional - auto-generated)</span>}
+              </p>
+              <p className="text-xs text-slate-500">
+                {formData.configMode === 'use_existing' 
+                  ? 'Select the existing vector search index to use'
+                  : 'Optionally specify a custom index name, or leave empty to auto-generate from source table'
+                }
+              </p>
+            </div>
             
             {/* Schema Source Toggle */}
             <div className="space-y-2">
@@ -5047,11 +5170,15 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
                 />
               )}
             </div>
-            
-            {/* Source Table - REQUIRED for new indexes */}
+          </div>
+          
+          {/* Provisioning-specific fields - only shown in provision mode */}
+          {formData.configMode === 'provision' && (
+            <>
+            {/* Source Table - REQUIRED for provisioning */}
             <div className="space-y-3 p-3 bg-slate-900/50 rounded border border-slate-600">
               <div>
-                <p className="text-sm text-slate-300 font-medium">Source Table <span className="text-red-400 font-normal">(Required for new index)</span></p>
+                <p className="text-sm text-slate-300 font-medium">Source Table <span className="text-red-400 font-normal">(Required)</span></p>
                 <p className="text-xs text-slate-500">The table containing data to be indexed</p>
               </div>
             
@@ -5199,10 +5326,87 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
                   disabled={columnsLoading}
                 >
                   <RefreshCw className={`w-3 h-3 ${columnsLoading ? 'animate-spin' : ''}`} />
-                  <span>Refresh</span>
+                  <span>Refresh Columns</span>
                 </button>
               )}
             </div>
+            
+            {/* Columns to Sync - grouped with Source Table */}
+            {formData.source_table && (
+              <div className="space-y-2 mt-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-slate-300 font-medium">Columns to Sync</p>
+                    <p className="text-xs text-slate-500">Select columns to include in the vector index</p>
+                  </div>
+                  {columnsLoading && (
+                    <span className="text-xs text-slate-400 flex items-center space-x-1">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      <span>Loading...</span>
+                    </span>
+                  )}
+                </div>
+                {columnOptions.length > 0 ? (
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto p-2 bg-slate-800/50 rounded border border-slate-700">
+                      {columnOptions.map((col) => {
+                        const isSelected = columnsInput.split(',').map(c => c.trim()).includes(col.value);
+                        return (
+                          <button
+                            key={col.value}
+                            type="button"
+                            onClick={() => {
+                              const currentCols = columnsInput.split(',').map(c => c.trim()).filter(c => c);
+                              if (isSelected) {
+                                setColumnsInput(currentCols.filter(c => c !== col.value).join(', '));
+                              } else {
+                                setColumnsInput([...currentCols, col.value].join(', '));
+                              }
+                            }}
+                            className={`px-2 py-1 text-xs rounded transition-colors ${
+                              isSelected 
+                                ? 'bg-blue-500/30 text-blue-300 border border-blue-500/50' 
+                                : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
+                            }`}
+                          >
+                            {col.value}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs text-slate-500">
+                        Selected: {columnsInput.split(',').filter(c => c.trim()).length || 0} of {columnOptions.length}
+                      </p>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setColumnsInput(columnOptions.map(c => c.value).join(', '))}
+                          className="text-xs text-blue-400 hover:text-blue-300"
+                        >
+                          Select All
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setColumnsInput('')}
+                          className="text-xs text-slate-400 hover:text-slate-300"
+                        >
+                          Clear All
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <Input
+                    label=""
+                    value={columnsInput}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setColumnsInput(e.target.value)}
+                    placeholder="id, name, description, category"
+                    hint="Enter comma-separated column names"
+                  />
+                )}
+              </div>
+            )}
           </div>
           
           {/* Embedding and Column Configuration */}
@@ -5247,52 +5451,6 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
             />
           </div>
           
-          {/* Columns to Include */}
-          <div className="space-y-3 p-3 bg-slate-900/50 rounded border border-slate-600">
-            <p className="text-sm text-slate-300 font-medium">Columns to Include</p>
-            {formData.source_table && columnOptions.length > 0 ? (
-              <div className="space-y-2">
-                <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto p-2 bg-slate-800/50 rounded border border-slate-700">
-                  {columnOptions.map((col) => {
-                    const isSelected = columnsInput.split(',').map(c => c.trim()).includes(col.value);
-                    return (
-                      <button
-                        key={col.value}
-                        type="button"
-                        onClick={() => {
-                          const currentCols = columnsInput.split(',').map(c => c.trim()).filter(c => c);
-                          if (isSelected) {
-                            setColumnsInput(currentCols.filter(c => c !== col.value).join(', '));
-                          } else {
-                            setColumnsInput([...currentCols, col.value].join(', '));
-                          }
-                        }}
-                        className={`px-2 py-1 text-xs rounded transition-colors ${
-                          isSelected 
-                            ? 'bg-blue-500/30 text-blue-300 border border-blue-500/50' 
-                            : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
-                        }`}
-                      >
-                        {col.value}
-                      </button>
-                    );
-                  })}
-                </div>
-                <p className="text-xs text-slate-500">
-                  Click columns to select/deselect. Selected: {columnsInput.split(',').filter(c => c.trim()).length || 0}
-                </p>
-              </div>
-            ) : (
-              <Input
-                label=""
-                value={columnsInput}
-                onChange={(e: ChangeEvent<HTMLInputElement>) => setColumnsInput(e.target.value)}
-                placeholder="id, name, description, category"
-                hint="Select a table to see available columns, or enter comma-separated column names"
-              />
-            )}
-          </div>
-          
           <Select
             label="Document URI Column (Optional)"
             value={formData.doc_uri}
@@ -5319,8 +5477,10 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
             checkpointPathVolumes={checkpointPathVolumes}
             checkpointPathVolumesLoading={checkpointPathVolumesLoading}
           />
+          </>
+          )}
           
-          {/* Authentication Section */}
+          {/* Authentication Section - applies to both modes */}
           <ResourceAuthSection
             formData={formData}
             setFormData={setFormData as any}
@@ -5340,7 +5500,15 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
             <Button variant="secondary" onClick={onClose}>Cancel</Button>
             <Button 
               onClick={handleSave} 
-              disabled={!formData.refName || !formData.embedding_source_column || isRefNameDuplicate(formData.refName, config, editingKey)}
+              disabled={
+                !formData.refName || 
+                isRefNameDuplicate(formData.refName, config, editingKey) ||
+                // Mode-specific validation
+                (formData.configMode === 'use_existing' 
+                  ? !formData.index_name || !formData.index_catalog || !formData.index_schema
+                  : !formData.source_table || !formData.embedding_source_column
+                )
+              }
             >
               {editingKey ? 'Update' : 'Add'}
             </Button>

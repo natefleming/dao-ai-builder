@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   Rocket, 
   CheckCircle2, 
@@ -92,10 +92,12 @@ export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
     deploymentId,
     deploymentStatus,
     isDeploying,
+    isCancelling,
     startDeployment,
     setDeploymentId,
     setDeploymentStatus,
     failDeployment,
+    setCancelling,
     reset: resetDeployment,
     canStartNewDeployment,
   } = useDeploymentStore();
@@ -103,6 +105,32 @@ export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [isValidating, setIsValidating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  // Track the deployment ID being cancelled to prevent stale polling
+  const cancellingDeploymentIdRef = useRef<string | null>(null);
+  
+  // Track if component is mounted for async operations
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
+  }, []);
+  
+  // Log initial state on mount for debugging
+  useEffect(() => {
+    console.log('[DeploymentPanel] Component mounted with state:', {
+      isDeploying,
+      isCancelling,
+      deploymentId,
+      deploymentStatus: deploymentStatus?.status,
+    });
+    
+    // If we have a stuck cancelling state on mount, the regular polling will handle it.
+    // Just set the ref so we track it properly.
+    if (isCancelling && deploymentId) {
+      cancellingDeploymentIdRef.current = deploymentId;
+    }
+  }, []); // Only run on mount
   
   // Use shared credential store (persisted and shared with ChatPanel)
   const {
@@ -196,14 +224,24 @@ export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
 
   // Poll for deployment status
   useEffect(() => {
-    if (!deploymentId) return;
+    if (!deploymentId) {
+      console.log('[DeploymentPanel] Polling not started - no deploymentId');
+      return;
+    }
+    
+    console.log('[DeploymentPanel] Starting polling for deployment:', deploymentId);
     
     const pollStatus = async () => {
+      console.log('[DeploymentPanel] Polling status for:', deploymentId);
       try {
         const response = await fetch(`/api/deploy/status/${deploymentId}`);
-        if (!response.ok) return;
+        if (!response.ok) {
+          console.log('[DeploymentPanel] Poll failed - not OK:', response.status);
+          return;
+        }
         
         const status: DeploymentStatus = await response.json();
+        console.log('[DeploymentPanel] Got status from backend:', status.status, 'id:', status.id);
         setDeploymentStatus(status);
       } catch (err) {
         console.error('Failed to poll deployment status:', err);
@@ -216,14 +254,57 @@ export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
     // Then poll every 2 seconds while deployment is active
     const interval = setInterval(pollStatus, 2000);
     
-    return () => clearInterval(interval);
+    return () => {
+      console.log('[DeploymentPanel] Cleaning up polling for:', deploymentId);
+      clearInterval(interval);
+    };
   }, [deploymentId, setDeploymentStatus]);
 
+  const handleCancel = async () => {
+    console.log('[DeploymentPanel] handleCancel called:', {
+      deploymentId,
+      isCancelling,
+    });
+    
+    if (!deploymentId || isCancelling) {
+      console.log('[DeploymentPanel] handleCancel early return - no deploymentId or already cancelling');
+      return;
+    }
+    
+    // Track which deployment we're cancelling
+    cancellingDeploymentIdRef.current = deploymentId;
+    
+    // Set cancelling state immediately for UI feedback
+    console.log('[DeploymentPanel] Setting cancelling state...');
+    setCancelling();
+    
+    try {
+      // Send cancel request to backend
+      console.log('[DeploymentPanel] Sending cancel request to backend...');
+      const response = await fetch(`/api/deploy/cancel/${deploymentId}`, {
+        method: 'POST',
+      });
+      console.log('[DeploymentPanel] Cancel request response:', response.status);
+      // The regular polling (every 2 seconds) will detect when the backend
+      // status changes to 'cancelled' and update the UI accordingly.
+      // We don't need a separate polling loop here.
+    } catch (err) {
+      console.error('Failed to send cancel request:', err);
+      // Keep isCancelling true - the regular polling will handle it
+    }
+  };
+
   const handleDeploy = async () => {
-    if (!validation?.valid) return;
+    console.log('[DeploymentPanel] handleDeploy called');
+    
+    if (!validation?.valid) {
+      console.log('[DeploymentPanel] handleDeploy - validation not valid');
+      return;
+    }
     
     // Check if we can start a new deployment
     if (!canStartNewDeployment()) {
+      console.log('[DeploymentPanel] handleDeploy - cannot start new deployment');
       setError('A deployment is already in progress. Please wait for it to complete.');
       return;
     }
@@ -315,6 +396,10 @@ export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
         return <Badge variant="success">Completed</Badge>;
       case 'failed':
         return <Badge variant="danger">Failed</Badge>;
+      case 'cancelled':
+        return <Badge variant="warning">Cancelled</Badge>;
+      case 'cancelling':
+        return <Badge variant="warning">Cancelling...</Badge>;
       case 'creating_agent':
         return <Badge variant="info">Creating Agent...</Badge>;
       case 'deploying':
@@ -578,7 +663,7 @@ export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
                   <h4 className="text-xs font-medium text-slate-400 uppercase tracking-wide">
                     Deployment Progress
                   </h4>
-                  {isDeploying && (
+                  {isDeploying && !isCancelling && deploymentStatus.status !== 'cancelled' && (
                     <span className="text-[10px] text-blue-400 bg-blue-500/20 px-2 py-0.5 rounded">
                       Running in background
                     </span>
@@ -589,38 +674,50 @@ export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
               
               {/* Steps */}
               <div className="space-y-2">
-                {deploymentStatus.steps.map((step) => (
-                  <div 
-                    key={step.name}
-                    className={`flex items-center gap-3 p-3 rounded-lg border ${
-                      step.status === 'running' 
-                        ? 'bg-blue-950/30 border-blue-800' 
-                        : step.status === 'completed'
-                        ? 'bg-green-950/20 border-green-900'
-                        : step.status === 'failed'
-                        ? 'bg-red-950/20 border-red-900'
-                        : 'bg-slate-800/30 border-slate-700'
-                    }`}
-                  >
-                    <div className={`p-1.5 rounded-lg ${
-                      step.status === 'running' ? 'bg-blue-500/20' :
-                      step.status === 'completed' ? 'bg-green-500/20' :
-                      step.status === 'failed' ? 'bg-red-500/20' :
-                      'bg-slate-700'
-                    }`}>
-                      {stepIcons[step.name] || <Settings className="w-4 h-4" />}
+                {deploymentStatus.steps.map((step) => {
+                  // Compute effective status - if deployment is cancelled/cancelling, 
+                  // show running steps as cancelled
+                  const isCancelledOrCancelling = deploymentStatus.status === 'cancelled' || deploymentStatus.status === 'cancelling';
+                  const effectiveStatus = (step.status === 'running' && isCancelledOrCancelling) 
+                    ? 'failed' 
+                    : step.status;
+                  const effectiveError = (step.status === 'running' && isCancelledOrCancelling)
+                    ? 'Cancelled by user'
+                    : step.error;
+                  
+                  return (
+                    <div 
+                      key={step.name}
+                      className={`flex items-center gap-3 p-3 rounded-lg border ${
+                        effectiveStatus === 'running' 
+                          ? 'bg-blue-950/30 border-blue-800' 
+                          : effectiveStatus === 'completed'
+                          ? 'bg-green-950/20 border-green-900'
+                          : effectiveStatus === 'failed'
+                          ? 'bg-red-950/20 border-red-900'
+                          : 'bg-slate-800/30 border-slate-700'
+                      }`}
+                    >
+                      <div className={`p-1.5 rounded-lg ${
+                        effectiveStatus === 'running' ? 'bg-blue-500/20' :
+                        effectiveStatus === 'completed' ? 'bg-green-500/20' :
+                        effectiveStatus === 'failed' ? 'bg-red-500/20' :
+                        'bg-slate-700'
+                      }`}>
+                        {stepIcons[step.name] || <Settings className="w-4 h-4" />}
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm text-slate-200">
+                          {stepLabels[step.name] || step.name}
+                        </p>
+                        {effectiveError && (
+                          <p className="text-xs text-red-400 mt-1">{effectiveError}</p>
+                        )}
+                      </div>
+                      {getStatusIcon(effectiveStatus)}
                     </div>
-                    <div className="flex-1">
-                      <p className="text-sm text-slate-200">
-                        {stepLabels[step.name] || step.name}
-                      </p>
-                      {step.error && (
-                        <p className="text-xs text-red-400 mt-1">{step.error}</p>
-                      )}
-                    </div>
-                    {getStatusIcon(step.status)}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
               {/* Success Result */}
@@ -667,6 +764,17 @@ export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
                   )}
                 </div>
               )}
+
+              {/* Cancelled */}
+              {deploymentStatus.status === 'cancelled' && (
+                <div className="p-4 bg-amber-950/30 border border-amber-800 rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="w-5 h-5 text-amber-400" />
+                    <span className="font-medium text-amber-300">Deployment Cancelled</span>
+                  </div>
+                  <p className="text-sm text-slate-400 mt-2">The deployment was cancelled by the user.</p>
+                </div>
+              )}
             </div>
           )}
 
@@ -682,34 +790,77 @@ export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
 
           {/* Actions */}
           <div className="flex items-center justify-between pt-4 border-t border-slate-700">
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" onClick={validateConfig} disabled={isValidating || isDeploying}>
-                <RefreshCw className={`w-4 h-4 ${isValidating ? 'animate-spin' : ''}`} />
-                Revalidate
-              </Button>
-              
-              {/* Show "New Deployment" button when deployment is complete or failed */}
-              {(deploymentStatus?.status === 'completed' || deploymentStatus?.status === 'failed') && (
-                <Button variant="ghost" onClick={resetDeployment}>
-                  <Rocket className="w-4 h-4" />
-                  New Deployment
+            <div className="flex items-center gap-3">
+              {/* Only show Revalidate when not deploying */}
+              {!isDeploying && !isCancelling && (
+                <Button variant="secondary" onClick={validateConfig} disabled={isValidating} className="min-w-[120px]">
+                  <RefreshCw className={`w-4 h-4 ${isValidating ? 'animate-spin' : ''}`} />
+                  Revalidate
                 </Button>
               )}
             </div>
             
             <div className="flex items-center gap-3">
+              {/* Show Cancel button when deployment is in progress */}
+              {(isDeploying || isCancelling) && (
+                <Button 
+                  variant="secondary" 
+                  onClick={handleCancel} 
+                  disabled={isCancelling}
+                  className="min-w-[120px]"
+                >
+                  {isCancelling ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Cancelling...
+                    </>
+                  ) : (
+                    <>
+                      <XCircle className="w-4 h-4" />
+                      Cancel
+                    </>
+                  )}
+                </Button>
+              )}
+              
               {onClose && (
-                <Button variant="secondary" onClick={onClose}>
-                  {isDeploying ? 'Close (continues in background)' : 'Close'}
+                <Button variant="secondary" onClick={onClose} className="min-w-[120px]">
+                  Close
                 </Button>
               )}
               
               <Button
                 variant="primary"
-                onClick={handleDeploy}
-                disabled={!validation.valid || isDeploying || !canStartNewDeployment()}
+                onClick={async () => {
+                  console.log('[DeploymentPanel] Primary button clicked:', {
+                    status: deploymentStatus?.status,
+                    isDeploying,
+                    isCancelling,
+                    deploymentId,
+                  });
+                  if (deploymentStatus?.status === 'completed') {
+                    console.log('[DeploymentPanel] Closing dialog (completed)');
+                    onClose?.();
+                  } else if (deploymentStatus?.status === 'failed' || deploymentStatus?.status === 'cancelled') {
+                    console.log('[DeploymentPanel] Resetting deployment state');
+                    // Clear any pending cancellation polling
+                    cancellingDeploymentIdRef.current = null;
+                    // Reset state so user can deploy again
+                    resetDeployment();
+                  } else {
+                    console.log('[DeploymentPanel] Starting new deployment');
+                    handleDeploy();
+                  }
+                }}
+                disabled={!validation.valid || isDeploying || isCancelling}
+                className="min-w-[120px]"
               >
-                {isDeploying ? (
+                {isCancelling ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Cancelling...
+                  </>
+                ) : isDeploying ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
                     Deploying...
@@ -717,7 +868,12 @@ export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
                 ) : deploymentStatus?.status === 'completed' ? (
                   <>
                     <CheckCircle2 className="w-4 h-4" />
-                    Deployed
+                    Done
+                  </>
+                ) : deploymentStatus?.status === 'failed' || deploymentStatus?.status === 'cancelled' ? (
+                  <>
+                    <RefreshCw className="w-4 h-4" />
+                    Try Again
                   </>
                 ) : (
                   <>

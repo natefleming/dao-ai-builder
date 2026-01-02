@@ -3367,6 +3367,11 @@ def deploy_quick():
                     
                     status['steps'][0]['status'] = 'completed'
                     
+                    # Check for cancellation
+                    if status.get('cancelled'):
+                        log('info', f"Deployment {deployment_id} cancelled after validation")
+                        return
+                    
                     # Step 2: Create agent
                     # Pass credentials directly to create_agent - the updated dao_ai library
                     # now supports passing pat/client_id/client_secret/workspace_host directly
@@ -3403,6 +3408,15 @@ def deploy_quick():
                         if original_set_spark:
                             DatabricksFunctionClient.set_spark_session = original_set_spark
                             log('info', "Restored DatabricksFunctionClient.set_spark_session")
+                    # Check for cancellation - even if step completed, respect cancellation request
+                    if status.get('cancelled'):
+                        log('info', f"Deployment {deployment_id} cancelled during/after agent creation")
+                        status['steps'][1]['status'] = 'failed'
+                        status['steps'][1]['error'] = 'Cancelled by user'
+                        status['status'] = 'cancelled'
+                        status['completed_at'] = datetime.now().isoformat()
+                        return
+                    
                     status['steps'][1]['status'] = 'completed'
                     
                     # Step 3: Deploy agent
@@ -3417,6 +3431,15 @@ def deploy_quick():
                         client_secret=sp_client_secret,
                         workspace_host=auth_host,
                     )
+                    # Check for cancellation - even if step completed, respect cancellation request
+                    if status.get('cancelled'):
+                        log('info', f"Deployment {deployment_id} cancelled during/after deployment")
+                        status['steps'][2]['status'] = 'failed'
+                        status['steps'][2]['error'] = 'Cancelled by user'
+                        status['status'] = 'cancelled'
+                        status['completed_at'] = datetime.now().isoformat()
+                        return
+                    
                     status['steps'][2]['status'] = 'completed'
                     
                     # Success
@@ -3508,6 +3531,44 @@ def list_deployments():
     return jsonify({
         'deployments': deployments,
         'count': len(deployments)
+    })
+
+
+@app.route('/api/deploy/cancel/<deployment_id>', methods=['POST'])
+def cancel_deployment(deployment_id: str):
+    """Cancel a running deployment.
+    
+    This sets a cancel flag that the deployment thread will check.
+    """
+    status = _deployment_status.get(deployment_id)
+    
+    if not status:
+        return jsonify({'error': 'Deployment not found'}), 404
+    
+    # Only cancel if deployment is in progress
+    if status['status'] not in ['starting', 'creating_agent', 'deploying']:
+        return jsonify({
+            'error': 'Deployment cannot be cancelled',
+            'message': f"Deployment is {status['status']}"
+        }), 400
+    
+    # Set cancelled flag
+    status['cancelled'] = True
+    status['status'] = 'cancelled'
+    status['completed_at'] = datetime.now().isoformat()
+    
+    # Mark current step as failed with cancellation message
+    if 'steps' in status and 'current_step' in status:
+        current = status['current_step']
+        if current < len(status['steps']):
+            status['steps'][current]['status'] = 'failed'
+            status['steps'][current]['error'] = 'Cancelled by user'
+    
+    log('info', f"Deployment {deployment_id} cancelled by user")
+    
+    return jsonify({
+        'message': 'Deployment cancelled',
+        'deployment_id': deployment_id
     })
 
 

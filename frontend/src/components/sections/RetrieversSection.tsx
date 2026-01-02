@@ -307,9 +307,12 @@ export default function RetrieversSection() {
     setFormData(prev => {
       const newData = { ...prev, vectorStoreRef: value };
       
-      // Auto-populate columns from vector store if empty
-      if (!prev.columns && vectorStores[value]?.columns) {
+      // Auto-select ALL columns from vector store when changing selection
+      if (vectorStores[value]?.columns) {
         newData.columns = vectorStores[value].columns.join(', ');
+      } else {
+        // Clear columns if new vector store has no columns defined
+        newData.columns = '';
       }
       
       // Generate refName if empty
@@ -549,14 +552,91 @@ export default function RetrieversSection() {
               />
             </div>
 
-            <Input
-              label="Return Columns"
-              name="columns"
-              value={formData.columns}
-              onChange={handleChange}
-              placeholder="product_id, name, description"
-              hint="Comma-separated list of columns to return in search results"
-            />
+            {/* Return Columns - selectable from vector store columns */}
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-slate-300">Return Columns</label>
+              {(() => {
+                const selectedVs = formData.vectorStoreRef ? vectorStores[formData.vectorStoreRef] : null;
+                const availableColumns = selectedVs?.columns || [];
+                
+                if (availableColumns.length > 0) {
+                  return (
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto p-2 bg-slate-800/50 rounded border border-slate-700">
+                        {availableColumns.map((col: string) => {
+                          const selectedCols = formData.columns.split(',').map(c => c.trim()).filter(c => c);
+                          const isSelected = selectedCols.includes(col);
+                          return (
+                            <button
+                              key={col}
+                              type="button"
+                              onClick={() => {
+                                const currentCols = formData.columns.split(',').map(c => c.trim()).filter(c => c);
+                                if (isSelected) {
+                                  setFormData(prev => ({
+                                    ...prev,
+                                    columns: currentCols.filter(c => c !== col).join(', ')
+                                  }));
+                                } else {
+                                  setFormData(prev => ({
+                                    ...prev,
+                                    columns: [...currentCols, col].join(', ')
+                                  }));
+                                }
+                              }}
+                              className={`px-2 py-1 text-xs rounded transition-colors ${
+                                isSelected 
+                                  ? 'bg-blue-500/30 text-blue-300 border border-blue-500/50' 
+                                  : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
+                              }`}
+                            >
+                              {col}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-slate-500">
+                          Click columns to select/deselect. Selected: {formData.columns.split(',').filter(c => c.trim()).length || 0}
+                        </p>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setFormData(prev => ({
+                              ...prev,
+                              columns: availableColumns.join(', ')
+                            }))}
+                            className="text-xs text-blue-400 hover:text-blue-300"
+                          >
+                            Select All
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setFormData(prev => ({ ...prev, columns: '' }))}
+                            className="text-xs text-slate-400 hover:text-slate-300"
+                          >
+                            Clear All
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                } else {
+                  return (
+                    <Input
+                      name="columns"
+                      value={formData.columns}
+                      onChange={handleChange}
+                      placeholder="product_id, name, description"
+                      hint={formData.vectorStoreRef 
+                        ? "Vector store has no columns defined. Enter comma-separated column names."
+                        : "Select a vector store to see available columns, or enter comma-separated column names"
+                      }
+                    />
+                  );
+                }
+              })()}
+            </div>
           </div>
 
           {/* Search Parameters */}

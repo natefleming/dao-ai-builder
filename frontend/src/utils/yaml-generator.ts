@@ -1317,13 +1317,14 @@ export function generateYAML(config: AppConfig): string {
         }
         
         yamlConfig.resources.vector_stores[key] = {
-          // Required fields
-          ...(sourceTable && { source_table: sourceTable }),
-          embedding_source_column: vs.embedding_source_column,
-          // Optional fields - only include if specified
-          ...(embeddingModel && { embedding_model: embeddingModel }),
+          // Index is always included (required for both modes)
           ...(index && { index: index }),
+          // Provisioning mode fields - only include if specified
+          ...(sourceTable && { source_table: sourceTable }),
+          ...(vs.embedding_source_column && { embedding_source_column: vs.embedding_source_column }),
+          ...(embeddingModel && { embedding_model: embeddingModel }),
           ...(vs.endpoint && vs.endpoint.name && { endpoint: vs.endpoint }),
+          // Optional fields for both modes
           ...(vs.primary_key && { primary_key: vs.primary_key }),
           ...(vs.columns && vs.columns.length > 0 && { columns: vs.columns }),
           ...(vs.doc_uri && { doc_uri: vs.doc_uri }),

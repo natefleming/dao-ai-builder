@@ -63,18 +63,24 @@ export interface LLMModel {
   pat?: VariableValue;
 }
 
+// VectorStoreModel supports two configuration modes:
+// 1. Use Existing Index: Provide only 'index' to reference a pre-built vector search index
+// 2. Provision New Index: Provide 'source_table' and 'embedding_source_column' to create a new index
 export interface VectorStoreModel {
   on_behalf_of_user?: boolean;
-  embedding_model?: LLMModel;
+  // Required for use_existing mode, optional (auto-generated) for provision mode
   index?: IndexModel;
-  endpoint?: VectorSearchEndpoint;
-  source_table?: TableModel;  // Optional - auto-populated from index if available
+  // Required for provision mode only
+  source_table?: TableModel;
+  embedding_source_column?: string;  // Required for provision mode, omitted for use_existing
+  embedding_model?: LLMModel;        // Optional, defaults to databricks-gte-large-en for provision mode
+  endpoint?: VectorSearchEndpoint;   // Optional, auto-discovered for provision mode
+  // Optional for both modes
   source_path?: VolumePathModel;
   checkpoint_path?: VolumePathModel;
   primary_key?: string;
   columns?: string[];
   doc_uri?: string;
-  embedding_source_column: string;
   // Authentication fields
   service_principal?: ServicePrincipalModel | string;
   client_id?: VariableValue;

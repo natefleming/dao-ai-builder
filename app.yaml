@@ -16,7 +16,7 @@ env:
   - name: PORT
     value: "8000"
   - name: DAO_AI_VERSION
-    value: "0.1.2"
+    value: "0.1.3"
   # GitHub repository for config templates
   - name: GITHUB_CONFIG_REPO
     value: "natefleming/dao-ai"
