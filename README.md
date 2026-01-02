@@ -24,10 +24,10 @@ Before you begin, you'll need:
 To check if you're ready:
 
 ```bash
-databricks --version     # Should show a version number
+databricks --version         # Should show a version number
 databricks current-user me   # Should show your Databricks username
-node --version           # Should show v18.x.x or higher
-npm --version            # Should show a version number
+node --version               # Should show v18.x.x or higher
+npm --version                # Should show a version number
 ```
 
 ### Deploy to Databricks
@@ -63,17 +63,55 @@ Click the link or copy it to your browser. You'll be automatically authenticated
 
 ---
 
-## What You Can Do
+## Features
 
-With DAO AI Builder, you can:
+### Connect to Your Data
 
-- **Configure agents** with models, tools, and prompts
-- **Connect to data sources** like Genie, SQL warehouses, and Vector Search
-- **Browse Databricks resources** directly from the UI
-- **Preview your configuration** as YAML in real-time
-- **Export configurations** for use with [DAO AI](https://github.com/databricks/dao-ai)
-- **Import existing configs** to edit them visually
-- **Get AI assistance** for writing prompts
+Browse and connect to Databricks resources directly from the UI. Select catalogs, schemas, Genie spaces, SQL warehouses, and Vector Search indexes without typing names manually.
+
+![Resources](docs/images/resources.png)
+
+### Configure Agents
+
+Build AI agents with models, tools, prompts, and guardrails. The form-based interface guides you through each option.
+
+![Edit Agents](docs/images/edit_agents.png)
+
+### Set Up Retrievers
+
+Configure vector search retrievers for RAG (Retrieval-Augmented Generation) applications.
+
+![Edit Retriever](docs/images/edit_retriever.png)
+
+### Add Guardrails
+
+Define safety checks and content filters to ensure appropriate agent responses.
+
+![Edit Guardrail](docs/images/edit_guardrail.png)
+
+### Human-in-the-Loop
+
+Configure human approval workflows for sensitive agent actions.
+
+![Human in the Loop](docs/images/hitl.png)
+
+### Visualize Your Configuration
+
+See how agents, tools, and resources connect in an interactive graph view.
+
+![Visualize](docs/images/visualize.png)
+
+### Chat with Your Agent
+
+Test your agent configuration with the built-in chat interface.
+
+![Chat](docs/images/chat.png)
+
+### Deploy from the UI
+
+Deploy your agent directly to Databricks Model Serving.
+
+![Deploy](docs/images/deploy.png)
 
 ---
 
