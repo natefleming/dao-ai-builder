@@ -43,6 +43,19 @@ cd dao-ai-builder
 ./deploy.sh
 ```
 
+**Deploying to different workspaces:**
+
+```bash
+# Deploy to a specific workspace using a profile
+./deploy.sh --profile aws-field-eng
+
+# Deploy to Azure workspace
+./deploy.sh -p azure-retail
+
+# Clean deployment to a specific workspace
+./deploy.sh --force --profile aws-prod
+```
+
 That's it! The script will:
 1. Build the frontend
 2. Upload files to your Databricks workspace
@@ -145,10 +158,28 @@ DAO AI Builder (this tool)        DAO AI Framework
 ./deploy.sh
 ```
 
-Use `--force` for a clean deployment:
+**Available options:**
+
+| Option | Description |
+|--------|-------------|
+| `-h, --help` | Show help message |
+| `-p, --profile PROFILE` | Use a specific Databricks CLI profile |
+| `--force` | Clean deployment (removes cached artifacts) |
+
+**Examples:**
 
 ```bash
-./deploy.sh --force
+# Deploy to default workspace
+./deploy.sh
+
+# Deploy to AWS workspace
+./deploy.sh --profile aws-field-eng
+
+# Deploy to Azure workspace
+./deploy.sh -p azure-retail
+
+# Clean deployment to a specific workspace
+./deploy.sh --force --profile aws-prod
 ```
 
 ### Option 2: Manual Deployment
@@ -166,11 +197,11 @@ cd ..
 rm -rf static
 cp -r frontend/dist static
 
-# Deploy using Databricks bundle
-databricks bundle deploy
+# Deploy using Databricks bundle (with optional profile)
+databricks --profile my-profile bundle deploy
 
 # Deploy the app
-databricks apps deploy dao-ai-builder --source-code-path <your-workspace-path>
+databricks --profile my-profile apps deploy dao-ai-builder --source-code-path <your-workspace-path>
 ```
 
 ---
@@ -269,14 +300,23 @@ Remove cached files and redeploy:
 ## Useful Commands
 
 ```bash
-# Deploy or redeploy
+# Deploy or redeploy (default workspace)
 ./deploy.sh
+
+# Deploy to a specific workspace
+./deploy.sh --profile aws-field-eng
 
 # Clean deployment (removes cached files)
 ./deploy.sh --force
 
+# Clean deployment to a specific workspace
+./deploy.sh --force --profile azure-retail
+
 # Check app status
 databricks apps get dao-ai-builder
+
+# Check app status on a specific workspace
+databricks --profile aws-field-eng apps get dao-ai-builder
 
 # View deployment history
 databricks apps list-deployments dao-ai-builder

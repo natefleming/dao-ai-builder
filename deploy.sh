@@ -12,20 +12,28 @@ USAGE:
     ./deploy.sh [OPTIONS]
 
 OPTIONS:
-    -h, --help      Show this help message and exit
-    --force         Perform a clean deployment by removing all build artifacts
-                    before deploying. This includes:
-                    - .databricks/ (bundle state)
-                    - static/ (root static files)
-                    - backend/static/ (backend static files)
-                    - frontend/dist/ (frontend build output)
+    -h, --help              Show this help message and exit
+    -p, --profile PROFILE   Use the specified Databricks CLI profile
+                            This allows deploying to different workspaces
+    --force                 Perform a clean deployment by removing all build artifacts
+                            before deploying. This includes:
+                            - .databricks/ (bundle state)
+                            - static/ (root static files)
+                            - backend/static/ (backend static files)
+                            - frontend/dist/ (frontend build output)
 
 EXAMPLES:
-    # Normal deployment (incremental, uses existing builds)
+    # Normal deployment (uses default profile or environment)
     ./deploy.sh
 
-    # Clean deployment (removes all artifacts first)
-    ./deploy.sh --force
+    # Deploy to AWS workspace
+    ./deploy.sh --profile aws-field-eng
+
+    # Deploy to Azure workspace
+    ./deploy.sh -p azure-retail
+
+    # Clean deployment to a specific workspace
+    ./deploy.sh --force --profile aws-prod
 
     # Show this help
     ./deploy.sh --help
@@ -45,10 +53,14 @@ DESCRIPTION:
     Use --force when you want to ensure a completely fresh deployment or
     when troubleshooting issues related to cached artifacts.
 
+    Use --profile to deploy to different Databricks workspaces. Each profile
+    should be configured in ~/.databrickscfg.
+
 PREREQUISITES:
     - Databricks CLI configured with authentication
       Install: pip install databricks-cli
       Configure: databricks configure
+      Add profiles: databricks configure --profile my-profile
 
     - Node.js and npm installed
       Install from: https://nodejs.org
@@ -57,7 +69,8 @@ PREREQUISITES:
       Install: brew install jq
 
 ENVIRONMENT:
-    The script uses the current Databricks CLI profile. Ensure you're
+    The script uses the specified Databricks CLI profile (--profile) or
+    falls back to the default profile/environment. Ensure you're
     authenticated to the correct workspace before running.
 
 MORE INFO:
@@ -69,22 +82,39 @@ EOF
 
 # Parse arguments
 FORCE_CLEAN=false
-for arg in "$@"; do
-    case $arg in
+PROFILE=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
         -h|--help)
             show_help
             exit 0
             ;;
+        -p|--profile)
+            if [[ -z "$2" ]] || [[ "$2" == -* ]]; then
+                echo "Error: --profile requires a profile name"
+                exit 1
+            fi
+            PROFILE="$2"
+            shift 2
+            ;;
         --force)
             FORCE_CLEAN=true
+            shift
             ;;
         *)
-            echo "Error: Unknown option '$arg'"
+            echo "Error: Unknown option '$1'"
             echo "Run './deploy.sh --help' for usage information"
             exit 1
             ;;
     esac
 done
+
+# Build profile flag for databricks CLI commands
+if [[ -n "$PROFILE" ]]; then
+    PROFILE_FLAG="--profile $PROFILE"
+else
+    PROFILE_FLAG=""
+fi
 
 # Colors for output
 RED='\033[0;31m'
@@ -139,12 +169,19 @@ else
 fi
 
 # Verify Databricks authentication
-if ! databricks current-user me &> /dev/null; then
+if [[ -n "$PROFILE" ]]; then
+    echo -e "  Using profile: ${BLUE}${PROFILE}${NC}"
+fi
+if ! databricks $PROFILE_FLAG current-user me &> /dev/null; then
     echo -e "${RED}✗ Databricks CLI not authenticated${NC}"
-    echo "  Run: databricks configure"
+    if [[ -n "$PROFILE" ]]; then
+        echo "  Check that profile '$PROFILE' exists in ~/.databrickscfg"
+    else
+        echo "  Run: databricks configure"
+    fi
     exit 1
 fi
-USER_EMAIL=$(databricks current-user me --output json | jq -r '.userName' 2>/dev/null || databricks current-user me --output json | grep -o '"userName":"[^"]*"' | cut -d'"' -f4)
+USER_EMAIL=$(databricks $PROFILE_FLAG current-user me --output json | jq -r '.userName' 2>/dev/null || databricks $PROFILE_FLAG current-user me --output json | grep -o '"userName":"[^"]*"' | cut -d'"' -f4)
 echo -e "  ${GREEN}✓${NC} Authenticated as ${BLUE}${USER_EMAIL}${NC}"
 echo ""
 
@@ -183,7 +220,7 @@ echo ""
 echo -e "${YELLOW}[4/6] Syncing files to Databricks...${NC}"
 
 # Check if app exists, create if needed
-if ! databricks apps get "${APP_NAME}" &> /dev/null; then
+if ! databricks $PROFILE_FLAG apps get "${APP_NAME}" &> /dev/null; then
     echo -e "  App ${BLUE}${APP_NAME}${NC} doesn't exist, creating..."
     # Clean bundle state if app doesn't exist but state does
     if [ -d ".databricks" ]; then
@@ -191,7 +228,7 @@ if ! databricks apps get "${APP_NAME}" &> /dev/null; then
         rm -rf .databricks
     fi
     # Create the app first
-    databricks apps create "${APP_NAME}" --description "Visual configuration studio for dao-ai agent systems" 2>&1 | while read line; do
+    databricks $PROFILE_FLAG apps create "${APP_NAME}" --description "Visual configuration studio for dao-ai agent systems" 2>&1 | while read line; do
         echo -e "  ${line}"
     done
     echo -e "  ${GREEN}✓${NC} App created"
@@ -199,7 +236,7 @@ else
     echo -e "  App ${BLUE}${APP_NAME}${NC} exists"
 fi
 
-databricks bundle deploy 2>&1 | while read line; do
+databricks $PROFILE_FLAG bundle deploy 2>&1 | while read line; do
     echo -e "  ${line}"
 done
 
@@ -210,7 +247,7 @@ echo ""
 echo -e "${YELLOW}[5/6] Deploying app code...${NC}"
 echo -e "  Source: ${BLUE}${WORKSPACE_PATH}${NC}"
 
-databricks apps deploy "${APP_NAME}" --source-code-path "${WORKSPACE_PATH}" 2>&1 | while read line; do
+databricks $PROFILE_FLAG apps deploy "${APP_NAME}" --source-code-path "${WORKSPACE_PATH}" 2>&1 | while read line; do
     echo -e "  ${line}"
 done
 
@@ -222,7 +259,7 @@ echo -e "${YELLOW}[6/6] Starting app...${NC}"
 
 # Function to get app status using jq or fallback
 get_app_status() {
-    local json=$(databricks apps get "${APP_NAME}" --output json 2>/dev/null)
+    local json=$(databricks $PROFILE_FLAG apps get "${APP_NAME}" --output json 2>/dev/null)
     if [ "$HAS_JQ" = true ]; then
         APP_STATE=$(echo "$json" | jq -r '.app_status.state // "UNKNOWN"')
         COMPUTE_STATE=$(echo "$json" | jq -r '.compute_status.state // "UNKNOWN"')
@@ -237,7 +274,7 @@ get_app_status() {
 get_app_status
 if [ "$COMPUTE_STATE" != "ACTIVE" ]; then
     echo -e "  Starting app compute..."
-    databricks apps start "${APP_NAME}" > /dev/null 2>&1 || true
+    databricks $PROFILE_FLAG apps start "${APP_NAME}" > /dev/null 2>&1 || true
 fi
 
 # Wait for app to be ready
@@ -273,7 +310,7 @@ fi
 echo ""
 
 # Get app URL
-APP_URL=$(databricks apps get "${APP_NAME}" --output json | jq -r '.url' 2>/dev/null || databricks apps get "${APP_NAME}" --output json | grep -o '"url":"[^"]*"' | cut -d'"' -f4)
+APP_URL=$(databricks $PROFILE_FLAG apps get "${APP_NAME}" --output json | jq -r '.url' 2>/dev/null || databricks $PROFILE_FLAG apps get "${APP_NAME}" --output json | grep -o '"url":"[^"]*"' | cut -d'"' -f4)
 
 echo -e "${GREEN}╔════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║         Deployment Complete! 🎉            ║${NC}"
@@ -282,11 +319,19 @@ echo ""
 echo -e "App URL: ${BLUE}${APP_URL}${NC}"
 echo ""
 echo -e "Useful commands:"
-echo -e "  ${BLUE}databricks apps get ${APP_NAME}${NC}              - View app status"
-echo -e "  ${BLUE}databricks apps list-deployments ${APP_NAME}${NC} - View deployment history"
-echo -e "  ${BLUE}databricks apps stop ${APP_NAME}${NC}             - Stop the app"
-echo -e "  ${BLUE}./deploy.sh${NC}                                  - Redeploy"
-echo -e "  ${BLUE}./deploy.sh --force${NC}                          - Clean redeploy (removes all artifacts)"
+if [[ -n "$PROFILE" ]]; then
+    echo -e "  ${BLUE}databricks --profile ${PROFILE} apps get ${APP_NAME}${NC}              - View app status"
+    echo -e "  ${BLUE}databricks --profile ${PROFILE} apps list-deployments ${APP_NAME}${NC} - View deployment history"
+    echo -e "  ${BLUE}databricks --profile ${PROFILE} apps stop ${APP_NAME}${NC}             - Stop the app"
+    echo -e "  ${BLUE}./deploy.sh --profile ${PROFILE}${NC}                                  - Redeploy"
+    echo -e "  ${BLUE}./deploy.sh --force --profile ${PROFILE}${NC}                          - Clean redeploy"
+else
+    echo -e "  ${BLUE}databricks apps get ${APP_NAME}${NC}              - View app status"
+    echo -e "  ${BLUE}databricks apps list-deployments ${APP_NAME}${NC} - View deployment history"
+    echo -e "  ${BLUE}databricks apps stop ${APP_NAME}${NC}             - Stop the app"
+    echo -e "  ${BLUE}./deploy.sh${NC}                                  - Redeploy"
+    echo -e "  ${BLUE}./deploy.sh --force${NC}                          - Clean redeploy (removes all artifacts)"
+fi
 echo ""
 
 # Open the app in browser (macOS)
