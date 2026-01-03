@@ -133,6 +133,25 @@ def normalize_host(host: str) -> str:
     return host
 
 
+def is_databricks_app_url(host: str) -> bool:
+    """
+    Check if a host URL is a Databricks Apps URL (not a workspace URL).
+    
+    Databricks Apps URLs look like:
+    - Azure: {app-name}-{workspace-id}.{region}.azure.databricksapps.com
+    - AWS: {app-name}-{workspace-id}.aws.databricksapps.com
+    - GCP: {app-name}-{workspace-id}.gcp.databricksapps.com
+    
+    Workspace URLs look like:
+    - Azure: adb-{workspace-id}.{region}.azuredatabricks.net
+    - AWS: {something}.cloud.databricks.com or regional variants
+    - GCP: {workspace-id}.{region}.gcp.databricks.com
+    """
+    if not host:
+        return False
+    return 'databricksapps.com' in host.lower()
+
+
 def get_databricks_host_from_sdk() -> str | None:
     """Get host from Databricks SDK Config."""
     sdk_config = get_sdk_config()
@@ -230,22 +249,18 @@ def get_databricks_host_with_source() -> tuple[str | None, str | None]:
     Resolution order:
     1. Session host (from OAuth flow)
     2. X-Databricks-Host header (sent by frontend for manual config)
-    3. X-Forwarded-Host header (provided by Databricks Apps infrastructure)
-    4. Databricks SDK Config (handles env vars, profiles, etc.)
-    5. DATABRICKS_HOST environment variable (explicit fallback)
+    3. Databricks SDK Config (handles env vars, profiles, etc.)
+    4. DATABRICKS_HOST environment variable (explicit fallback)
     
-    The X-Forwarded-Host header is critical for Databricks Apps running with
-    service principal authentication. The Databricks Apps infrastructure sets
-    this header to the workspace URL. Without it, MLflow SDK cannot authenticate
-    properly because DATABRICKS_HOST may not be set in the environment.
-    
-    Reference: https://learn.microsoft.com/en-us/azure/databricks/dev-tools/databricks-apps/system-env
+    Note: We do NOT use X-Forwarded-Host header because it contains the APP URL
+    (e.g., dao-ai-builder-xxx.aws.databricksapps.com), not the workspace URL.
+    The workspace URL is correctly set in DATABRICKS_HOST by Databricks Apps
+    on both Azure and AWS.
     
     Returns:
         tuple: (host, source) where source is one of:
             - 'oauth': From OAuth session
             - 'header': X-Databricks-Host header from frontend
-            - 'forwarded': X-Forwarded-Host header from Databricks Apps
             - 'sdk': Databricks SDK Config
             - 'env': DATABRICKS_HOST environment variable
             - None: No host found
@@ -259,35 +274,19 @@ def get_databricks_host_with_source() -> tuple[str | None, str | None]:
     if host:
         return normalize_host(host), 'header'
     
-    # Check X-Forwarded-Host header (Databricks Apps infrastructure)
-    # NOTE: X-Forwarded-Host contains the APP URL, not the workspace URL!
-    # We need to derive the workspace URL from the app URL or use other sources.
-    # App URL format: {app-name}-{workspace-id}.{region}.azure.databricksapps.com
-    # Workspace URL format: adb-{workspace-id}.{region}.azuredatabricks.net
-    forwarded_host = request.headers.get('X-Forwarded-Host')
-    if forwarded_host:
-        # Try to extract workspace ID and derive the workspace URL
-        # Pattern: something-WORKSPACEID.REGION.azure.databricksapps.com
-        import re
-        match = re.search(r'-(\d+)\.(\d+)\.azure\.databricksapps\.com', forwarded_host)
-        if match:
-            workspace_id = match.group(1)
-            region = match.group(2)
-            workspace_host = f'https://adb-{workspace_id}.{region}.azuredatabricks.net'
-            log('info', f"Derived workspace URL from X-Forwarded-Host: {workspace_host} (from {forwarded_host})")
-            return normalize_host(workspace_host), 'forwarded'
-        else:
-            # Maybe it's already a workspace URL or different format
-            log('warning', f"Could not parse workspace ID from X-Forwarded-Host: {forwarded_host}")
-            host = forwarded_host if forwarded_host.startswith('http') else f'https://{forwarded_host}'
-            return normalize_host(host), 'forwarded'
+    # Use DATABRICKS_HOST environment variable (set by Databricks Apps infrastructure)
+    # This is the simplest and most reliable approach - Databricks Apps correctly sets
+    # DATABRICKS_HOST to the workspace URL on both Azure and AWS.
+    #
+    # Note: X-Forwarded-Host contains the APP URL (not workspace URL), so we don't use it.
+    # The app URL is available in DATABRICKS_APP_URL if needed.
     
-    # Try Databricks SDK Config
+    # Try Databricks SDK Config (reads from DATABRICKS_HOST and other sources)
     host = get_databricks_host_from_sdk()
     if host:
         return host, 'sdk'
     
-    # Explicit fallback to environment variable
+    # Direct fallback to DATABRICKS_HOST environment variable
     host = os.environ.get('DATABRICKS_HOST')
     if host:
         return normalize_host(host), 'env'
@@ -627,6 +626,68 @@ def get_auth_token():
         'email': email,
         'user': user,
         'source': source,
+    })
+
+
+@app.route('/api/auth/debug')
+def get_auth_debug():
+    """
+    Debug endpoint to show all Databricks-related environment variables and headers.
+    Useful for diagnosing AWS vs Azure differences.
+    """
+    # Collect relevant environment variables
+    env_vars = {}
+    for key in ['DATABRICKS_HOST', 'DATABRICKS_WORKSPACE_URL', 'DATABRICKS_WORKSPACE_ID', 
+                'DATABRICKS_TOKEN', 'DATABRICKS_CLIENT_ID', 'DATABRICKS_CLIENT_SECRET',
+                'DATABRICKS_OAUTH_CLIENT_ID', 'DATABRICKS_APP_CLIENT_ID']:
+        value = os.environ.get(key)
+        if value:
+            # Mask sensitive values
+            if 'TOKEN' in key or 'SECRET' in key:
+                env_vars[key] = f"***{value[-4:]}" if len(value) > 4 else "***"
+            elif 'CLIENT_ID' in key:
+                env_vars[key] = f"{value[:8]}..." if len(value) > 8 else value
+            else:
+                env_vars[key] = value
+        else:
+            env_vars[key] = None
+    
+    # Collect relevant headers
+    headers = {}
+    for key in ['X-Forwarded-Host', 'X-Forwarded-Access-Token', 'X-Forwarded-Email',
+                'X-Forwarded-User', 'X-Forwarded-Preferred-Username', 'X-Real-Ip',
+                'X-Databricks-Host', 'Host', 'Origin', 'Referer']:
+        value = request.headers.get(key)
+        if value:
+            # Mask sensitive values
+            if 'Token' in key:
+                headers[key] = f"***{value[-4:]}" if len(value) > 4 else "***"
+            else:
+                headers[key] = value
+        else:
+            headers[key] = None
+    
+    # Get resolved host and source
+    host, host_source = get_databricks_host_with_source()
+    
+    # Check if host looks like an app URL
+    is_app_url = is_databricks_app_url(host) if host else False
+    
+    return jsonify({
+        'environment_variables': env_vars,
+        'request_headers': headers,
+        'resolved': {
+            'host': host,
+            'host_source': host_source,
+            'is_app_url': is_app_url,
+        },
+        'help': {
+            'message': 'If DATABRICKS_HOST contains an app URL (databricksapps.com), '
+                      'set DATABRICKS_WORKSPACE_URL to your workspace URL instead.',
+            'azure_note': 'On Azure, workspace URL is derived from app URL automatically.',
+            'aws_note': 'On AWS, set DATABRICKS_WORKSPACE_URL to your workspace URL '
+                       '(e.g., https://dbc-xxxxx.cloud.databricks.com)',
+        }
     })
 
 
@@ -1264,17 +1325,15 @@ def list_prompts():
         
         result = []
         
-        # Get host from Databricks headers or environment
-        # This now checks X-Forwarded-Host header which is critical for Databricks Apps
+        # Get host from DATABRICKS_HOST environment variable (set by Databricks Apps)
         host, host_source = get_databricks_host_with_source()
         
         if not host:
             log('warning', "No Databricks host available. "
-                         f"X-Forwarded-Host header: {request.headers.get('X-Forwarded-Host', 'NOT SET')}")
+                         f"DATABRICKS_HOST env: {os.environ.get('DATABRICKS_HOST', 'NOT SET')}")
             return jsonify({
                 'error': 'No Databricks host configured',
-                'help': 'When running as a Databricks App, the X-Forwarded-Host header should be set. '
-                        'You can also set DATABRICKS_HOST environment variable or use OAuth login.'
+                'help': 'Set DATABRICKS_HOST environment variable or use OAuth login.'
             }), 401
         
         # Normalize host (remove trailing slash)
@@ -1571,15 +1630,15 @@ def get_prompt_details():
         return jsonify({'error': 'name parameter required'}), 400
     
     try:
-        # Get host - now checks X-Forwarded-Host for Databricks Apps
+        # Get host from DATABRICKS_HOST environment variable
         host, host_source = get_databricks_host_with_source()
         
         if not host:
             log('warning', f"No Databricks host available. "
-                         f"X-Forwarded-Host header: {request.headers.get('X-Forwarded-Host', 'NOT SET')}")
+                         f"DATABRICKS_HOST env: {os.environ.get('DATABRICKS_HOST', 'NOT SET')}")
             return jsonify({
                 'error': 'No Databricks host configured',
-                'help': 'When running as a Databricks App, the X-Forwarded-Host header should be set.'
+                'help': 'Set DATABRICKS_HOST environment variable.'
             }), 401
         
         # Normalize host
@@ -3268,8 +3327,10 @@ def deploy_quick():
         
         if not host:
             return jsonify({
-                'error': 'No Databricks host configured',
-                'message': 'Please configure DATABRICKS_HOST environment variable'
+                'error': 'No Databricks workspace URL configured',
+                'message': 'Please configure DATABRICKS_WORKSPACE_URL environment variable with your workspace URL '
+                          '(e.g., https://your-workspace.cloud.databricks.com). '
+                          'On AWS, DATABRICKS_HOST may be set to the app URL which cannot be used for API calls.'
             }), 400
         
         # Initialize status
