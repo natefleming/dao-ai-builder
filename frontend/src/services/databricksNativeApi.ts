@@ -520,6 +520,16 @@ export interface VectorSearchEndpoint {
   endpoint_status?: { state?: string };
 }
 
+export interface DatabricksApp {
+  name: string;
+  url?: string;
+  description?: string;
+  creator?: string;
+  create_time?: string;
+  app_status?: { state?: string; message?: string };
+  compute_status?: { state?: string; message?: string };
+}
+
 export interface VectorSearchIndex {
   name: string;
   endpoint_name: string;
@@ -815,6 +825,25 @@ export const databricksNativeApi = {
         owner: s.owner,
       }));
     } catch {
+      return [];
+    }
+  },
+
+  /**
+   * List all Databricks Apps in the workspace.
+   * Uses the /api/2.0/apps endpoint.
+   */
+  async listApps(): Promise<DatabricksApp[]> {
+    try {
+      const response = await fetch('/api/uc/apps', { credentials: 'include' });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: response.statusText }));
+        throw new DatabricksApiError(error.error || 'Failed to list apps');
+      }
+      const data = await response.json();
+      return data.apps || [];
+    } catch (err) {
+      console.error('[listApps] Error:', err);
       return [];
     }
   },

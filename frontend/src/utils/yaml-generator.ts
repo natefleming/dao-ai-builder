@@ -57,6 +57,7 @@ function addYamlAnchors(yamlString: string): string {
     'warehouses',
     'connections',
     'databases',
+    'apps',
   ];
   
   // Sections that should NOT have anchors
@@ -490,14 +491,103 @@ function formatModelReference(model: any, definedLLMs: Record<string, any>, base
 }
 
 /**
+ * Format a schema field value (catalog_name or schema_name).
+ * Handles variable references, variable objects, and plain strings.
+ * @param value - The field value (can be string, variable reference, or variable object)
+ * @param path - Optional YAML path for checking original references
+ */
+function formatSchemaFieldValue(value: unknown, path?: string): any {
+  if (value === null || value === undefined) return undefined;
+  
+  // Check for original reference first
+  if (path) {
+    const originalRef = findOriginalReference(path, value);
+    if (originalRef) {
+      return createReference(originalRef);
+    }
+  }
+  
+  // Handle string values
+  if (typeof value === 'string') {
+    // Variable reference (e.g., *my_variable)
+    if (value.startsWith('*')) {
+      return createReference(value.slice(1));
+    }
+    // Plain string
+    return value;
+  }
+  
+  // Handle variable objects (EnvironmentVariableModel, SecretVariableModel, etc.)
+  if (typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    
+    // Environment variable: { env: "VAR_NAME", default_value?: "xxx" }
+    if ('env' in obj && typeof obj.env === 'string') {
+      return {
+        env: obj.env,
+        ...(obj.default_value !== undefined && { default_value: obj.default_value }),
+      };
+    }
+    
+    // Secret variable: { scope: "xxx", secret: "yyy" }
+    if ('scope' in obj && 'secret' in obj) {
+      return {
+        scope: obj.scope,
+        secret: obj.secret,
+        ...(obj.default_value !== undefined && { default_value: obj.default_value }),
+      };
+    }
+    
+    // Primitive variable: { value: "xxx" } or { type: "primitive", value: "xxx" }
+    if ('value' in obj) {
+      return { value: obj.value };
+    }
+    
+    // Composite variable: { options: [...] }
+    if ('options' in obj && Array.isArray(obj.options)) {
+      return {
+        options: (obj.options as any[]).map((opt) => formatSchemaFieldValue(opt)),
+        ...(obj.default_value !== undefined && { default_value: obj.default_value }),
+      };
+    }
+  }
+  
+  // Handle primitive values (number, boolean)
+  return value;
+}
+
+/**
+ * Get the display string value from a schema field for comparison.
+ * Returns the actual string value from variable objects.
+ */
+function getSchemaFieldDisplayValue(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    // Primitive variable
+    if ('value' in obj) return String(obj.value);
+    // Environment variable with default
+    if ('env' in obj && obj.default_value !== undefined) return String(obj.default_value);
+    // Return env var name for display
+    if ('env' in obj) return `$${obj.env}`;
+    // Secret
+    if ('scope' in obj && 'secret' in obj) return `{{secrets/${obj.scope}/${obj.secret}}}`;
+  }
+  return '';
+}
+
+/**
  * Format a schema reference - either as a YAML alias if it matches a defined schema,
  * or as an inline object if it's a custom definition.
+ * Now supports VariableValue for catalog_name and schema_name.
  * @param schema - The schema object
  * @param definedSchemas - Map of defined schemas
  * @param path - Optional YAML path for checking original references
  */
 function formatSchemaReference(
-  schema: { catalog_name: string; schema_name: string } | undefined, 
+  schema: { catalog_name: unknown; schema_name: unknown } | undefined, 
   definedSchemas: Record<string, any>,
   path?: string
 ): any {
@@ -511,17 +601,24 @@ function formatSchemaReference(
     }
   }
   
+  // Get display values for comparison
+  const catalogDisplay = getSchemaFieldDisplayValue(schema.catalog_name);
+  const schemaDisplay = getSchemaFieldDisplayValue(schema.schema_name);
+  
   // Check if this schema matches a defined schema
   for (const [schemaKey, s] of Object.entries(definedSchemas)) {
-    if (s.catalog_name === schema.catalog_name && s.schema_name === schema.schema_name) {
+    const defCatalogDisplay = getSchemaFieldDisplayValue(s.catalog_name);
+    const defSchemaDisplay = getSchemaFieldDisplayValue(s.schema_name);
+    if (defCatalogDisplay === catalogDisplay && defSchemaDisplay === schemaDisplay) {
       return createReference(schemaKey);
     }
   }
   
-  // Not a reference, return the full schema object
+  // Not a reference, return the full schema object with formatted field values
+  const basePath = path || '';
   return {
-    catalog_name: schema.catalog_name,
-    schema_name: schema.schema_name,
+    catalog_name: formatSchemaFieldValue(schema.catalog_name, basePath ? `${basePath}.catalog_name` : undefined),
+    schema_name: formatSchemaFieldValue(schema.schema_name, basePath ? `${basePath}.schema_name` : undefined),
   };
 }
 
@@ -961,6 +1058,18 @@ function formatToolFunction(func: ToolFunctionModel, toolKey?: string, definedCo
     
     if ('sql' in func && func.sql) result.sql = func.sql;
     
+    // Check for app reference (Databricks App)
+    if ('app' in func && func.app) {
+      const appVal = func.app as string | { name: string };
+      if (typeof appVal === 'string' && safeStartsWith(appVal, '*')) {
+        result.app = createReference(appVal.slice(1));
+      } else if (typeof appVal === 'string') {
+        result.app = createReference(appVal);
+      } else {
+        result.app = appVal;
+      }
+    }
+    
     // Check for original references for vector_search/retriever
     if ('vector_search' in func && func.vector_search) {
       const vsRef = toolKey ? findOriginalReference(`tools.${toolKey}.function.vector_search`, func.vector_search) : null;
@@ -976,6 +1085,14 @@ function formatToolFunction(func: ToolFunctionModel, toolKey?: string, definedCo
       } else {
         result.vector_search = func.vector_search;
       }
+    }
+    
+    // Tool filtering - include_tools and exclude_tools
+    if ('include_tools' in func && func.include_tools && (func.include_tools as string[]).length > 0) {
+      result.include_tools = func.include_tools;
+    }
+    if ('exclude_tools' in func && func.exclude_tools && (func.exclude_tools as string[]).length > 0) {
+      result.exclude_tools = func.exclude_tools;
     }
   }
 
@@ -1224,8 +1341,8 @@ export function generateYAML(config: AppConfig): string {
     yamlConfig.schemas = {};
     Object.entries(config.schemas).forEach(([key, schema]) => {
       yamlConfig.schemas[key] = {
-        catalog_name: schema.catalog_name,
-        schema_name: schema.schema_name,
+        catalog_name: formatSchemaFieldValue(schema.catalog_name, `schemas.${key}.catalog_name`),
+        schema_name: formatSchemaFieldValue(schema.schema_name, `schemas.${key}.schema_name`),
         ...(schema.permissions && { permissions: schema.permissions }),
       };
     });
@@ -1241,7 +1358,8 @@ export function generateYAML(config: AppConfig): string {
     (config.resources.functions && Object.keys(config.resources.functions).length > 0) ||
     (config.resources.warehouses && Object.keys(config.resources.warehouses).length > 0) ||
     (config.resources.connections && Object.keys(config.resources.connections).length > 0) ||
-    (config.resources.databases && Object.keys(config.resources.databases).length > 0)
+    (config.resources.databases && Object.keys(config.resources.databases).length > 0) ||
+    (config.resources.apps && Object.keys(config.resources.apps).length > 0)
   );
 
   if (hasResources) {
@@ -1429,6 +1547,46 @@ export function generateYAML(config: AppConfig): string {
       yamlConfig.resources.databases = {};
       Object.entries(config.resources!.databases).forEach(([key, database]) => {
         yamlConfig.resources.databases[key] = formatDatabaseRef(database, `resources.databases.${key}`);
+      });
+    }
+
+    if (config.resources!.apps && Object.keys(config.resources!.apps).length > 0) {
+      yamlConfig.resources.apps = {};
+      Object.entries(config.resources!.apps).forEach(([key, app]) => {
+        // Note: URL is not included as it's dynamically retrieved at runtime from the workspace
+        const appEntry: Record<string, unknown> = {
+          name: app.name,
+        };
+        
+        if (app.on_behalf_of_user !== undefined) {
+          appEntry.on_behalf_of_user = app.on_behalf_of_user;
+        }
+        
+        // Service Principal reference (takes precedence over inline credentials)
+        if (app.service_principal) {
+          if (typeof app.service_principal === 'string') {
+            // It's a reference string like "*my_sp"
+            if (app.service_principal.startsWith('*')) {
+              appEntry.service_principal = createReference(app.service_principal.slice(1));
+            } else {
+              appEntry.service_principal = createReference(app.service_principal);
+            }
+          } else {
+            // It's an inline ServicePrincipalModel object
+            appEntry.service_principal = {
+              client_id: formatCredential(app.service_principal.client_id),
+              client_secret: formatCredential(app.service_principal.client_secret),
+            };
+          }
+        } else {
+          // OAuth credentials (only if no service_principal)
+          if (app.client_id) appEntry.client_id = formatCredential(app.client_id);
+          if (app.client_secret) appEntry.client_secret = formatCredential(app.client_secret);
+          if (app.workspace_host) appEntry.workspace_host = formatCredential(app.workspace_host);
+          if (app.pat) appEntry.pat = formatCredential(app.pat);
+        }
+        
+        yamlConfig.resources.apps[key] = appEntry;
       });
     }
   }

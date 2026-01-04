@@ -43,8 +43,8 @@ export interface ServicePrincipalModel {
 }
 
 export interface SchemaModel {
-  catalog_name: string;
-  schema_name: string;
+  catalog_name: VariableValue;
+  schema_name: VariableValue;
   permissions?: PermissionModel[];
 }
 
@@ -219,6 +219,18 @@ export interface ConnectionModel {
   pat?: VariableValue;
 }
 
+// Databricks App Model - represents a Databricks App resource
+export interface DatabricksAppModel {
+  on_behalf_of_user?: boolean;
+  name: string;  // The unique instance name of the Databricks App (URL is retrieved dynamically)
+  // Authentication fields
+  service_principal?: ServicePrincipalModel | string;
+  client_id?: VariableValue;
+  client_secret?: VariableValue;
+  workspace_host?: VariableValue;
+  pat?: VariableValue;
+}
+
 export interface RetrieverModel {
   vector_store: VectorStoreModel;
   columns?: string[];
@@ -274,12 +286,16 @@ export interface McpFunctionModel {
   client_id?: string;
   client_secret?: string;
   workspace_host?: string;
-  connection?: ConnectionModel;
+  app?: DatabricksAppModel | string;  // Can be inline or reference to configured app
+  connection?: ConnectionModel | string;  // Can be inline or reference
   functions?: SchemaModel;
-  genie_room?: GenieRoomModel;
+  genie_room?: GenieRoomModel | string;  // Can be inline or reference
   sql?: boolean;
-  vector_search?: VectorStoreModel;
+  vector_search?: VectorStoreModel | string;  // Can be inline or reference
   human_in_the_loop?: HumanInTheLoopModel;
+  // Tool filtering - supports glob patterns (* for any chars, ? for single char)
+  include_tools?: string[];  // Only include tools matching these patterns
+  exclude_tools?: string[];  // Exclude tools matching these patterns (takes precedence over include)
 }
 
 export type ToolFunctionModel =
@@ -489,6 +505,7 @@ export interface ResourcesModel {
   warehouses?: Record<string, WarehouseModel>;
   databases?: Record<string, DatabaseModel>;
   connections?: Record<string, ConnectionModel>;
+  apps?: Record<string, DatabricksAppModel>;
   service_principals?: Record<string, ServicePrincipalModel>;
 }
 

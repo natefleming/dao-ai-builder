@@ -10,6 +10,7 @@ import {
   useServingEndpoints,
   useSQLWarehouses,
   useGenieSpaces,
+  useApps,
   useVectorSearchEndpoints,
   useFunctions,
   useDatabases,
@@ -350,6 +351,51 @@ export function DatabaseSelect({
           ? 'Failed to load databases'
           : databases?.length === 0
           ? 'No Lakebase databases found'
+          : hint
+      }
+      required={required}
+      disabled={disabled || loading || !configured}
+    />
+  );
+}
+
+/**
+ * Databricks App selector.
+ * Lists all apps in the workspace and allows selection by name.
+ */
+export function DatabricksAppSelect({
+  label = 'Databricks App',
+  value,
+  onChange,
+  hint,
+  required,
+  disabled,
+  placeholder = 'Select an app',
+}: DatabricksSelectProps) {
+  const { data: apps, loading, error } = useApps();
+  const configured = isDatabricksConfigured();
+
+  const options = [
+    { value: '', label: placeholder },
+    ...(apps || []).map((app) => ({
+      value: app.name,
+      label: `${app.name}${app.app_status?.state ? ` (${app.app_status.state})` : ''}`,
+    })),
+  ];
+
+  return (
+    <Select
+      label={label}
+      value={value}
+      onChange={(e: ChangeEvent<HTMLSelectElement>) => onChange(e.target.value)}
+      options={options}
+      hint={
+        !configured
+          ? 'Connect to Databricks first'
+          : loading
+          ? 'Loading apps...'
+          : error
+          ? 'Failed to load apps'
           : hint
       }
       required={required}

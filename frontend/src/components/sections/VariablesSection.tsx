@@ -314,7 +314,17 @@ export function VariablesSection() {
               label="Variable Name"
               placeholder="e.g., client_id, workspace_host"
               value={formData.name}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, name: e.target.value })}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                // Normalize variable name: trim spaces, convert to lowercase, replace special chars with underscores
+                const normalized = e.target.value
+                  .trim()
+                  .toLowerCase()
+                  .replace(/[^a-z0-9_]/g, '_')
+                  .replace(/_+/g, '_')
+                  .replace(/^_|_$/g, '');
+                setFormData({ ...formData, name: normalized });
+              }}
+              hint="Variable names are normalized: lowercase, underscores only, no spaces"
             />
             <Select
               label="Variable Type"

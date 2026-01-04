@@ -9,11 +9,33 @@ import Textarea from '../ui/Textarea';
 import Card from '../ui/Card';
 import Badge from '../ui/Badge';
 import MultiSelect from '../ui/MultiSelect';
-import { LogLevel } from '@/types/dao-ai-types';
+import { LogLevel, VariableValue } from '@/types/dao-ai-types';
 import { clsx } from 'clsx';
 import { normalizeRefName } from '@/utils/name-utils';
 
 type SchemaSource = 'configured' | 'select';
+
+/**
+ * Get the display string from a VariableValue.
+ * Handles strings, numbers, booleans, and variable objects.
+ */
+function getVariableDisplayValue(value: VariableValue | undefined): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'object') {
+    const obj = value as unknown as Record<string, unknown>;
+    // Primitive variable
+    if ('value' in obj) return String(obj.value);
+    // Environment variable with default
+    if ('env' in obj && obj.default_value !== undefined) return String(obj.default_value);
+    // Return env var name for display
+    if ('env' in obj) return `$${obj.env}`;
+    // Secret
+    if ('scope' in obj && 'secret' in obj) return `{{secrets/${obj.scope}/${obj.secret}}}`;
+  }
+  return '';
+}
 
 // AI Supervisor Prompt generation API
 async function generateSupervisorPromptWithAI(params: {
@@ -98,15 +120,18 @@ export default function AppConfigSection() {
     
     if (app?.registered_model?.schema) {
       const regSchema = app.registered_model.schema;
+      const regCatalogDisplay = getVariableDisplayValue(regSchema.catalog_name);
+      const regSchemaDisplay = getVariableDisplayValue(regSchema.schema_name);
       const matchedSchemaEntry = Object.entries(schemas).find(([, s]) => 
-        s.catalog_name === regSchema.catalog_name && s.schema_name === regSchema.schema_name
+        getVariableDisplayValue(s.catalog_name) === regCatalogDisplay && 
+        getVariableDisplayValue(s.schema_name) === regSchemaDisplay
       );
       if (matchedSchemaEntry) {
         modelSchemaKey = matchedSchemaEntry[0];
       } else {
         // Schema exists but doesn't match any configured schema
-        directCatalog = regSchema.catalog_name || '';
-        directSchema = regSchema.schema_name || '';
+        directCatalog = regCatalogDisplay;
+        directSchema = regSchemaDisplay;
       }
     }
     
@@ -139,8 +164,11 @@ export default function AppConfigSection() {
     // If we have a matching configured schema, use 'configured'
     if (app?.registered_model?.schema) {
       const regSchema = app.registered_model.schema;
+      const regCatalogDisplay = getVariableDisplayValue(regSchema.catalog_name);
+      const regSchemaDisplay = getVariableDisplayValue(regSchema.schema_name);
       const matchedSchemaEntry = Object.entries(schemas).find(([, s]) => 
-        s.catalog_name === regSchema.catalog_name && s.schema_name === regSchema.schema_name
+        getVariableDisplayValue(s.catalog_name) === regCatalogDisplay && 
+        getVariableDisplayValue(s.schema_name) === regSchemaDisplay
       );
       if (matchedSchemaEntry) {
         return 'configured';
@@ -367,8 +395,11 @@ export default function AppConfigSection() {
     let savedModelSchemaKey = '';
     if (app?.registered_model?.schema) {
       const regSchema = app.registered_model.schema;
+      const regCatalogDisplay = getVariableDisplayValue(regSchema.catalog_name);
+      const regSchemaDisplay = getVariableDisplayValue(regSchema.schema_name);
       const matchedSchemaEntry = Object.entries(schemas).find(([, s]) => 
-        s.catalog_name === regSchema.catalog_name && s.schema_name === regSchema.schema_name
+        getVariableDisplayValue(s.catalog_name) === regCatalogDisplay && 
+        getVariableDisplayValue(s.schema_name) === regSchemaDisplay
       );
       savedModelSchemaKey = matchedSchemaEntry ? matchedSchemaEntry[0] : '';
     }
@@ -552,16 +583,19 @@ export default function AppConfigSection() {
     
     if (app?.registered_model?.schema) {
       const regSchema = app.registered_model.schema;
+      const regCatalogDisplay = getVariableDisplayValue(regSchema.catalog_name);
+      const regSchemaDisplay = getVariableDisplayValue(regSchema.schema_name);
       const matchedSchemaEntry = Object.entries(schemas).find(([, s]) => 
-        s.catalog_name === regSchema.catalog_name && s.schema_name === regSchema.schema_name
+        getVariableDisplayValue(s.catalog_name) === regCatalogDisplay && 
+        getVariableDisplayValue(s.schema_name) === regSchemaDisplay
       );
       if (matchedSchemaEntry) {
         modelSchemaKey = matchedSchemaEntry[0];
         detectedSchemaSource = 'configured';
       } else {
         // Schema exists but doesn't match any configured schema
-        directCatalog = regSchema.catalog_name || '';
-        directSchema = regSchema.schema_name || '';
+        directCatalog = regCatalogDisplay;
+        directSchema = regSchemaDisplay;
         detectedSchemaSource = 'select';
       }
     }

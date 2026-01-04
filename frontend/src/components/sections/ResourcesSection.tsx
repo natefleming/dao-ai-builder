@@ -78,6 +78,7 @@ import {
   Plus, 
   Trash2, 
   Edit2,
+  Pencil,
   Info,
   UserCheck,
   Cpu,
@@ -90,6 +91,7 @@ import {
   CloudCog,
   Key,
   Loader2,
+  AppWindow,
 } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
@@ -112,10 +114,12 @@ import {
   FunctionModel, 
   WarehouseModel, 
   ConnectionModel,
+  DatabricksAppModel,
   LLMModel,
   DatabaseModel,
   VariableModel,
   VectorStoreModel,
+  SchemaModel,
 } from '@/types/dao-ai-types';
 import { 
   useGenieSpaces, 
@@ -132,8 +136,9 @@ import {
   useVectorSearchEndpoints,
   useVectorSearchIndexes,
 } from '@/hooks/useDatabricks';
+import { DatabricksAppSelect } from '@/components/ui/DatabricksSelect';
 
-type ResourceType = 'llms' | 'genie_rooms' | 'tables' | 'volumes' | 'functions' | 'warehouses' | 'connections' | 'databases' | 'vector_stores';
+type ResourceType = 'llms' | 'genie_rooms' | 'tables' | 'volumes' | 'functions' | 'warehouses' | 'connections' | 'databases' | 'vector_stores' | 'apps';
 
 interface ResourceTab {
   id: ResourceType;
@@ -152,6 +157,7 @@ const RESOURCE_TABS: ResourceTab[] = [
   { id: 'connections', label: 'Connections', icon: Link, description: 'External connections' },
   { id: 'databases', label: 'Databases', icon: Server, description: 'Lakebase/PostgreSQL backends' },
   { id: 'vector_stores', label: 'Vector Stores', icon: Layers, description: 'Vector search indexes' },
+  { id: 'apps', label: 'Apps', icon: AppWindow, description: 'Databricks Apps' },
 ];
 
 const COMMON_MODELS = [
@@ -192,7 +198,7 @@ function isRefNameDuplicate(refName: string, config: AppConfig, editingKey: stri
   
   // Check resources
   const resources = config.resources || {};
-  const resourceTypes = ['llms', 'genie_rooms', 'tables', 'volumes', 'functions', 'warehouses', 'connections', 'databases', 'vector_stores'] as const;
+  const resourceTypes = ['llms', 'genie_rooms', 'tables', 'volumes', 'functions', 'warehouses', 'connections', 'databases', 'vector_stores', 'apps'] as const;
   for (const type of resourceTypes) {
     const items = resources[type] || {};
     if (refName in items && refName !== editingKey) {
@@ -284,6 +290,8 @@ export function ResourcesSection() {
         return <DatabasesPanel showForm={showForm} setShowForm={setShowForm} editingKey={editingKey} setEditingKey={setEditingKey} onClose={handleCloseForm} />;
       case 'vector_stores':
         return <VectorStoresPanel showForm={showForm} setShowForm={setShowForm} editingKey={editingKey} setEditingKey={setEditingKey} onClose={handleCloseForm} />;
+      case 'apps':
+        return <DatabricksAppsPanel showForm={showForm} setShowForm={setShowForm} editingKey={editingKey} setEditingKey={setEditingKey} onClose={handleCloseForm} />;
       default:
         return null;
     }
@@ -300,6 +308,7 @@ export function ResourcesSection() {
       case 'connections': return Object.keys(resources?.connections || {}).length;
       case 'databases': return Object.keys(resources?.databases || {}).length;
       case 'vector_stores': return Object.keys(resources?.vector_stores || {}).length;
+      case 'apps': return Object.keys(resources?.apps || {}).length;
       default: return 0;
     }
   };
@@ -1950,27 +1959,31 @@ function TablesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose
 
   const { data: schemas, loading: schemasLoading } = useSchemas(formData.catalog_name || null);
   const { data: tablesList, loading: tablesLoading } = useTables(
-    schemaSource === 'reference' && formData.schemaRef ? configuredSchemas[formData.schemaRef]?.catalog_name : formData.catalog_name || null,
-    schemaSource === 'reference' && formData.schemaRef ? configuredSchemas[formData.schemaRef]?.schema_name : formData.schema_name || null
+    schemaSource === 'reference' && formData.schemaRef ? getVariableDisplayValue(configuredSchemas[formData.schemaRef]?.catalog_name) || null : formData.catalog_name || null,
+    schemaSource === 'reference' && formData.schemaRef ? getVariableDisplayValue(configuredSchemas[formData.schemaRef]?.schema_name) || null : formData.schema_name || null
   );
 
   const handleEdit = (key: string) => {
     scrollToAsset(key);
     const table = tables[key];
     // Detect if using schema reference
+    const tableCatalogDisplay = getVariableDisplayValue(table.schema?.catalog_name);
+    const tableSchemaDisplay = getVariableDisplayValue(table.schema?.schema_name);
     const isSchemaRef = table.schema && Object.entries(configuredSchemas).some(
-      ([, s]) => s.catalog_name === table.schema?.catalog_name && s.schema_name === table.schema?.schema_name
+      ([, s]) => getVariableDisplayValue(s.catalog_name) === tableCatalogDisplay && 
+        getVariableDisplayValue(s.schema_name) === tableSchemaDisplay
     );
     const schemaRefKey = isSchemaRef ? Object.entries(configuredSchemas).find(
-      ([, s]) => s.catalog_name === table.schema?.catalog_name && s.schema_name === table.schema?.schema_name
+      ([, s]) => getVariableDisplayValue(s.catalog_name) === tableCatalogDisplay && 
+        getVariableDisplayValue(s.schema_name) === tableSchemaDisplay
     )?.[0] : '';
     
     setSchemaSource(schemaRefKey ? 'reference' : 'direct');
     setFormData({
       refName: key,
       schemaRef: schemaRefKey || '',
-      catalog_name: table.schema?.catalog_name || '',
-      schema_name: table.schema?.schema_name || '',
+      catalog_name: tableCatalogDisplay,
+      schema_name: tableSchemaDisplay,
       name: table.name || '',
       // Parse authentication data (includes on_behalf_of_user)
       ...parseResourceAuth(table, safeStartsWith, safeString),
@@ -2110,7 +2123,7 @@ function TablesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose
                 <div>
                   <p className="font-medium text-slate-200">{key}</p>
                   <p className="text-xs text-slate-500">
-                    {table.schema ? `${table.schema.catalog_name}.${table.schema.schema_name}${table.name ? `.${table.name}` : '.*'}` : table.name}
+                    {table.schema ? `${getVariableDisplayValue(table.schema.catalog_name)}.${getVariableDisplayValue(table.schema.schema_name)}${table.name ? `.${table.name}` : '.*'}` : table.name}
                   </p>
                 </div>
               </div>
@@ -2207,7 +2220,7 @@ function TablesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose
               onChange={(e: ChangeEvent<HTMLSelectElement>) => {
                 const schemaKey = e.target.value;
                 const schema = configuredSchemas[schemaKey];
-                const refName = schema ? generateRefName(`${schema.catalog_name}_${schema.schema_name}_tables`) : '';
+                const refName = schema ? generateRefName(`${getVariableDisplayValue(schema.catalog_name)}_${getVariableDisplayValue(schema.schema_name)}_tables`) : '';
                 setFormData({ 
                   ...formData, 
                   schemaRef: schemaKey, 
@@ -2219,7 +2232,7 @@ function TablesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose
                 { value: '', label: 'Select a configured schema...' },
                 ...Object.entries(configuredSchemas).map(([key, s]) => ({
                   value: key,
-                  label: `${key} (${s.catalog_name}.${s.schema_name})`,
+                  label: `${key} (${getVariableDisplayValue(s.catalog_name)}.${getVariableDisplayValue(s.schema_name)})`,
                 })),
               ]}
               hint="Reference a schema defined in the Schemas section"
@@ -2260,7 +2273,7 @@ function TablesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose
           {/* Show selected schema info when using reference */}
           {schemaSource === 'reference' && formData.schemaRef && configuredSchemas[formData.schemaRef] && (
             <div className="p-2 bg-slate-900/50 rounded text-xs text-slate-400">
-              Using schema: <span className="text-slate-300">{configuredSchemas[formData.schemaRef].catalog_name}.{configuredSchemas[formData.schemaRef].schema_name}</span>
+              Using schema: <span className="text-slate-300">{getVariableDisplayValue(configuredSchemas[formData.schemaRef].catalog_name)}.{getVariableDisplayValue(configuredSchemas[formData.schemaRef].schema_name)}</span>
             </div>
           )}
           
@@ -2355,26 +2368,30 @@ function VolumesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClos
 
   const { data: schemas, loading: schemasLoading } = useSchemas(formData.catalog_name || null);
   const { data: volumesList, loading: volumesLoading } = useVolumes(
-    schemaSource === 'reference' && formData.schemaRef ? configuredSchemas[formData.schemaRef]?.catalog_name : formData.catalog_name || null,
-    schemaSource === 'reference' && formData.schemaRef ? configuredSchemas[formData.schemaRef]?.schema_name : formData.schema_name || null
+    schemaSource === 'reference' && formData.schemaRef ? getVariableDisplayValue(configuredSchemas[formData.schemaRef]?.catalog_name) || null : formData.catalog_name || null,
+    schemaSource === 'reference' && formData.schemaRef ? getVariableDisplayValue(configuredSchemas[formData.schemaRef]?.schema_name) || null : formData.schema_name || null
   );
 
   const handleEdit = (key: string) => {
     scrollToAsset(key);
     const volume = volumes[key];
+    const volumeCatalogDisplay = getVariableDisplayValue(volume.schema?.catalog_name);
+    const volumeSchemaDisplay = getVariableDisplayValue(volume.schema?.schema_name);
     const isSchemaRef = volume.schema && Object.entries(configuredSchemas).some(
-      ([, s]) => s.catalog_name === volume.schema?.catalog_name && s.schema_name === volume.schema?.schema_name
+      ([, s]) => getVariableDisplayValue(s.catalog_name) === volumeCatalogDisplay && 
+        getVariableDisplayValue(s.schema_name) === volumeSchemaDisplay
     );
     const schemaRefKey = isSchemaRef ? Object.entries(configuredSchemas).find(
-      ([, s]) => s.catalog_name === volume.schema?.catalog_name && s.schema_name === volume.schema?.schema_name
+      ([, s]) => getVariableDisplayValue(s.catalog_name) === volumeCatalogDisplay && 
+        getVariableDisplayValue(s.schema_name) === volumeSchemaDisplay
     )?.[0] : '';
     
     setSchemaSource(schemaRefKey ? 'reference' : 'direct');
     setFormData({
       refName: key,
       schemaRef: schemaRefKey || '',
-      catalog_name: volume.schema?.catalog_name || '',
-      schema_name: volume.schema?.schema_name || '',
+      catalog_name: volumeCatalogDisplay,
+      schema_name: volumeSchemaDisplay,
       name: volume.name || '',
       on_behalf_of_user: volume.on_behalf_of_user || false,
     });
@@ -2482,7 +2499,7 @@ function VolumesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClos
                 <div>
                   <p className="font-medium text-slate-200">{key}</p>
                   <p className="text-xs text-slate-500">
-                    {volume.schema ? `${volume.schema.catalog_name}.${volume.schema.schema_name}.${volume.name}` : volume.name}
+                    {volume.schema ? `${getVariableDisplayValue(volume.schema.catalog_name)}.${getVariableDisplayValue(volume.schema.schema_name)}.${volume.name}` : volume.name}
                   </p>
                 </div>
               </div>
@@ -2566,7 +2583,7 @@ function VolumesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClos
                 { value: '', label: 'Select a configured schema...' },
                 ...Object.entries(configuredSchemas).map(([key, s]) => ({
                   value: key,
-                  label: `${key} (${s.catalog_name}.${s.schema_name})`,
+                  label: `${key} (${getVariableDisplayValue(s.catalog_name)}.${getVariableDisplayValue(s.schema_name)})`,
                 })),
               ]}
               hint="Reference a schema defined in the Schemas section"
@@ -2598,7 +2615,7 @@ function VolumesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClos
           {/* Show selected schema info when using reference */}
           {schemaSource === 'reference' && formData.schemaRef && configuredSchemas[formData.schemaRef] && (
             <div className="p-2 bg-slate-900/50 rounded text-xs text-slate-400">
-              Using schema: <span className="text-slate-300">{configuredSchemas[formData.schemaRef].catalog_name}.{configuredSchemas[formData.schemaRef].schema_name}</span>
+              Using schema: <span className="text-slate-300">{getVariableDisplayValue(configuredSchemas[formData.schemaRef].catalog_name)}.{getVariableDisplayValue(configuredSchemas[formData.schemaRef].schema_name)}</span>
             </div>
           )}
           
@@ -2678,7 +2695,7 @@ function FunctionsPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
   const getEffectiveCatalog = (): string => {
     // If using a schema reference and it exists in configured schemas, use it
     if (schemaSource === 'reference' && formData.schemaRef && configuredSchemas[formData.schemaRef]) {
-      return configuredSchemas[formData.schemaRef].catalog_name;
+      return getVariableDisplayValue(configuredSchemas[formData.schemaRef].catalog_name);
     }
     // Fall back to direct form values (always populated when editing)
     return formData.catalog_name;
@@ -2687,7 +2704,7 @@ function FunctionsPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
   const getEffectiveSchema = (): string => {
     // If using a schema reference and it exists in configured schemas, use it
     if (schemaSource === 'reference' && formData.schemaRef && configuredSchemas[formData.schemaRef]) {
-      return configuredSchemas[formData.schemaRef].schema_name;
+      return getVariableDisplayValue(configuredSchemas[formData.schemaRef].schema_name);
     }
     // Fall back to direct form values (always populated when editing)
     return formData.schema_name;
@@ -2737,14 +2754,16 @@ function FunctionsPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
   const handleEdit = (key: string) => {
     scrollToAsset(key);
     const func = functions[key];
-    const funcCatalog = func.schema?.catalog_name || '';
-    const funcSchema = func.schema?.schema_name || '';
+    const funcCatalog = getVariableDisplayValue(func.schema?.catalog_name);
+    const funcSchema = getVariableDisplayValue(func.schema?.schema_name);
     
     const isSchemaRef = func.schema && Object.entries(configuredSchemas).some(
-      ([, s]) => s.catalog_name === funcCatalog && s.schema_name === funcSchema
+      ([, s]) => getVariableDisplayValue(s.catalog_name) === funcCatalog && 
+        getVariableDisplayValue(s.schema_name) === funcSchema
     );
     const schemaRefKey = isSchemaRef ? Object.entries(configuredSchemas).find(
-      ([, s]) => s.catalog_name === funcCatalog && s.schema_name === funcSchema
+      ([, s]) => getVariableDisplayValue(s.catalog_name) === funcCatalog && 
+        getVariableDisplayValue(s.schema_name) === funcSchema
     )?.[0] : '';
     
     // Always set both schema source and form data together
@@ -2865,7 +2884,7 @@ function FunctionsPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
                 <div>
                   <p className="font-medium text-slate-200">{key}</p>
                   <p className="text-xs text-slate-500">
-                    {func.schema ? `${func.schema.catalog_name}.${func.schema.schema_name}${func.name ? `.${func.name}` : '.*'}` : func.name}
+                    {func.schema ? `${getVariableDisplayValue(func.schema.catalog_name)}.${getVariableDisplayValue(func.schema.schema_name)}${func.name ? `.${func.name}` : '.*'}` : func.name}
                   </p>
                 </div>
               </div>
@@ -2957,7 +2976,7 @@ function FunctionsPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
                 { value: '', label: 'Select a configured schema...' },
                 ...Object.entries(configuredSchemas).map(([key, s]) => ({
                   value: key,
-                  label: `${key} (${s.catalog_name}.${s.schema_name})`,
+                  label: `${key} (${getVariableDisplayValue(s.catalog_name)}.${getVariableDisplayValue(s.schema_name)})`,
                 })),
               ]}
               hint="Reference a schema defined in the Schemas section"
@@ -2999,7 +3018,7 @@ function FunctionsPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
           {/* Show selected schema info when using reference */}
           {schemaSource === 'reference' && formData.schemaRef && configuredSchemas[formData.schemaRef] && (
             <div className="p-2 bg-slate-900/50 rounded text-xs text-slate-400">
-              Using schema: <span className="text-slate-300">{configuredSchemas[formData.schemaRef].catalog_name}.{configuredSchemas[formData.schemaRef].schema_name}</span>
+              Using schema: <span className="text-slate-300">{getVariableDisplayValue(configuredSchemas[formData.schemaRef].catalog_name)}.{getVariableDisplayValue(configuredSchemas[formData.schemaRef].schema_name)}</span>
             </div>
           )}
           
@@ -4129,7 +4148,7 @@ const defaultVectorStoreForm: VectorStoreFormData = {
 interface VolumePathsSectionProps {
   formData: VectorStoreFormData;
   setFormData: React.Dispatch<React.SetStateAction<VectorStoreFormData>>;
-  configuredSchemas: Record<string, { catalog_name: string; schema_name: string }>;
+  configuredSchemas: Record<string, SchemaModel>;
   configuredSchemaOptions: { value: string; label: string }[];
   catalogs: { name: string }[] | null;
   sourcePathSchemas: { name: string }[] | null;
@@ -4228,8 +4247,8 @@ function VolumePathsSection({
                   setFormData(prev => ({ 
                     ...prev, 
                     sourcePathSchemaRef: schemaRef,
-                    sourcePathVolumeCatalog: schema?.catalog_name || '',
-                    sourcePathVolumeSchema: schema?.schema_name || '',
+                    sourcePathVolumeCatalog: getVariableDisplayValue(schema?.catalog_name),
+                    sourcePathVolumeSchema: getVariableDisplayValue(schema?.schema_name),
                     sourcePathVolumeName: '',
                   }));
                 }}
@@ -4364,8 +4383,8 @@ function VolumePathsSection({
                   setFormData(prev => ({ 
                     ...prev, 
                     checkpointPathSchemaRef: schemaRef,
-                    checkpointPathVolumeCatalog: schema?.catalog_name || '',
-                    checkpointPathVolumeSchema: schema?.schema_name || '',
+                    checkpointPathVolumeCatalog: getVariableDisplayValue(schema?.catalog_name),
+                    checkpointPathVolumeSchema: getVariableDisplayValue(schema?.schema_name),
                     checkpointPathVolumeName: '',
                   }));
                 }}
@@ -4574,19 +4593,19 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
           const refName = volStr.startsWith('*') ? volStr.slice(1) : volStr;
           const referencedVolume = configuredVolumes[refName];
           if (referencedVolume) {
-            volumeCatalog = referencedVolume.schema?.catalog_name || '';
-            volumeSchema = referencedVolume.schema?.schema_name || '';
+            volumeCatalog = getVariableDisplayValue(referencedVolume.schema?.catalog_name);
+            volumeSchema = getVariableDisplayValue(referencedVolume.schema?.schema_name);
             volumeName = referencedVolume.name;
           }
         } else {
-          volumeCatalog = sourcePath.volume?.schema?.catalog_name || '';
-          volumeSchema = sourcePath.volume?.schema?.schema_name || '';
+          volumeCatalog = getVariableDisplayValue(sourcePath.volume?.schema?.catalog_name);
+          volumeSchema = getVariableDisplayValue(sourcePath.volume?.schema?.schema_name);
           volumeName = sourcePath.volume?.name || '';
         }
         
         // Check if the schema matches a configured schema
         const schemaRef = Object.entries(configuredSchemas).find(
-          ([_, s]) => s.catalog_name === volumeCatalog && s.schema_name === volumeSchema
+          ([_, s]) => getVariableDisplayValue(s.catalog_name) === volumeCatalog && getVariableDisplayValue(s.schema_name) === volumeSchema
         );
         if (schemaRef) {
           sourcePathSchemaSource = 'reference';
@@ -4620,18 +4639,18 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
           const refName = volStr.startsWith('*') ? volStr.slice(1) : volStr;
           const referencedVolume = configuredVolumes[refName];
           if (referencedVolume) {
-            volumeCatalog = referencedVolume.schema?.catalog_name || '';
-            volumeSchema = referencedVolume.schema?.schema_name || '';
+            volumeCatalog = getVariableDisplayValue(referencedVolume.schema?.catalog_name);
+            volumeSchema = getVariableDisplayValue(referencedVolume.schema?.schema_name);
             volumeName = referencedVolume.name;
           }
         } else {
-          volumeCatalog = checkpointPath.volume?.schema?.catalog_name || '';
-          volumeSchema = checkpointPath.volume?.schema?.schema_name || '';
+          volumeCatalog = getVariableDisplayValue(checkpointPath.volume?.schema?.catalog_name);
+          volumeSchema = getVariableDisplayValue(checkpointPath.volume?.schema?.schema_name);
           volumeName = checkpointPath.volume?.name || '';
         }
         
         const schemaRef = Object.entries(configuredSchemas).find(
-          ([_, s]) => s.catalog_name === volumeCatalog && s.schema_name === volumeSchema
+          ([_, s]) => getVariableDisplayValue(s.catalog_name) === volumeCatalog && getVariableDisplayValue(s.schema_name) === volumeSchema
         );
         if (schemaRef) {
           checkpointPathSchemaSource = 'reference';
@@ -4660,14 +4679,14 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
         endpoint_type: vs.endpoint?.type || 'STANDARD',
         indexSchemaSource: indexSchemaRef ? 'reference' : 'direct',
         indexSchemaRefName: indexSchemaRef ? indexSchemaRef[0] : '',
-        index_catalog: vs.index?.schema?.catalog_name || '',
-        index_schema: vs.index?.schema?.schema_name || '',
+        index_catalog: getVariableDisplayValue(vs.index?.schema?.catalog_name),
+        index_schema: getVariableDisplayValue(vs.index?.schema?.schema_name),
         indexNameSource: 'select', // Default to select, will switch to manual if needed
         index_name: vs.index?.name || '',
         sourceSchemaSource: sourceSchemaRef ? 'reference' : 'direct',
         sourceSchemaRefName: sourceSchemaRef ? sourceSchemaRef[0] : '',
-        source_catalog: vs.source_table?.schema?.catalog_name || '',
-        source_schema: vs.source_table?.schema?.schema_name || '',
+        source_catalog: getVariableDisplayValue(vs.source_table?.schema?.catalog_name),
+        source_schema: getVariableDisplayValue(vs.source_table?.schema?.schema_name),
         source_table: vs.source_table?.name || '',
         primary_key: vs.primary_key || '',
         embedding_source_column: vs.embedding_source_column || '',
@@ -5137,8 +5156,8 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
                       setFormData({
                         ...formData,
                         indexSchemaRefName: schemaKey,
-                        index_catalog: schema?.catalog_name || '',
-                        index_schema: schema?.schema_name || '',
+                        index_catalog: getVariableDisplayValue(schema?.catalog_name),
+                        index_schema: getVariableDisplayValue(schema?.schema_name),
                       });
                     }}
                     options={[
@@ -5279,8 +5298,8 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
                       setFormData({
                         ...formData,
                         sourceSchemaRefName: schemaKey,
-                        source_catalog: schema?.catalog_name || '',
-                        source_schema: schema?.schema_name || '',
+                        source_catalog: getVariableDisplayValue(schema?.catalog_name),
+                        source_schema: getVariableDisplayValue(schema?.schema_name),
                         source_table: '',
                         embedding_source_column: '',
                         primary_key: '',
@@ -5567,6 +5586,318 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
                   ? !formData.index_name || !formData.index_catalog || !formData.index_schema
                   : !formData.source_table || !formData.embedding_source_column
                 )
+              }
+            >
+              {editingKey ? 'Update' : 'Add'}
+            </Button>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// =============================================================================
+// Databricks Apps Panel
+// =============================================================================
+
+type AppNameSource = 'select' | 'manual';
+
+function DatabricksAppsPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose }: PanelProps) {
+  const { config, addDatabricksApp, updateDatabricksApp, removeDatabricksApp } = useConfigStore();
+  const apps = config.resources?.apps || {};
+  const variables = config.variables || {};
+  const servicePrincipals = config.service_principals || {};
+  
+  const [nameSource, setNameSource] = useState<AppNameSource>('select');
+  const [formData, setFormData] = useState({
+    refName: '',
+    name: '',
+    on_behalf_of_user: false,
+    // Authentication fields
+    authMethod: 'default' as 'default' | 'service_principal' | 'oauth' | 'pat',
+    servicePrincipalRef: '',
+    clientIdSource: 'variable' as 'variable' | 'manual',
+    clientSecretSource: 'variable' as 'variable' | 'manual',
+    workspaceHostSource: 'variable' as 'variable' | 'manual',
+    patSource: 'variable' as 'variable' | 'manual',
+    client_id: '',
+    client_secret: '',
+    workspace_host: '',
+    pat: '',
+    clientIdVariable: '',
+    clientSecretVariable: '',
+    workspaceHostVariable: '',
+    patVariable: '',
+  });
+
+  const handleEdit = (key: string) => {
+    scrollToAsset(key);
+    const app = apps[key];
+    
+    // Parse authentication data
+    const authData = parseResourceAuth(app, safeStartsWith, safeString);
+    
+    setFormData({
+      refName: key,
+      name: app.name,
+      ...authData,
+    });
+    setEditingKey(key);
+    setShowForm(true);
+  };
+
+  const handleSave = () => {
+    const app: DatabricksAppModel = {
+      name: formData.name,
+      on_behalf_of_user: formData.on_behalf_of_user,
+    };
+    
+    // Apply authentication configuration
+    applyResourceAuth(app, formData as any);
+    
+    if (editingKey) {
+      if (editingKey !== formData.refName) {
+        removeDatabricksApp(editingKey);
+        addDatabricksApp(formData.refName, app);
+      } else {
+        updateDatabricksApp(formData.refName, app);
+      }
+    } else {
+      addDatabricksApp(formData.refName, app);
+    }
+    
+    setFormData({ 
+      refName: '', 
+      name: '', 
+      on_behalf_of_user: false,
+      authMethod: 'default',
+      servicePrincipalRef: '',
+      clientIdSource: 'variable',
+      clientSecretSource: 'variable',
+      workspaceHostSource: 'variable',
+      patSource: 'variable',
+      client_id: '',
+      client_secret: '',
+      workspace_host: '',
+      pat: '',
+      clientIdVariable: '',
+      clientSecretVariable: '',
+      workspaceHostVariable: '',
+      patVariable: '',
+    });
+    onClose();
+  };
+
+  const handleDelete = (key: string) => {
+    safeDelete('Databricks App', key, () => removeDatabricksApp(key));
+  };
+
+  return (
+    <Card className="p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center space-x-3">
+          <AppWindow className="w-5 h-5 text-purple-400" />
+          <h3 className="text-lg font-semibold text-slate-100">Databricks Apps</h3>
+        </div>
+        <Button variant="secondary" size="sm" onClick={() => { 
+          setFormData({ 
+            refName: '', 
+            name: '', 
+            on_behalf_of_user: false, 
+            authMethod: 'default', 
+            servicePrincipalRef: '', 
+            clientIdSource: 'variable', 
+            clientSecretSource: 'variable', 
+            workspaceHostSource: 'variable', 
+            patSource: 'variable', 
+            client_id: '', 
+            client_secret: '', 
+            workspace_host: '', 
+            pat: '', 
+            clientIdVariable: '', 
+            clientSecretVariable: '', 
+            workspaceHostVariable: '', 
+            patVariable: '' 
+          }); 
+          setEditingKey(null); 
+          setShowForm(true); 
+        }}>
+          <Plus className="w-4 h-4 mr-1" />
+          Add App
+        </Button>
+      </div>
+
+      {/* Info Card */}
+      <div className="mb-4 p-3 bg-purple-900/20 border border-purple-500/30 rounded-lg">
+        <div className="flex items-start space-x-2">
+          <Info className="w-4 h-4 text-purple-400 mt-0.5 flex-shrink-0" />
+          <p className="text-sm text-purple-300/80">
+            Databricks Apps allow your agents to interact with deployed applications. Configure the app instance name 
+            to enable app-to-app communication. The URL is automatically retrieved from the workspace at runtime.
+          </p>
+        </div>
+      </div>
+
+      {/* Existing Resources */}
+      {Object.keys(apps).length > 0 && (
+        <div className="space-y-2 mb-4">
+          {Object.entries(apps).map(([key, app]) => (
+            <div 
+              key={key} 
+              className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700 cursor-pointer hover:bg-slate-800/70 transition-colors"
+              onClick={() => handleEdit(key)}
+            >
+              <div className="flex items-center space-x-3">
+                <AppWindow className="w-4 h-4 text-purple-400" />
+                <div>
+                  <p className="font-medium text-slate-200">{key}</p>
+                  <p className="text-xs text-slate-500">
+                    App: {app.name}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2">
+                {app.on_behalf_of_user && (
+                  <Badge variant="success" title="On Behalf of User">
+                    <User className="w-3 h-3 mr-1" />
+                    OBO
+                  </Badge>
+                )}
+                <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleEdit(key); }}>
+                  <Edit2 className="w-4 h-4" />
+                </Button>
+                <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleDelete(key); }}>
+                  <Trash2 className="w-4 h-4 text-red-400" />
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {Object.keys(apps).length === 0 && !showForm && (
+        <p className="text-slate-500 text-sm">No Databricks Apps configured.</p>
+      )}
+
+      {/* Form */}
+      {showForm && (
+        <div className="mt-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700 space-y-4">
+          <h4 className="font-medium text-slate-200">{editingKey ? 'Edit' : 'New'} Databricks App</h4>
+          
+          <Input
+            label="Reference Name"
+            value={formData.refName}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, refName: normalizeRefNameWhileTyping(e.target.value) })}
+            placeholder="my_databricks_app"
+            hint="Type naturally - spaces become underscores"
+            required
+          />
+          
+          {/* App Name Source Selection */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium text-slate-300">
+                App Instance Name <span className="text-red-400">*</span>
+              </label>
+              <div className="inline-flex rounded-md bg-slate-900/50 p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setNameSource('select')}
+                  className={`px-2 py-0.5 text-xs rounded font-medium transition-all ${
+                    nameSource === 'select'
+                      ? 'bg-blue-500/20 text-blue-400 border border-blue-500/40'
+                      : 'text-slate-400 hover:text-slate-300'
+                  }`}
+                >
+                  <Database className="w-3 h-3 inline mr-1" />
+                  Select
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNameSource('manual')}
+                  className={`px-2 py-0.5 text-xs rounded font-medium transition-all ${
+                    nameSource === 'manual'
+                      ? 'bg-purple-500/20 text-purple-400 border border-purple-500/40'
+                      : 'text-slate-400 hover:text-slate-300'
+                  }`}
+                >
+                  <Pencil className="w-3 h-3 inline mr-1" />
+                  Manual
+                </button>
+              </div>
+            </div>
+            
+            {nameSource === 'select' ? (
+              <DatabricksAppSelect
+                label=""
+                value={formData.name}
+                onChange={(value) => {
+                  setFormData({ 
+                    ...formData, 
+                    name: value,
+                    refName: formData.refName || generateRefName(value),
+                  });
+                }}
+                placeholder="Select a Databricks App"
+                hint="Select an app from your workspace. The URL is retrieved automatically at runtime."
+                required
+              />
+            ) : (
+              <Input
+                value={formData.name}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                  setFormData({ 
+                    ...formData, 
+                    name: e.target.value,
+                    refName: formData.refName || generateRefName(e.target.value),
+                  });
+                }}
+                placeholder="my-databricks-app"
+                hint="Enter the unique name of the Databricks App in your workspace."
+              />
+            )}
+          </div>
+          
+          {/* On Behalf of User toggle */}
+          <div className="flex items-center space-x-3">
+            <input
+              type="checkbox"
+              id="app-obo"
+              checked={formData.on_behalf_of_user}
+              onChange={(e) => setFormData({ ...formData, on_behalf_of_user: e.target.checked })}
+              className="rounded border-slate-600 bg-slate-700 text-blue-500"
+            />
+            <label htmlFor="app-obo" className="text-sm text-slate-300 flex items-center space-x-2">
+              <UserCheck className="w-4 h-4" />
+              <span>On Behalf of User</span>
+            </label>
+          </div>
+          
+          {/* Authentication Section */}
+          <ResourceAuthSection
+            formData={formData as any}
+            setFormData={(data) => setFormData({ ...formData, ...data })}
+            servicePrincipals={servicePrincipals}
+            variables={variables}
+            variableNames={Object.keys(variables)}
+          />
+          
+          {/* Duplicate reference name warning */}
+          {formData.refName && isRefNameDuplicate(formData.refName, config, editingKey) && (
+            <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+              A resource with reference name "{formData.refName}" already exists. Please choose a unique name.
+            </div>
+          )}
+          
+          <div className="flex justify-end space-x-3">
+            <Button variant="secondary" onClick={onClose}>Cancel</Button>
+            <Button 
+              onClick={handleSave} 
+              disabled={
+                !formData.refName || 
+                !formData.name || 
+                isRefNameDuplicate(formData.refName, config, editingKey)
               }
             >
               {editingKey ? 'Update' : 'Add'}

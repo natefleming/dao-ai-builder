@@ -141,6 +141,114 @@ def proxy_databricks(path: str):
         return jsonify({'error': f'Failed to connect to Databricks: {str(e)}'}), 502
 
 
+@app.route('/api/mcp/list-tools', methods=['POST'])
+def list_mcp_tools_endpoint():
+    """
+    List available tools from an MCP server.
+    
+    This endpoint accepts an MCP function configuration and returns
+    the list of available tools from the server.
+    
+    Request body should contain the MCP configuration:
+    - url: Direct URL to MCP server
+    - connection: UC connection name
+    - functions: Schema for UC functions
+    - genie_room: Genie room configuration
+    - sql: Boolean for SQL MCP
+    - vector_search: Vector search configuration
+    
+    Returns:
+    - tools: List of tool info objects with name, description, input_schema
+    """
+    try:
+        from dao_ai.config import McpFunctionModel
+        from dao_ai.tools.mcp import list_mcp_tools
+    except ImportError as e:
+        return jsonify({
+            'error': f'dao-ai package not installed: {str(e)}',
+            'tools': []
+        }), 500
+    
+    try:
+        config = request.get_json()
+        if not config:
+            return jsonify({'error': 'No configuration provided', 'tools': []}), 400
+        
+        # Get authentication token from header or env
+        token = request.headers.get('X-Forwarded-Access-Token')
+        if not token:
+            token = os.environ.get('DATABRICKS_TOKEN')
+        
+        # Get host from header or env  
+        host = request.headers.get('X-Databricks-Host')
+        if not host:
+            host = os.environ.get('DATABRICKS_HOST')
+        
+        # Build the McpFunctionModel from the request
+        mcp_config = {
+            'type': 'mcp',
+            'name': config.get('name', 'mcp_tool'),
+        }
+        
+        # Add authentication if available (for PAT-based auth)
+        if token and host:
+            mcp_config['pat'] = token
+            mcp_config['workspace_host'] = host
+        
+        # Add optional fields if present
+        if config.get('url'):
+            mcp_config['url'] = config['url']
+        if config.get('connection'):
+            # Handle connection reference or inline
+            conn = config['connection']
+            if isinstance(conn, str):
+                mcp_config['connection'] = {'name': conn}
+            else:
+                mcp_config['connection'] = conn
+        if config.get('functions'):
+            mcp_config['functions'] = config['functions']
+        if config.get('genie_room'):
+            mcp_config['genie_room'] = config['genie_room']
+        if config.get('sql'):
+            mcp_config['sql'] = config['sql']
+        if config.get('vector_search'):
+            mcp_config['vector_search'] = config['vector_search']
+        if config.get('app'):
+            # Handle app inline object (with name field)
+            app = config['app']
+            if isinstance(app, dict):
+                mcp_config['app'] = app
+            else:
+                mcp_config['app'] = {'name': app}
+        
+        # Create the function model
+        function = McpFunctionModel(**mcp_config)
+        
+        # List tools (without filters to show all available)
+        tools = list_mcp_tools(function, apply_filters=False)
+        
+        # Convert to JSON-serializable format
+        tools_data = [
+            {
+                'name': tool.name,
+                'description': tool.description,
+                'input_schema': tool.input_schema,
+            }
+            for tool in tools
+        ]
+        
+        return jsonify({
+            'tools': tools_data,
+            'count': len(tools_data),
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'error': str(e),
+            'tools': []
+        }), 500
+
+
 @app.route('/')
 def index():
     return send_from_directory(STATIC_FOLDER, 'index.html')

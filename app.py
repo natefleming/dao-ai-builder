@@ -2403,6 +2403,42 @@ def list_genie_spaces():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/uc/apps')
+def list_apps():
+    """List Databricks Apps using WorkspaceClient."""
+    try:
+        w = get_workspace_client()
+        current_user = get_current_user_email()
+        log('info', f"Listing apps for user: {current_user}")
+        
+        apps = list(w.apps.list())
+        result = [
+            {
+                'name': app.name,
+                'url': app.url,
+                'description': getattr(app, 'description', None),
+                'creator': getattr(app, 'creator', None),
+                'create_time': getattr(app, 'create_time', None),
+                'app_status': {
+                    'state': app.app_status.state.value if app.app_status and app.app_status.state else None,
+                    'message': getattr(app.app_status, 'message', None) if app.app_status else None,
+                } if hasattr(app, 'app_status') and app.app_status else None,
+                'compute_status': {
+                    'state': app.compute_status.state.value if app.compute_status and app.compute_status.state else None,
+                    'message': getattr(app.compute_status, 'message', None) if app.compute_status else None,
+                } if hasattr(app, 'compute_status') and app.compute_status else None,
+            }
+            for app in apps
+        ]
+        log('info', f"Listed {len(result)} Databricks Apps")
+        return jsonify({'apps': result, 'current_user': current_user})
+    except Exception as e:
+        log('error', f"Error listing Databricks Apps: {e}")
+        import traceback
+        log('error', traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/uc/databases')
 def list_databases():
     """List Lakebase/PostgreSQL databases using WorkspaceClient."""

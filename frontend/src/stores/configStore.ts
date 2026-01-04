@@ -17,6 +17,7 @@ import {
   FunctionModel,
   WarehouseModel,
   ConnectionModel,
+  DatabricksAppModel,
   VectorStoreModel,
   RetrieverModel,
   ServicePrincipalModel,
@@ -83,6 +84,11 @@ interface ConfigState {
   updateConnection: (name: string, updates: Partial<ConnectionModel>) => void;
   removeConnection: (name: string) => void;
   
+  // Databricks Apps (resources)
+  addDatabricksApp: (name: string, app: DatabricksAppModel) => void;
+  updateDatabricksApp: (name: string, updates: Partial<DatabricksAppModel>) => void;
+  removeDatabricksApp: (name: string) => void;
+  
   // Service Principals
   addServicePrincipal: (name: string, sp: ServicePrincipalModel) => void;
   updateServicePrincipal: (name: string, updates: Partial<ServicePrincipalModel>) => void;
@@ -142,6 +148,7 @@ const defaultConfig: AppConfig = {
     warehouses: {},
     databases: {},
     connections: {},
+    apps: {},
   },
   retrievers: {},
   tools: {},
@@ -623,6 +630,53 @@ export const useConfigStore = create<ConfigState>((set) => ({
           resources: {
             ...state.config.resources,
             connections: connections || {},
+          },
+        },
+      };
+    }),
+  
+  // Databricks Apps (resources)
+  addDatabricksApp: (name, app) =>
+    set((state) => ({
+      config: {
+        ...state.config,
+        resources: {
+          ...state.config.resources,
+          apps: {
+            ...state.config.resources?.apps,
+            [name]: app,
+          },
+        },
+      },
+    })),
+  
+  updateDatabricksApp: (name, updates) =>
+    set((state) => {
+      const apps = { ...state.config.resources?.apps };
+      if (apps?.[name]) {
+        apps[name] = { ...apps[name], ...updates };
+      }
+      return {
+        config: {
+          ...state.config,
+          resources: {
+            ...state.config.resources,
+            apps: apps || {},
+          },
+        },
+      };
+    }),
+  
+  removeDatabricksApp: (name) =>
+    set((state) => {
+      const apps = { ...state.config.resources?.apps };
+      delete apps?.[name];
+      return {
+        config: {
+          ...state.config,
+          resources: {
+            ...state.config.resources,
+            apps: apps || {},
           },
         },
       };

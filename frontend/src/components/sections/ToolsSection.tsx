@@ -10,7 +10,7 @@ import Modal from '../ui/Modal';
 import Badge from '../ui/Badge';
 import { ToolFunctionModel, McpFunctionModel, HumanInTheLoopModel, UnityCatalogFunctionModel } from '@/types/dao-ai-types';
 import { CatalogSelect, SchemaSelect, GenieSpaceSelect, VectorSearchEndpointSelect, UCConnectionSelect } from '../ui/DatabricksSelect';
-import { useFunctions, useVectorSearchIndexes } from '@/hooks/useDatabricks';
+import { useFunctions, useVectorSearchIndexes, useConnectionStatus } from '@/hooks/useDatabricks';
 import { normalizeRefNameWhileTyping } from '@/utils/name-utils';
 import { safeDelete } from '@/utils/safe-delete';
 import { useYamlScrollStore } from '@/stores/yamlScrollStore';
@@ -350,6 +350,7 @@ interface PartialArgEntry {
 // MCP tool source types
 const MCP_SOURCE_TYPES = [
   { value: 'url', label: 'Direct URL', description: 'Connect to any MCP server via URL' },
+  { value: 'app', label: 'Databricks App', description: 'MCP server hosted in a Databricks App' },
   { value: 'genie', label: 'Genie Room', description: 'Databricks Genie MCP server' },
   { value: 'vector_search', label: 'Vector Search', description: 'Databricks Vector Search MCP server' },
   { value: 'functions', label: 'UC Functions', description: 'Unity Catalog Functions MCP server' },
@@ -358,11 +359,14 @@ const MCP_SOURCE_TYPES = [
 ];
 
 interface MCPFormData {
-  sourceType: 'url' | 'genie' | 'vector_search' | 'functions' | 'sql' | 'connection';
+  sourceType: 'url' | 'app' | 'genie' | 'vector_search' | 'functions' | 'sql' | 'connection';
   // URL source
   urlSource: 'manual' | 'variable';  // Manual entry or variable reference
   url: string;  // Manual URL value
   urlVariable: string;  // Variable name for URL
+  // App source (Databricks App)
+  appSource: ResourceSource;  // 'configured' or 'select'
+  appRefName: string;  // Reference to configured Databricks App in resources.apps
   // Genie source
   genieSource: ResourceSource;
   genieRefName: string; // Reference to configured genie room
@@ -405,6 +409,13 @@ interface MCPFormData {
   workspaceHostSource: 'variable' | 'manual';
   workspaceHostVar: string;
   workspaceHostManual: string;
+  // Tool filtering - include/exclude tools from MCP server
+  includeTools: string[];  // Tool names/patterns to include (supports glob: *, ?, [abc])
+  excludeTools: string[];  // Tool names/patterns to exclude (takes precedence over include)
+  // Available tools from MCP server (populated by refresh)
+  availableTools: string[];
+  availableToolsLoading: boolean;
+  availableToolsError: string;  // Error message if refresh fails
 }
 
 const defaultMCPFormData: MCPFormData = {
@@ -412,6 +423,8 @@ const defaultMCPFormData: MCPFormData = {
   urlSource: 'manual',
   url: '',
   urlVariable: '',
+  appSource: 'configured',
+  appRefName: '',
   genieSource: 'select',
   genieRefName: '',
   genieSpaceId: '',
@@ -445,6 +458,12 @@ const defaultMCPFormData: MCPFormData = {
   workspaceHostSource: 'variable',
   workspaceHostVar: '',
   workspaceHostManual: '',
+  // Tool filtering defaults
+  includeTools: [],
+  excludeTools: [],
+  availableTools: [],
+  availableToolsLoading: false,
+  availableToolsError: '',
 };
 
 interface HITLFormData {
@@ -487,6 +506,8 @@ function generateToolName(functionName: string): string {
 
 export default function ToolsSection() {
   const { config, addTool, updateTool, removeTool } = useConfigStore();
+  const { data: connectionStatus } = useConnectionStatus();
+  const databricksHost = connectionStatus?.host;
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [formData, setFormData] = useState({
@@ -712,7 +733,7 @@ export default function ToolsSection() {
   }));
   const configuredSchemaOptions = Object.entries(configuredSchemas).map(([key, schema]) => ({
     value: key,
-    label: `${key} (${schema.catalog_name}.${schema.schema_name})`,
+    label: `${key} (${getVariableDisplayValue(schema.catalog_name)}.${getVariableDisplayValue(schema.schema_name)})`,
   }));
   const configuredFunctionOptions = Object.entries(configuredFunctions).map(([key, func]) => ({
     value: key,
@@ -859,6 +880,12 @@ export default function ToolsSection() {
       case 'sql':
         base.sql = true;
         break;
+      case 'app':
+        // Use reference to a configured Databricks App
+        if (mcpForm.appRefName) {
+          base.app = `*${mcpForm.appRefName}` as any;
+        }
+        break;
       case 'connection':
         // Use reference format if from configured connection
         if (mcpForm.connectionSource === 'configured' && mcpForm.connectionRefName) {
@@ -869,6 +896,14 @@ export default function ToolsSection() {
           };
         }
         break;
+    }
+
+    // Add tool filtering if configured
+    if (mcpForm.includeTools.length > 0) {
+      base.include_tools = mcpForm.includeTools;
+    }
+    if (mcpForm.excludeTools.length > 0) {
+      base.exclude_tools = mcpForm.excludeTools;
     }
 
     return base;
@@ -1978,6 +2013,18 @@ export default function ToolsSection() {
             ...prev,
             sourceType: 'sql',
           }));
+        } else if (mcpFunc.app) {
+          // Databricks App source
+          const appRef = mcpFunc.app;
+          const isReference = typeof appRef === 'string' && appRef.startsWith('*');
+          const appRefName = isReference ? appRef.slice(1) : '';
+          
+          setMcpForm(prev => ({
+            ...prev,
+            sourceType: 'app',
+            appSource: 'configured',
+            appRefName: appRefName,
+          }));
         } else if (mcpFunc.url) {
           // Direct URL source
           const urlStr = typeof mcpFunc.url === 'string' ? mcpFunc.url : '';
@@ -1988,6 +2035,15 @@ export default function ToolsSection() {
             urlSource: isUrlVariable ? 'variable' : 'manual',
             url: isUrlVariable ? '' : urlStr,
             urlVariable: isUrlVariable ? urlStr.substring(7) : '',
+          }));
+        }
+        
+        // Load include_tools and exclude_tools if present
+        if (mcpFunc.include_tools || mcpFunc.exclude_tools) {
+          setMcpForm(prev => ({
+            ...prev,
+            includeTools: mcpFunc.include_tools || [],
+            excludeTools: mcpFunc.exclude_tools || [],
           }));
         }
       }
@@ -3068,8 +3124,8 @@ export default function ToolsSection() {
                       setFormData({ 
                         ...formData, 
                         schemaRefName: value,
-                        ucCatalog: schema?.catalog_name || '',
-                        ucSchema: schema?.schema_name || '',
+                        ucCatalog: getVariableDisplayValue(schema?.catalog_name),
+                        ucSchema: getVariableDisplayValue(schema?.schema_name),
                         ucFunction: ''
                       });
                     }}
@@ -3592,8 +3648,8 @@ export default function ToolsSection() {
                       setMcpForm({ 
                         ...mcpForm, 
                         schemaRefName: value,
-                        functionsCatalog: schema?.catalog_name || '',
-                        functionsSchema: schema?.schema_name || ''
+                        functionsCatalog: getVariableDisplayValue(schema?.catalog_name),
+                        functionsSchema: getVariableDisplayValue(schema?.schema_name)
                       });
                     }}
                     source={mcpForm.schemaSource}
@@ -3624,6 +3680,39 @@ export default function ToolsSection() {
                     </p>
                     <p className="text-xs text-slate-500 mt-2">
                       The sql: true flag will be set automatically.
+                    </p>
+                  </div>
+                )}
+
+                {mcpForm.sourceType === 'app' && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="text-sm font-medium text-slate-300">
+                        Databricks App <span className="text-red-400">*</span>
+                      </label>
+                    </div>
+                    {Object.keys(config.resources?.apps || {}).length > 0 ? (
+                      <Select
+                        value={mcpForm.appRefName}
+                        onChange={(e: ChangeEvent<HTMLSelectElement>) => setMcpForm({ ...mcpForm, appRefName: e.target.value })}
+                        options={[
+                          { value: '', label: 'Select a configured app...' },
+                          ...Object.entries(config.resources?.apps || {}).map(([key, app]) => ({
+                            value: key,
+                            label: `${key} (${app.name})`,
+                          })),
+                        ]}
+                        hint="Select a preconfigured Databricks App from Resources"
+                      />
+                    ) : (
+                      <div className="p-3 bg-amber-900/20 border border-amber-500/30 rounded-lg">
+                        <p className="text-sm text-amber-300">
+                          No Databricks Apps configured. Add one in the Resources → Databricks Apps section first.
+                        </p>
+                      </div>
+                    )}
+                    <p className="text-xs text-slate-500">
+                      The app's URL will be retrieved dynamically from the workspace at runtime.
                     </p>
                   </div>
                 )}
@@ -3878,6 +3967,284 @@ export default function ToolsSection() {
                         </div>
                       </>
                     )}
+                  </div>
+                )}
+              </div>
+
+              {/* Tool Filtering Section */}
+              <div className="p-4 bg-slate-800/30 rounded-lg border border-slate-700/50 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center space-x-2">
+                      <h4 className="text-sm font-medium text-slate-200">Tool Filtering</h4>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          // Clear any previous error and start loading
+                          setMcpForm(prev => ({ ...prev, availableToolsLoading: true, availableToolsError: '', availableTools: [] }));
+                          
+                          try {
+                            // Build the MCP config from form state
+                            const mcpConfig: Record<string, unknown> = {
+                              name: formData.name || 'mcp_tool',
+                            };
+                            
+                            // Add source-specific configuration
+                            switch (mcpForm.sourceType) {
+                              case 'url':
+                                if (mcpForm.urlSource === 'variable' && mcpForm.urlVariable) {
+                                  // Can't discover tools without actual URL
+                                  throw new Error('Cannot discover tools when using a variable for URL. Enter a direct URL to discover tools.');
+                                }
+                                if (!mcpForm.url) {
+                                  throw new Error('Please enter a URL to discover tools.');
+                                }
+                                mcpConfig.url = mcpForm.url;
+                                break;
+                              case 'connection':
+                                if (mcpForm.connectionSource === 'configured' && mcpForm.connectionRefName) {
+                                  const conn = configuredConnections[mcpForm.connectionRefName];
+                                  if (conn) {
+                                    mcpConfig.connection = { name: conn.name };
+                                  }
+                                } else if (mcpForm.connectionName) {
+                                  mcpConfig.connection = { name: mcpForm.connectionName };
+                                } else {
+                                  throw new Error('Please select a connection to discover tools.');
+                                }
+                                break;
+                              case 'genie':
+                                if (mcpForm.genieSpaceId) {
+                                  mcpConfig.genie_room = {
+                                    name: mcpForm.genieName || 'Genie Room',
+                                    space_id: mcpForm.genieSpaceId,
+                                  };
+                                } else {
+                                  throw new Error('Please select a Genie space to discover tools.');
+                                }
+                                break;
+                              case 'functions':
+                                if (mcpForm.functionsCatalog && mcpForm.functionsSchema) {
+                                  mcpConfig.functions = {
+                                    catalog_name: mcpForm.functionsCatalog,
+                                    schema_name: mcpForm.functionsSchema,
+                                  };
+                                } else {
+                                  throw new Error('Please select a catalog and schema to discover functions.');
+                                }
+                                break;
+                              case 'sql':
+                                mcpConfig.sql = true;
+                                break;
+                              case 'app':
+                                // App source - need the actual app to discover tools
+                                if (mcpForm.appRefName) {
+                                  const appConfig = config.resources?.apps?.[mcpForm.appRefName];
+                                  if (appConfig) {
+                                    mcpConfig.app = { name: appConfig.name };
+                                  } else {
+                                    throw new Error('Selected Databricks App not found. Please select a configured app.');
+                                  }
+                                } else {
+                                  throw new Error('Please select a Databricks App to discover tools.');
+                                }
+                                break;
+                              case 'vector_search':
+                                throw new Error('Tool discovery is not supported for vector search MCP.');
+                            }
+                            
+                            // Call the backend API with Databricks host header
+                            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+                            if (databricksHost) {
+                              headers['X-Databricks-Host'] = databricksHost.replace(/\/$/, '');
+                            }
+                            
+                            const response = await fetch('/api/mcp/list-tools', {
+                              method: 'POST',
+                              headers,
+                              body: JSON.stringify(mcpConfig),
+                            });
+                            
+                            const data = await response.json();
+                            
+                            if (!response.ok) {
+                              throw new Error(data.error || 'Failed to discover tools');
+                            }
+                            
+                            if (data.tools && data.tools.length > 0) {
+                              setMcpForm(prev => ({
+                                ...prev,
+                                availableToolsLoading: false,
+                                availableTools: data.tools.map((t: { name: string }) => t.name),
+                                availableToolsError: '',
+                              }));
+                            } else {
+                              setMcpForm(prev => ({
+                                ...prev,
+                                availableToolsLoading: false,
+                                availableTools: [],
+                                availableToolsError: 'No tools found on the MCP server.',
+                              }));
+                            }
+                          } catch (error) {
+                            setMcpForm(prev => ({
+                              ...prev,
+                              availableToolsLoading: false,
+                              availableToolsError: error instanceof Error ? error.message : 'Failed to discover tools',
+                            }));
+                          }
+                        }}
+                        className="text-xs text-slate-400 hover:text-white flex items-center space-x-1"
+                        disabled={mcpForm.availableToolsLoading}
+                      >
+                        <RefreshCw className={`w-3 h-3 ${mcpForm.availableToolsLoading ? 'animate-spin' : ''}`} />
+                        <span>Refresh</span>
+                      </button>
+                    </div>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Control which tools are loaded from the MCP server. Supports glob patterns: * (any chars), ? (single char), [abc] (char set)
+                    </p>
+                  </div>
+                </div>
+                
+                {/* Error/Info message */}
+                {mcpForm.availableToolsError && (
+                  <div className="p-2 bg-amber-500/10 border border-amber-500/30 rounded text-xs text-amber-400">
+                    {mcpForm.availableToolsError}
+                  </div>
+                )}
+
+                {/* Include Tools */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-slate-300">Include Tools</label>
+                  <p className="text-xs text-slate-500">Only load tools matching these patterns. Leave empty to include all tools.</p>
+                  <div className="space-y-2">
+                    {mcpForm.includeTools.map((tool, index) => (
+                      <div key={index} className="flex items-center space-x-2">
+                        <Input
+                          value={tool}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                            const newTools = [...mcpForm.includeTools];
+                            newTools[index] = e.target.value;
+                            setMcpForm({ ...mcpForm, includeTools: newTools });
+                          }}
+                          placeholder="e.g., query_*, list_tables, get_?_data"
+                          className="flex-1"
+                        />
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          type="button"
+                          onClick={() => {
+                            const newTools = mcpForm.includeTools.filter((_, i) => i !== index);
+                            setMcpForm({ ...mcpForm, includeTools: newTools });
+                          }}
+                        >
+                          <Trash2 className="w-4 h-4 text-red-400" />
+                        </Button>
+                      </div>
+                    ))}
+                    <div className="flex items-center space-x-2">
+                      {mcpForm.availableTools.length > 0 ? (
+                        <Select
+                          options={[
+                            { value: '', label: 'Select a tool or type pattern...' },
+                            ...mcpForm.availableTools.map(t => ({ value: t, label: t })),
+                          ]}
+                          value=""
+                          onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                            if (e.target.value) {
+                              setMcpForm({ ...mcpForm, includeTools: [...mcpForm.includeTools, e.target.value] });
+                            }
+                          }}
+                          className="flex-1"
+                        />
+                      ) : null}
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        type="button"
+                        onClick={() => setMcpForm({ ...mcpForm, includeTools: [...mcpForm.includeTools, ''] })}
+                      >
+                        <Plus className="w-4 h-4 mr-1" />
+                        Add Pattern
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Exclude Tools */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-slate-300">Exclude Tools</label>
+                  <p className="text-xs text-slate-500">Exclude tools matching these patterns. Takes precedence over include patterns.</p>
+                  <div className="space-y-2">
+                    {mcpForm.excludeTools.map((tool, index) => (
+                      <div key={index} className="flex items-center space-x-2">
+                        <Input
+                          value={tool}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                            const newTools = [...mcpForm.excludeTools];
+                            newTools[index] = e.target.value;
+                            setMcpForm({ ...mcpForm, excludeTools: newTools });
+                          }}
+                          placeholder="e.g., drop_*, delete_*, execute_ddl"
+                          className="flex-1"
+                        />
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          type="button"
+                          onClick={() => {
+                            const newTools = mcpForm.excludeTools.filter((_, i) => i !== index);
+                            setMcpForm({ ...mcpForm, excludeTools: newTools });
+                          }}
+                        >
+                          <Trash2 className="w-4 h-4 text-red-400" />
+                        </Button>
+                      </div>
+                    ))}
+                    <div className="flex items-center space-x-2">
+                      {mcpForm.availableTools.length > 0 ? (
+                        <Select
+                          options={[
+                            { value: '', label: 'Select a tool or type pattern...' },
+                            ...mcpForm.availableTools.map(t => ({ value: t, label: t })),
+                          ]}
+                          value=""
+                          onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                            if (e.target.value) {
+                              setMcpForm({ ...mcpForm, excludeTools: [...mcpForm.excludeTools, e.target.value] });
+                            }
+                          }}
+                          className="flex-1"
+                        />
+                      ) : null}
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        type="button"
+                        onClick={() => setMcpForm({ ...mcpForm, excludeTools: [...mcpForm.excludeTools, ''] })}
+                      >
+                        <Plus className="w-4 h-4 mr-1" />
+                        Add Pattern
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Summary */}
+                {(mcpForm.includeTools.length > 0 || mcpForm.excludeTools.length > 0) && (
+                  <div className="p-3 bg-purple-900/20 border border-purple-500/30 rounded-lg">
+                    <p className="text-xs text-purple-300">
+                      <strong>Filter Summary:</strong>{' '}
+                      {mcpForm.includeTools.length > 0 && (
+                        <span>Including: {mcpForm.includeTools.filter(t => t).join(', ') || 'none'}</span>
+                      )}
+                      {mcpForm.includeTools.length > 0 && mcpForm.excludeTools.length > 0 && ' | '}
+                      {mcpForm.excludeTools.length > 0 && (
+                        <span>Excluding: {mcpForm.excludeTools.filter(t => t).join(', ') || 'none'}</span>
+                      )}
+                    </p>
                   </div>
                 )}
               </div>

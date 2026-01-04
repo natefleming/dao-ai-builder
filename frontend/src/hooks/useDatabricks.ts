@@ -30,6 +30,7 @@ import {
   SQLWarehouse,
   GenieSpace,
   UCConnection,
+  DatabricksApp,
   VectorSearchEndpoint,
   VectorSearchIndex,
   RegisteredModel,
@@ -336,6 +337,16 @@ export function useGenieSpaces(): UseAsyncState<GenieSpace[]> {
 export function useUCConnections(): UseAsyncState<UCConnection[]> {
   return useAsync(
     () => databricksNativeApi.listUCConnections(),
+    []
+  );
+}
+
+/**
+ * Hook to list Databricks Apps.
+ */
+export function useApps(): UseAsyncState<DatabricksApp[]> {
+  return useAsync(
+    () => databricksNativeApi.listApps(),
     []
   );
 }

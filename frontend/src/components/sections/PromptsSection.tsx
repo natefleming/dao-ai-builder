@@ -3,8 +3,25 @@ import { Plus, Trash2, Edit2, FileText, Tag, GitBranch, Hash, RefreshCw, Downloa
 import { useConfigStore } from '@/stores/configStore';
 import { useCatalogs, useSchemas, usePrompts, usePromptDetails } from '@/hooks/useDatabricks';
 import { databricksNativeApi } from '@/services/databricksNativeApi';
-import { SchemaModel, PromptModel } from '@/types/dao-ai-types';
+import { SchemaModel, PromptModel, VariableValue } from '@/types/dao-ai-types';
 import Button from '../ui/Button';
+
+/**
+ * Get the display string from a VariableValue.
+ */
+function getVariableDisplayValue(value: VariableValue | undefined): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'object') {
+    const obj = value as unknown as Record<string, unknown>;
+    if ('value' in obj) return String(obj.value);
+    if ('env' in obj && obj.default_value !== undefined) return String(obj.default_value);
+    if ('env' in obj) return `$${obj.env}`;
+    if ('scope' in obj && 'secret' in obj) return `{{secrets/${obj.scope}/${obj.secret}}}`;
+  }
+  return '';
+}
 import Input from '../ui/Input';
 import Select from '../ui/Select';
 import Textarea from '../ui/Textarea';
@@ -408,8 +425,8 @@ export default function PromptsSection() {
       setFormData({
         ...formData,
         schemaRef: schemaKey,
-        catalog_name: schema.catalog_name,
-        schema_name: schema.schema_name,
+        catalog_name: getVariableDisplayValue(schema.catalog_name),
+        schema_name: getVariableDisplayValue(schema.schema_name),
         existingPromptFullName: '',
         name: '',
         refName: '',
@@ -453,15 +470,18 @@ export default function PromptsSection() {
     
     if (prompt.schema) {
       // Check if schema matches any configured schema
+      const promptCatalogDisplay = getVariableDisplayValue(prompt.schema.catalog_name);
+      const promptSchemaDisplay = getVariableDisplayValue(prompt.schema.schema_name);
       const matchedSchemaKey = Object.entries(configuredSchemas).find(
-        ([, s]) => s.catalog_name === prompt.schema?.catalog_name && s.schema_name === prompt.schema?.schema_name
+        ([, s]) => getVariableDisplayValue(s.catalog_name) === promptCatalogDisplay && 
+          getVariableDisplayValue(s.schema_name) === promptSchemaDisplay
       );
       if (matchedSchemaKey) {
         schemaRef = matchedSchemaKey[0];
         detectedSource = 'reference';
       } else {
-        catalog_name = prompt.schema.catalog_name || '';
-        schema_name = prompt.schema.schema_name || '';
+        catalog_name = promptCatalogDisplay;
+        schema_name = promptSchemaDisplay;
         detectedSource = 'direct';
       }
     }
@@ -506,8 +526,8 @@ export default function PromptsSection() {
     
     if (schemaSource === 'reference' && formData.schemaRef && configuredSchemas[formData.schemaRef]) {
       schema = configuredSchemas[formData.schemaRef];
-      catalogName = schema.catalog_name;
-      schemaName = schema.schema_name;
+      catalogName = getVariableDisplayValue(schema.catalog_name);
+      schemaName = getVariableDisplayValue(schema.schema_name);
     } else if (formData.catalog_name && formData.schema_name) {
       schema = {
         catalog_name: formData.catalog_name,
@@ -759,7 +779,7 @@ export default function PromptsSection() {
                       )}
                     </div>
                     <p className="text-sm text-slate-400 mt-1">
-                      {prompt.schema ? `${prompt.schema.catalog_name}.${prompt.schema.schema_name}.${prompt.name}` : prompt.name}
+                      {prompt.schema ? `${getVariableDisplayValue(prompt.schema.catalog_name)}.${getVariableDisplayValue(prompt.schema.schema_name)}.${prompt.name}` : prompt.name}
                     </p>
                     {prompt.description && (
                       <p className="text-xs text-slate-500 mt-1 line-clamp-2">
@@ -900,7 +920,7 @@ export default function PromptsSection() {
                       { value: '', label: 'Select a configured schema...' },
                       ...Object.entries(configuredSchemas).map(([key, s]) => ({
                         value: key,
-                        label: `${key} (${s.catalog_name}.${s.schema_name})`,
+                        label: `${key} (${getVariableDisplayValue(s.catalog_name)}.${getVariableDisplayValue(s.schema_name)})`,
                       })),
                     ]}
                     hint="Reference a schema defined in the Schemas section"
@@ -1184,7 +1204,7 @@ export default function PromptsSection() {
                     { value: '', label: 'Select a configured schema...' },
                     ...Object.entries(configuredSchemas).map(([key, s]) => ({
                       value: key,
-                      label: `${key} (${s.catalog_name}.${s.schema_name})`,
+                      label: `${key} (${getVariableDisplayValue(s.catalog_name)}.${getVariableDisplayValue(s.schema_name)})`,
                     })),
                   ]}
                   hint="Reference a schema defined in the Schemas section"
