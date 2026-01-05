@@ -2723,6 +2723,107 @@ def list_vector_search_indexes():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/mcp/list-tools', methods=['POST'])
+def list_mcp_tools_endpoint():
+    """
+    List available tools from an MCP server.
+    
+    This endpoint accepts an MCP function configuration and returns
+    the list of available tools from the server.
+    
+    Request body should contain the MCP configuration:
+    - url: Direct URL to MCP server
+    - sql: Boolean for SQL MCP
+    - genie_room: Genie room configuration
+    - vector_search: Vector search configuration
+    - functions: Schema for UC functions
+    - connection: UC connection name
+    
+    Returns:
+    - tools: List of tool info objects with name, description, input_schema
+    """
+    try:
+        from dao_ai.config import McpFunctionModel
+        from dao_ai.tools.mcp import list_mcp_tools
+    except ImportError as e:
+        log('error', f'dao-ai package not installed: {e}')
+        return jsonify({
+            'error': f'dao-ai package not installed: {str(e)}',
+            'tools': []
+        }), 500
+    
+    try:
+        config = request.get_json()
+        if not config:
+            return jsonify({'error': 'No configuration provided', 'tools': []}), 400
+        
+        log('debug', f'MCP list-tools request: {json.dumps(config, default=str)[:500]}')
+        
+        # Get workspace client for authentication
+        w = get_workspace_client()
+        
+        # Build the McpFunctionModel from the request
+        # Note: 'name' is not part of McpFunctionModel, it's part of ToolModel
+        mcp_config = {
+            'type': 'mcp',
+        }
+        
+        # Add optional fields if present
+        if config.get('url'):
+            mcp_config['url'] = config['url']
+        if config.get('sql'):
+            mcp_config['sql'] = config['sql']
+        if config.get('genie_room'):
+            mcp_config['genie_room'] = config['genie_room']
+        if config.get('vector_search'):
+            mcp_config['vector_search'] = config['vector_search']
+        if config.get('functions'):
+            mcp_config['functions'] = config['functions']
+        if config.get('connection'):
+            mcp_config['connection'] = config['connection']
+        if config.get('app'):
+            mcp_config['app'] = config['app']
+        
+        # Add include/exclude tools if provided (for filtering)
+        if config.get('include_tools'):
+            mcp_config['include_tools'] = config['include_tools']
+        if config.get('exclude_tools'):
+            mcp_config['exclude_tools'] = config['exclude_tools']
+        
+        log('debug', f'Creating McpFunctionModel with config: {mcp_config}')
+        
+        # Create the MCP function model
+        mcp_function = McpFunctionModel(**mcp_config)
+        
+        # Inject the workspace client for authentication
+        mcp_function._workspace_client = w
+        
+        # List available tools
+        tools = list_mcp_tools(mcp_function, apply_filters=False)
+        
+        # Convert to serializable format
+        tools_list = [
+            {
+                'name': tool.name,
+                'description': tool.description,
+                'input_schema': tool.input_schema,
+            }
+            for tool in tools
+        ]
+        
+        log('info', f'Listed {len(tools_list)} MCP tools')
+        return jsonify({'tools': tools_list})
+        
+    except Exception as e:
+        log('error', f'Error listing MCP tools: {e}')
+        import traceback
+        log('error', traceback.format_exc())
+        return jsonify({
+            'error': str(e),
+            'tools': []
+        }), 500
+
+
 @app.route('/api/auth/verify')
 def verify_auth():
     """

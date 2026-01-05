@@ -275,7 +275,7 @@ export interface UnityCatalogFunctionModel {
 
 export interface McpFunctionModel {
   type: "mcp";
-  name: string;
+  // NOTE: 'name' is NOT part of McpFunctionModel - it's in the parent ToolModel
   transport?: "streamable_http" | "stdio";
   command?: string;
   url?: string;

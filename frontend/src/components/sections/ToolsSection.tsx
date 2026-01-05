@@ -818,7 +818,7 @@ export default function ToolsSection() {
   const buildMcpFunction = (): McpFunctionModel => {
     const base: McpFunctionModel = {
       type: 'mcp',
-      name: formData.name,
+      // NOTE: 'name' is at the tool level (ToolModel), not in the function
     };
 
     // Add credentials if enabled
@@ -4068,9 +4068,8 @@ export default function ToolsSection() {
                           
                           try {
                             // Build the MCP config from form state
-                            const mcpConfig: Record<string, unknown> = {
-                              name: formData.name || 'mcp_tool',
-                            };
+                            // NOTE: 'name' is not part of McpFunctionModel, only at ToolModel level
+                            const mcpConfig: Record<string, unknown> = {};
                             
                             // Add source-specific configuration
                             switch (mcpForm.sourceType) {
@@ -4247,7 +4246,7 @@ export default function ToolsSection() {
                       {mcpForm.availableTools.length > 0 ? (
                         <Select
                           options={[
-                            { value: '', label: 'Select a tool or type pattern...' },
+                            { value: '', label: 'Select Tool...' },
                             ...mcpForm.availableTools.map(t => ({ value: t, label: t })),
                           ]}
                           value=""
@@ -4306,7 +4305,7 @@ export default function ToolsSection() {
                       {mcpForm.availableTools.length > 0 ? (
                         <Select
                           options={[
-                            { value: '', label: 'Select a tool or type pattern...' },
+                            { value: '', label: 'Select Tool...' },
                             ...mcpForm.availableTools.map(t => ({ value: t, label: t })),
                           ]}
                           value=""

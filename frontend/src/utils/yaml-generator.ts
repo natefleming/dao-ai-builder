@@ -10,6 +10,154 @@ function safeStartsWith(value: unknown, prefix: string): boolean {
   return typeof value === 'string' && value.startsWith(prefix);
 }
 
+// Module-level storage for defined variables and schemas during YAML generation
+// This allows formatCredential and other functions to detect when values match defined resources
+let _definedVariables: Record<string, unknown> = {};
+let _definedSchemas: Record<string, unknown> = {};
+
+/**
+ * Deep compare two values to check if they're structurally equal.
+ */
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== typeof b) return false;
+  if (a === null || b === null) return a === b;
+  if (typeof a !== 'object') return false;
+  
+  const aObj = a as Record<string, unknown>;
+  const bObj = b as Record<string, unknown>;
+  
+  const aKeys = Object.keys(aObj);
+  const bKeys = Object.keys(bObj);
+  
+  if (aKeys.length !== bKeys.length) return false;
+  
+  return aKeys.every(key => deepEqual(aObj[key], bObj[key]));
+}
+
+/**
+ * Find if a value matches any defined variable.
+ * Returns the variable name if found, null otherwise.
+ */
+function findMatchingVariable(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null;
+  
+  for (const [varName, varDef] of Object.entries(_definedVariables)) {
+    // Compare the value against the variable definition
+    // Variables are stored in different formats, so we need to check multiple possibilities
+    const varObj = varDef as Record<string, unknown>;
+    
+    // Check if the value matches the variable definition directly
+    if (deepEqual(value, varObj)) {
+      return varName;
+    }
+    
+    // Check if the value matches the formatted version of the variable
+    // (e.g., comparing against { options: [...] } structure)
+    if (deepEqual(value, formatVariable(varDef as VariableModel))) {
+      return varName;
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Get a displayable value from a VariableValue (which could be string, number, boolean, or object).
+ */
+function getVariableDisplayValue(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number') return value.toString();
+  if (typeof value === 'boolean') return value.toString();
+  
+  // Handle object types (env, secret, composite variables)
+  const obj = value as Record<string, unknown>;
+  if (obj.env) return String(obj.env);
+  if (obj.secret) return String(obj.secret);
+  if (obj.value !== undefined) return String(obj.value);
+  
+  // If it's a complex object, try to stringify it
+  return JSON.stringify(value);
+}
+
+/**
+ * Post-process YAML to add quotes around wildcard patterns in tool filters.
+ * This ensures glob patterns like "get_*" are consistently quoted for clarity and safety.
+ */
+function quoteWildcardPatterns(yamlString: string): string {
+  // Split into lines for processing
+  const lines = yamlString.split('\n');
+  const result: string[] = [];
+  let inToolFilter = false;
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    
+    // Check if we're entering/exiting a tool filter section
+    if (/^\s+(?:include|exclude)_tools:\s*$/.test(line)) {
+      inToolFilter = true;
+      result.push(line);
+      continue;
+    }
+    
+    // Check if we've exited the tool filter (non-list-item line at same or lower indentation)
+    if (inToolFilter && line.trim() && !line.match(/^\s+-\s+/)) {
+      inToolFilter = false;
+    }
+    
+    // If we're in a tool filter section and this is a list item
+    if (inToolFilter && /^\s+-\s+/.test(line)) {
+      // Match: "  - pattern  # optional comment"
+      const match = line.match(/^(\s+-\s+)(['"]?)([^'"\n#]+)\2(\s*(?:#.*)?)$/);
+      if (match) {
+        const [, prefix, existingQuote, pattern, suffix] = match;
+        const trimmedPattern = pattern.trim();
+        
+        // Check if pattern contains wildcards
+        if (/[*?[\]!]/.test(trimmedPattern)) {
+          // Always use double quotes for consistency, even if already single-quoted
+          if (existingQuote !== '"') {
+            result.push(`${prefix}"${trimmedPattern}"${suffix}`);
+            continue;
+          }
+        }
+      }
+    }
+    
+    result.push(line);
+  }
+  
+  return result.join('\n');
+}
+
+/**
+ * Find if a schema value matches any defined schema.
+ * Returns the schema name if found, null otherwise.
+ */
+function findMatchingSchema(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null;
+  
+  const valueObj = value as Record<string, unknown>;
+  
+  // Schema comparison - match on catalog_name and schema_name
+  for (const [schemaName, schemaDef] of Object.entries(_definedSchemas)) {
+    const schemaObj = schemaDef as Record<string, unknown>;
+    
+    // Compare catalog_name and schema_name
+    const catalogMatch = 
+      getVariableDisplayValue(valueObj.catalog_name) === getVariableDisplayValue(schemaObj.catalog_name);
+    const schemaNameMatch = 
+      getVariableDisplayValue(valueObj.schema_name) === getVariableDisplayValue(schemaObj.schema_name);
+    
+    if (catalogMatch && schemaNameMatch) {
+      return schemaName;
+    }
+  }
+  
+  return null;
+}
+
 /**
  * Safely convert a value to string, returning empty string for objects/undefined.
  */
@@ -912,9 +1060,12 @@ function formatToolFunction(func: ToolFunctionModel, toolKey?: string, definedCo
     type: func.type,
   };
 
-  // Add name only if not using YAML merge and function type has name property
-  // Note: UnityCatalogFunctionModel doesn't have a name property (it uses resource instead)
-  if (!('__MERGE__' in func) && func.type !== 'unity_catalog' && 'name' in func) {
+  // Add name only for function types that actually have it in their schema
+  // Note: 
+  // - UnityCatalogFunctionModel doesn't have name (uses resource instead)
+  // - McpFunctionModel doesn't have name (name is in parent ToolModel)
+  // - Only FactoryFunctionModel and some other types have name in the function itself
+  if (!('__MERGE__' in func) && func.type !== 'unity_catalog' && func.type !== 'mcp' && 'name' in func) {
     result.name = func.name;
   }
 
@@ -1048,7 +1199,15 @@ function formatToolFunction(func: ToolFunctionModel, toolKey?: string, definedCo
         }
       }
     }
-    if ('functions' in func && func.functions) result.functions = func.functions;
+    if ('functions' in func && func.functions) {
+      // Check if functions schema matches a defined schema
+      const matchingSchema = findMatchingSchema(func.functions);
+      if (matchingSchema) {
+        result.functions = createReference(matchingSchema);
+      } else {
+        result.functions = func.functions;
+      }
+    }
     
     // Check for original references for genie_room
     if ('genie_room' in func && func.genie_room) {
@@ -1218,6 +1377,11 @@ function formatCredentialWithPath(value: unknown, path?: string): any {
 function formatCredential(value: unknown): any {
   // Handle non-string values (could be objects from resolved YAML anchors)
   if (typeof value !== 'string') {
+    // Check if this object matches a defined variable
+    const matchingVar = findMatchingVariable(value);
+    if (matchingVar) {
+      return createReference(matchingVar);
+    }
     return value; // Return as-is if it's already an object
   }
   
@@ -1313,6 +1477,10 @@ export function generateYAML(config: AppConfig): string {
   if (config.memory?.refName) {
     setSectionAnchor('memory', config.memory.refName);
   }
+  
+  // Store defined variables and schemas for use by formatCredential and other functions to detect matching values
+  _definedVariables = config.variables || {};
+  _definedSchemas = config.schemas || {};
   
   // Define shared references for use throughout generation
   const definedSchemas = config.schemas || {};
@@ -2158,7 +2326,10 @@ export function generateYAML(config: AppConfig): string {
   
   // Convert reference markers to YAML aliases (*alias_name)
   yamlString = convertReferencesToAliases(yamlString);
-
+  
+  // Quote wildcard patterns in tool filters to prevent YAML alias interpretation
+  yamlString = quoteWildcardPatterns(yamlString);
+  
   return yamlString;
 }
 
