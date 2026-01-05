@@ -729,9 +729,9 @@ export default function ToolsSection() {
     value: key,
     label: `${key} (${room.name || getVariableDisplayValue(room.space_id)})`,
   }));
-  const configuredVectorStoreOptions = Object.entries(configuredVectorStores).map(([key, vs]) => ({
+  const configuredVectorStoreOptions = Object.entries(configuredVectorStores).map(([key]) => ({
     value: key,
-    label: `${key} (${vs.embedding_source_column || key})`,
+    label: key,
   }));
   const configuredRetrieverOptions = Object.entries(configuredRetrievers).map(([key, retriever]) => ({
     value: key,
@@ -2025,9 +2025,73 @@ export default function ToolsSection() {
           }));
         } else if (mcpFunc.vector_search) {
           // Vector Search source
+          const vs = mcpFunc.vector_search;
+          let vectorStoreSource: ResourceSource = 'select';
+          let vectorStoreRefName = '';
+          let vectorIndex = '';
+          let vectorCatalog = '';
+          let vectorSchema = '';
+          let vectorEndpoint = '';
+          
+          // Check if it's a reference to a configured vector store
+          if (typeof vs === 'string' && vs.startsWith('*')) {
+            vectorStoreRefName = vs.slice(1);
+            vectorStoreSource = 'configured';
+          } else if (typeof vs === 'object' && vs !== null) {
+            const vsObj = vs as any;
+            const configuredVectorStores = config.resources?.vector_stores || {};
+            
+            // Try multiple matching strategies to find the configured vector store
+            let matchingVsKey: string | undefined;
+            
+            // Strategy 1: Match by index name
+            const vsIndexName = typeof vsObj.index === 'string' ? vsObj.index : vsObj.index?.name;
+            if (vsIndexName) {
+              matchingVsKey = Object.entries(configuredVectorStores).find(
+                ([, store]) => {
+                  const storeIndex = (store as any).index;
+                  const storeIndexName = typeof storeIndex === 'string' ? storeIndex : storeIndex?.name;
+                  return storeIndexName === vsIndexName;
+                }
+              )?.[0];
+            }
+            
+            // Strategy 2: Match by endpoint name if index didn't match
+            if (!matchingVsKey && vsObj.endpoint?.name) {
+              matchingVsKey = Object.entries(configuredVectorStores).find(
+                ([, store]) => (store as any).endpoint?.name === vsObj.endpoint?.name
+              )?.[0];
+            }
+            
+            // Strategy 3: Deep equality check (YAML resolved same object)
+            if (!matchingVsKey) {
+              matchingVsKey = Object.entries(configuredVectorStores).find(
+                ([, store]) => JSON.stringify(store) === JSON.stringify(vsObj)
+              )?.[0];
+            }
+            
+            if (matchingVsKey) {
+              vectorStoreRefName = matchingVsKey;
+              vectorStoreSource = 'configured';
+            } else {
+              // Inline vector store configuration
+              vectorStoreSource = 'select';
+              vectorIndex = vsIndexName || '';
+              vectorCatalog = vsObj.source_table?.schema?.catalog_name || '';
+              vectorSchema = vsObj.source_table?.schema?.schema_name || '';
+              vectorEndpoint = vsObj.endpoint?.name || '';
+            }
+          }
+          
           setMcpForm(prev => ({
             ...prev,
             sourceType: 'vector_search',
+            vectorStoreSource,
+            vectorStoreRefName,
+            vectorIndex,
+            vectorCatalog,
+            vectorSchema,
+            vectorEndpoint,
           }));
         } else if (mcpFunc.functions) {
           // UC Functions source
@@ -4148,11 +4212,26 @@ export default function ToolsSection() {
                                 }
                                 break;
                               case 'vector_search':
-                                // Vector search source - need endpoint and index
+                                // Vector search source - need catalog/schema and index name for MCP URL
+                                // The MCP URL format is: /api/2.0/mcp/vector-search/{catalog}/{schema}
                                 if (mcpForm.vectorStoreSource === 'configured' && mcpForm.vectorStoreRefName) {
-                                  const vsConfig = config.resources?.vector_stores?.[mcpForm.vectorStoreRefName];
+                                  const vsConfig = config.resources?.vector_stores?.[mcpForm.vectorStoreRefName] as any;
                                   if (vsConfig) {
-                                    mcpConfig.vector_search = vsConfig;
+                                    // Extract just what's needed for MCP URL to avoid triggering
+                                    // validators that require authentication (like primary_key discovery)
+                                    const indexSchema = vsConfig.index?.schema;
+                                    if (!indexSchema?.catalog_name || !indexSchema?.schema_name) {
+                                      throw new Error('Vector store must have an index with schema (catalog/schema) configured.');
+                                    }
+                                    mcpConfig.vector_search = {
+                                      index: {
+                                        schema: {
+                                          catalog_name: indexSchema.catalog_name,
+                                          schema_name: indexSchema.schema_name,
+                                        },
+                                        name: vsConfig.index.name,
+                                      },
+                                    };
                                   } else {
                                     throw new Error('Selected Vector Store not found. Please select a configured vector store.');
                                   }
@@ -4160,9 +4239,18 @@ export default function ToolsSection() {
                                   if (!mcpForm.vectorIndex) {
                                     throw new Error('Please select a vector index to discover tools.');
                                   }
+                                  if (!mcpForm.vectorCatalog || !mcpForm.vectorSchema) {
+                                    throw new Error('Please select a catalog and schema for the vector index.');
+                                  }
                                   // Build minimal vector_search config for tool discovery
                                   mcpConfig.vector_search = {
-                                    index: { name: mcpForm.vectorIndex },
+                                    index: {
+                                      schema: {
+                                        catalog_name: mcpForm.vectorCatalog,
+                                        schema_name: mcpForm.vectorSchema,
+                                      },
+                                      name: mcpForm.vectorIndex,
+                                    },
                                   };
                                 } else {
                                   throw new Error('Please select a vector store to discover tools.');

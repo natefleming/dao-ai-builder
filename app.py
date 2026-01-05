@@ -2798,6 +2798,17 @@ def list_mcp_tools_endpoint():
         # Inject the workspace client for authentication
         mcp_function._workspace_client = w
         
+        # Also inject workspace client into nested resources if present
+        # This ensures authentication works when using inline resource configurations
+        if mcp_function.vector_search:
+            mcp_function.vector_search._workspace_client = w
+        if mcp_function.genie_room:
+            mcp_function.genie_room._workspace_client = w
+        if mcp_function.connection:
+            mcp_function.connection._workspace_client = w
+        if mcp_function.app:
+            mcp_function.app._workspace_client = w
+        
         # List available tools
         tools = list_mcp_tools(mcp_function, apply_filters=False)
         
