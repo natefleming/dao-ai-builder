@@ -4148,7 +4148,26 @@ export default function ToolsSection() {
                                 }
                                 break;
                               case 'vector_search':
-                                throw new Error('Tool discovery is not supported for vector search MCP.');
+                                // Vector search source - need endpoint and index
+                                if (mcpForm.vectorStoreSource === 'configured' && mcpForm.vectorStoreRefName) {
+                                  const vsConfig = config.resources?.vector_stores?.[mcpForm.vectorStoreRefName];
+                                  if (vsConfig) {
+                                    mcpConfig.vector_search = vsConfig;
+                                  } else {
+                                    throw new Error('Selected Vector Store not found. Please select a configured vector store.');
+                                  }
+                                } else if (mcpForm.vectorStoreSource === 'select') {
+                                  if (!mcpForm.vectorIndex) {
+                                    throw new Error('Please select a vector index to discover tools.');
+                                  }
+                                  // Build minimal vector_search config for tool discovery
+                                  mcpConfig.vector_search = {
+                                    index: { name: mcpForm.vectorIndex },
+                                  };
+                                } else {
+                                  throw new Error('Please select a vector store to discover tools.');
+                                }
+                                break;
                             }
                             
                             // Call the backend API with Databricks host header
