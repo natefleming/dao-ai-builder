@@ -125,7 +125,7 @@ export interface VolumeModel {
 
 export interface GenieRoomModel {
   on_behalf_of_user?: boolean;
-  name: string;
+  name?: string;  // Optional - auto-populated from GenieSpace.title if not provided
   description?: string;
   space_id: VariableValue;  // Can be string or variable reference (env, secret, etc.)
   warehouse?: WarehouseModel | string;  // Optional warehouse reference
@@ -145,7 +145,7 @@ export interface FunctionModel {
 
 export interface WarehouseModel {
   on_behalf_of_user?: boolean;
-  name: string;
+  name?: string;  // Optional - auto-populated from warehouse API if not provided
   description?: string;
   warehouse_id: string;
   // Authentication fields

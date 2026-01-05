@@ -9,8 +9,8 @@ import Card from '../ui/Card';
 import Modal from '../ui/Modal';
 import Badge from '../ui/Badge';
 import { ToolFunctionModel, McpFunctionModel, HumanInTheLoopModel, UnityCatalogFunctionModel } from '@/types/dao-ai-types';
-import { CatalogSelect, SchemaSelect, GenieSpaceSelect, VectorSearchEndpointSelect, UCConnectionSelect } from '../ui/DatabricksSelect';
-import { useFunctions, useVectorSearchIndexes, useConnectionStatus } from '@/hooks/useDatabricks';
+import { CatalogSelect, SchemaSelect, GenieSpaceSelect, VectorSearchEndpointSelect, UCConnectionSelect, DatabricksAppSelect } from '../ui/DatabricksSelect';
+import { useFunctions, useVectorSearchIndexes, useConnectionStatus, useGenieSpaces } from '@/hooks/useDatabricks';
 import { normalizeRefNameWhileTyping } from '@/utils/name-utils';
 import { safeDelete } from '@/utils/safe-delete';
 import { useYamlScrollStore } from '@/stores/yamlScrollStore';
@@ -367,6 +367,7 @@ interface MCPFormData {
   // App source (Databricks App)
   appSource: ResourceSource;  // 'configured' or 'select'
   appRefName: string;  // Reference to configured Databricks App in resources.apps
+  appName: string;  // App name when selecting from available apps
   // Genie source
   genieSource: ResourceSource;
   genieRefName: string; // Reference to configured genie room
@@ -425,6 +426,7 @@ const defaultMCPFormData: MCPFormData = {
   urlVariable: '',
   appSource: 'configured',
   appRefName: '',
+  appName: '',
   genieSource: 'select',
   genieRefName: '',
   genieSpaceId: '',
@@ -719,6 +721,10 @@ export default function ToolsSection() {
   };
 
   // Build options for configured resources
+  const configuredAppOptions = Object.entries(config.resources?.apps || {}).map(([key, app]) => ({
+    value: key,
+    label: `${key} (${app.name})`,
+  }));
   const configuredGenieOptions = Object.entries(configuredGenieRooms).map(([key, room]) => ({
     value: key,
     label: `${key} (${room.name || getVariableDisplayValue(room.space_id)})`,
@@ -790,6 +796,9 @@ export default function ToolsSection() {
     mcpForm.vectorEndpoint || null
   );
 
+  // Genie spaces for auto-populating name/description
+  const { data: genieSpaces } = useGenieSpaces();
+
   const buildHITLConfig = (): HumanInTheLoopModel | undefined => {
     if (!hitlForm.enabled) return undefined;
 
@@ -848,11 +857,17 @@ export default function ToolsSection() {
         }
         break;
       case 'genie':
-        base.genie_room = {
-          name: mcpForm.genieName || 'Genie Room',
-          space_id: mcpForm.genieSpaceId,
-          description: mcpForm.genieDescription || undefined,
-        };
+        // Use reference format if from configured genie room
+        if (mcpForm.genieSource === 'configured' && mcpForm.genieRefName) {
+          base.genie_room = `*${mcpForm.genieRefName}` as any;
+        } else if (mcpForm.genieSource === 'select' && mcpForm.genieSpaceId) {
+          // Create inline genie room configuration
+          base.genie_room = {
+            name: mcpForm.genieName || 'Genie Room',
+            space_id: mcpForm.genieSpaceId,
+            description: mcpForm.genieDescription || undefined,
+          };
+        }
         break;
       case 'vector_search':
         base.vector_search = {
@@ -881,9 +896,13 @@ export default function ToolsSection() {
         base.sql = true;
         break;
       case 'app':
-        // Use reference to a configured Databricks App
-        if (mcpForm.appRefName) {
+        // Use reference to a configured Databricks App or create inline app config
+        if (mcpForm.appSource === 'configured' && mcpForm.appRefName) {
           base.app = `*${mcpForm.appRefName}` as any;
+        } else if (mcpForm.appSource === 'select' && mcpForm.appName) {
+          base.app = {
+            name: mcpForm.appName,
+          };
         }
         break;
       case 'connection':
@@ -1983,14 +2002,26 @@ export default function ToolsSection() {
               ([, g]) => getVariableDisplayValue((g as any).space_id) === genieSpaceIdValue || (g as any).name === genie?.name
             )?.[0];
           
+          // Get name and description from configured room if available, otherwise from inline config
+          let genieName = '';
+          let genieDescription = '';
+          if (matchingGenieKey) {
+            const configuredRoom = configuredGenieRooms[matchingGenieKey];
+            genieName = configuredRoom?.name || matchingGenieKey;
+            genieDescription = configuredRoom?.description || '';
+          } else if (genie?.name) {
+            genieName = genie.name;
+            genieDescription = genie.description || '';
+          }
+          
           setMcpForm(prev => ({
             ...prev,
             sourceType: 'genie',
             genieSource: matchingGenieKey ? 'configured' : 'select',
             genieRefName: matchingGenieKey || '',
             genieSpaceId: !matchingGenieKey && genie?.space_id ? genieSpaceIdValue : '',
-            genieName: !matchingGenieKey && genie?.name ? genie.name : '',
-            genieDescription: !matchingGenieKey && genie?.description ? genie.description : '',
+            genieName: genieName,
+            genieDescription: genieDescription,
           }));
         } else if (mcpFunc.vector_search) {
           // Vector Search source
@@ -2018,12 +2049,14 @@ export default function ToolsSection() {
           const appRef = mcpFunc.app;
           const isReference = typeof appRef === 'string' && appRef.startsWith('*');
           const appRefName = isReference ? appRef.slice(1) : '';
+          const appName = typeof appRef === 'object' && appRef.name ? appRef.name : '';
           
           setMcpForm(prev => ({
             ...prev,
             sourceType: 'app',
-            appSource: 'configured',
+            appSource: isReference ? 'configured' : 'select',
             appRefName: appRefName,
+            appName: appName,
           }));
         } else if (mcpFunc.url) {
           // Direct URL source
@@ -2306,7 +2339,18 @@ export default function ToolsSection() {
                   >
                   <GenieSpaceSelect
                     value={formData.genieSpaceId}
-                      onChange={(value) => setFormData({ ...formData, genieSpaceId: value, genieRefName: '' })}
+                    onChange={(value) => {
+                      // Auto-populate Genie tool name from selected space
+                      const space = genieSpaces?.find(s => s.space_id === value);
+                      const spaceName = space?.title || '';
+                      
+                      setFormData({ 
+                        ...formData, 
+                        genieSpaceId: value, 
+                        genieRefName: '',
+                        name: editingKey ? formData.name : spaceName // Only auto-fill when creating new
+                      });
+                    }}
                     required
                   />
                   </ResourceSelector>
@@ -3536,6 +3580,7 @@ export default function ToolsSection() {
                       configuredOptions={configuredGenieOptions}
                       configuredValue={mcpForm.genieRefName}
                       onConfiguredChange={(value) => {
+                        // Auto-populate name and description from configured Genie Room
                         const room = configuredGenieRooms[value];
                         setMcpForm({ 
                           ...mcpForm, 
@@ -3546,11 +3591,55 @@ export default function ToolsSection() {
                         });
                       }}
                       source={mcpForm.genieSource}
-                      onSourceChange={(source) => setMcpForm({ ...mcpForm, genieSource: source })}
+                      onSourceChange={(source) => {
+                        if (source === 'select') {
+                          // Switching to Select mode: clear configured reference and reset name/description
+                          setMcpForm({ 
+                            ...mcpForm, 
+                            genieSource: source,
+                            genieRefName: '',
+                            genieName: '',
+                            genieDescription: ''
+                          });
+                        } else {
+                          // Switching to Configured mode: restore previously selected configured room if any
+                          const previouslyConfiguredRef = mcpForm.genieRefName;
+                          if (previouslyConfiguredRef && configuredGenieRooms[previouslyConfiguredRef]) {
+                            const room = configuredGenieRooms[previouslyConfiguredRef];
+                            setMcpForm({ 
+                              ...mcpForm, 
+                              genieSource: source,
+                              genieSpaceId: '',
+                              genieName: room?.name || previouslyConfiguredRef,
+                              genieDescription: room?.description || ''
+                            });
+                          } else {
+                            setMcpForm({ 
+                              ...mcpForm, 
+                              genieSource: source,
+                              genieSpaceId: ''
+                            });
+                          }
+                        }
+                      }}
+                      hint="Display Name and Description will auto-fill from your selection."
                     >
                       <GenieSpaceSelect
                         value={mcpForm.genieSpaceId}
-                        onChange={(value) => setMcpForm({ ...mcpForm, genieSpaceId: value, genieRefName: '' })}
+                        onChange={(value) => {
+                          // Auto-populate name and description from selected space
+                          const space = genieSpaces?.find(s => s.space_id === value);
+                          const spaceName = space?.title || '';
+                          const spaceDesc = space?.description || '';
+                          
+                          setMcpForm({ 
+                            ...mcpForm, 
+                            genieSpaceId: value, 
+                            genieRefName: '',
+                            genieName: spaceName,
+                            genieDescription: spaceDesc
+                          });
+                        }}
                         required
                       />
                     </ResourceSelector>
@@ -3559,12 +3648,14 @@ export default function ToolsSection() {
                       placeholder="e.g., Retail Genie"
                       value={mcpForm.genieName}
                       onChange={(e: ChangeEvent<HTMLInputElement>) => setMcpForm({ ...mcpForm, genieName: e.target.value })}
+                      hint="Name for this Genie Room configuration (auto-filled from selection)"
                     />
                     <Input
                       label="Description (optional)"
                       placeholder="Query retail data using natural language"
                       value={mcpForm.genieDescription}
                       onChange={(e: ChangeEvent<HTMLInputElement>) => setMcpForm({ ...mcpForm, genieDescription: e.target.value })}
+                      hint="Optional description (auto-filled from selection)"
                     />
                   </>
                 )}
@@ -3685,36 +3776,28 @@ export default function ToolsSection() {
                 )}
 
                 {mcpForm.sourceType === 'app' && (
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <label className="text-sm font-medium text-slate-300">
-                        Databricks App <span className="text-red-400">*</span>
-                      </label>
-                    </div>
-                    {Object.keys(config.resources?.apps || {}).length > 0 ? (
-                      <Select
-                        value={mcpForm.appRefName}
-                        onChange={(e: ChangeEvent<HTMLSelectElement>) => setMcpForm({ ...mcpForm, appRefName: e.target.value })}
-                        options={[
-                          { value: '', label: 'Select a configured app...' },
-                          ...Object.entries(config.resources?.apps || {}).map(([key, app]) => ({
-                            value: key,
-                            label: `${key} (${app.name})`,
-                          })),
-                        ]}
-                        hint="Select a preconfigured Databricks App from Resources"
-                      />
-                    ) : (
-                      <div className="p-3 bg-amber-900/20 border border-amber-500/30 rounded-lg">
-                        <p className="text-sm text-amber-300">
-                          No Databricks Apps configured. Add one in the Resources → Databricks Apps section first.
-                        </p>
-                      </div>
-                    )}
-                    <p className="text-xs text-slate-500">
-                      The app's URL will be retrieved dynamically from the workspace at runtime.
-                    </p>
-                  </div>
+                  <ResourceSelector
+                    label="Databricks App"
+                    resourceType="Databricks App"
+                    configuredOptions={configuredAppOptions}
+                    configuredValue={mcpForm.appRefName}
+                    onConfiguredChange={(value) => {
+                      setMcpForm({ 
+                        ...mcpForm, 
+                        appRefName: value, 
+                        appName: ''
+                      });
+                    }}
+                    source={mcpForm.appSource}
+                    onSourceChange={(source) => setMcpForm({ ...mcpForm, appSource: source })}
+                    hint="The app's URL will be retrieved dynamically from the workspace at runtime."
+                  >
+                    <DatabricksAppSelect
+                      value={mcpForm.appName}
+                      onChange={(value) => setMcpForm({ ...mcpForm, appName: value, appRefName: '' })}
+                      required
+                    />
+                  </ResourceSelector>
                 )}
 
                 {mcpForm.sourceType === 'connection' && (
@@ -4014,7 +4097,21 @@ export default function ToolsSection() {
                                 }
                                 break;
                               case 'genie':
-                                if (mcpForm.genieSpaceId) {
+                                if (mcpForm.genieSource === 'configured' && mcpForm.genieRefName) {
+                                  const genieConfig = config.resources?.genie_rooms?.[mcpForm.genieRefName];
+                                  if (genieConfig) {
+                                    // Extract space_id value - handle variable references
+                                    const spaceId = typeof genieConfig.space_id === 'string' && genieConfig.space_id.startsWith('*')
+                                      ? config.variables?.[genieConfig.space_id.slice(1)]?.value
+                                      : genieConfig.space_id;
+                                    mcpConfig.genie_room = {
+                                      name: genieConfig.name || 'Genie Room',
+                                      space_id: spaceId || genieConfig.space_id,
+                                    };
+                                  } else {
+                                    throw new Error('Selected Genie Room not found. Please select a configured Genie room.');
+                                  }
+                                } else if (mcpForm.genieSource === 'select' && mcpForm.genieSpaceId) {
                                   mcpConfig.genie_room = {
                                     name: mcpForm.genieName || 'Genie Room',
                                     space_id: mcpForm.genieSpaceId,
@@ -4038,13 +4135,15 @@ export default function ToolsSection() {
                                 break;
                               case 'app':
                                 // App source - need the actual app to discover tools
-                                if (mcpForm.appRefName) {
+                                if (mcpForm.appSource === 'configured' && mcpForm.appRefName) {
                                   const appConfig = config.resources?.apps?.[mcpForm.appRefName];
                                   if (appConfig) {
                                     mcpConfig.app = { name: appConfig.name };
                                   } else {
                                     throw new Error('Selected Databricks App not found. Please select a configured app.');
                                   }
+                                } else if (mcpForm.appSource === 'select' && mcpForm.appName) {
+                                  mcpConfig.app = { name: mcpForm.appName };
                                 } else {
                                   throw new Error('Please select a Databricks App to discover tools.');
                                 }

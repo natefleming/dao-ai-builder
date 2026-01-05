@@ -1134,11 +1134,26 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
     // Parse authentication data
     const authData = parseResourceAuth(room, safeStartsWith, safeString);
     
+    // Auto-populate name and description from Genie space if not provided
+    let name = room.name || '';
+    let description = room.description || '';
+    if (spaceIdValue && (!room.name || !room.description)) {
+      const space = genieSpaces?.find(s => s.space_id === spaceIdValue);
+      if (space) {
+        if (!room.name && space.title) {
+          name = space.title;
+        }
+        if (!room.description && space.description) {
+          description = space.description;
+        }
+      }
+    }
+    
     setSpaceIdSource(source);
     setFormData({
       refName: key,
-      name: room.name,
-      description: room.description || '',
+      name,
+      description,
       space_id: spaceIdValue,
       space_id_variable: variableName,
       ...authData,
@@ -1544,10 +1559,19 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
     // Parse authentication data
     const authData = parseResourceAuth(wh, safeStartsWith, safeString);
     
+    // Auto-populate name from SQL warehouse if not provided
+    let name = wh.name || '';
+    if (directId && !wh.name) {
+      const warehouse = sqlWarehouses?.find(w => w.id === directId);
+      if (warehouse?.name) {
+        name = warehouse.name;
+      }
+    }
+    
     setWarehouseIdSource(source);
     setFormData({
       refName: key,
-      name: wh.name,
+      name,
       description: wh.description || '',
       warehouse_id: directId,
       warehouse_id_variable: variableName,
@@ -1717,10 +1741,10 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
             required
           />
           
-          {/* Warehouse ID Source Toggle */}
+          {/* SQL Warehouse Source Toggle */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <label className="text-sm font-medium text-slate-300">Warehouse ID</label>
+              <label className="text-sm font-medium text-slate-300">SQL Warehouse</label>
               <div className="flex items-center space-x-2">
                 <button
                   type="button"

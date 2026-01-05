@@ -540,17 +540,6 @@
           "title": "Name",
           "type": "string"
         },
-        "type": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/StorageType"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": "memory"
-        },
         "database": {
           "anyOf": [
             {
@@ -784,7 +773,7 @@
     },
     "DatabaseModel": {
       "additionalProperties": false,
-      "description": "Configuration for a Databricks Lakebase (PostgreSQL) database instance.\n\nAuthentication is inherited from IsDatabricksResource. Additionally supports:\n- user/password: For user-based database authentication\n\nDatabase Type:\n- lakebase: Databricks-managed Lakebase instance (authentication optional, supports ambient auth)\n- postgres: Standard PostgreSQL database (authentication required)\n\nExample Service Principal Configuration:\n```yaml\ndatabases:\n  my_lakebase:\n    name: my-database\n    type: lakebase\n    service_principal:\n      client_id:\n        env: SERVICE_PRINCIPAL_CLIENT_ID\n      client_secret:\n        scope: my-scope\n        secret: sp-client-secret\n    workspace_host:\n      env: DATABRICKS_HOST\n```\n\nExample User Configuration:\n```yaml\ndatabases:\n  my_lakebase:\n    name: my-database\n    type: lakebase\n    user: my-user@databricks.com\n```\n\nExample Ambient Authentication (Lakebase only):\n```yaml\ndatabases:\n  my_lakebase:\n    name: my-database\n    type: lakebase\n    on_behalf_of_user: true\n```",
+      "description": "Configuration for database connections supporting both Databricks Lakebase and standard PostgreSQL.\n\nAuthentication is inherited from IsDatabricksResource. Additionally supports:\n- user/password: For user-based database authentication\n\nConnection Types (determined by fields provided):\n- Databricks Lakebase: Provide `instance_name` (authentication optional, supports ambient auth)\n- Standard PostgreSQL: Provide `host` (authentication required via user/password)\n\nNote: `instance_name` and `host` are mutually exclusive. Provide one or the other.\n\nExample Databricks Lakebase with Service Principal:\n```yaml\ndatabases:\n  my_lakebase:\n    name: my-database\n    instance_name: my-lakebase-instance\n    service_principal:\n      client_id:\n        env: SERVICE_PRINCIPAL_CLIENT_ID\n      client_secret:\n        scope: my-scope\n        secret: sp-client-secret\n    workspace_host:\n      env: DATABRICKS_HOST\n```\n\nExample Databricks Lakebase with Ambient Authentication:\n```yaml\ndatabases:\n  my_lakebase:\n    name: my-database\n    instance_name: my-lakebase-instance\n    on_behalf_of_user: true\n```\n\nExample Standard PostgreSQL:\n```yaml\ndatabases:\n  my_postgres:\n    name: my-database\n    host: my-postgres-host.example.com\n    port: 5432\n    database: my_db\n    user: my_user\n    password:\n      env: PGPASSWORD\n```",
       "properties": {
         "on_behalf_of_user": {
           "anyOf": [
@@ -944,17 +933,6 @@
         "name": {
           "title": "Name",
           "type": "string"
-        },
-        "type": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DatabaseType"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": "lakebase"
         },
         "instance_name": {
           "anyOf": [
@@ -1216,16 +1194,9 @@
       "title": "DatabaseModel",
       "type": "object"
     },
-    "DatabaseType": {
-      "enum": [
-        "postgres",
-        "lakebase"
-      ],
-      "title": "DatabaseType",
-      "type": "string"
-    },
     "DatabricksAppModel": {
       "additionalProperties": false,
+      "description": "Configuration for a Databricks App resource.\n\nThe `name` is the unique instance name of the Databricks App within the workspace.\nThe `url` is dynamically retrieved from the workspace client by calling\n`apps.get(name)` and returning the app's URL.\n\nExample:\n    ```yaml\n    resources:\n      apps:\n        my_app:\n          name: my-databricks-app\n    ```",
       "properties": {
         "on_behalf_of_user": {
           "anyOf": [
@@ -1385,15 +1356,10 @@
         "name": {
           "title": "Name",
           "type": "string"
-        },
-        "url": {
-          "title": "Url",
-          "type": "string"
         }
       },
       "required": [
-        "name",
-        "url"
+        "name"
       ],
       "title": "DatabricksAppModel",
       "type": "object"
@@ -1709,10 +1675,6 @@
           "title": "Type",
           "type": "string"
         },
-        "name": {
-          "title": "Name",
-          "type": "string"
-        },
         "human_in_the_loop": {
           "anyOf": [
             {
@@ -1723,6 +1685,10 @@
             }
           ],
           "default": null
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
         },
         "args": {
           "anyOf": [
@@ -1744,6 +1710,7 @@
       "type": "object"
     },
     "FunctionModel": {
+      "additionalProperties": false,
       "properties": {
         "on_behalf_of_user": {
           "anyOf": [
@@ -2086,8 +2053,16 @@
           "title": "Pat"
         },
         "name": {
-          "title": "Name",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
         },
         "description": {
           "anyOf": [
@@ -2132,7 +2107,6 @@
         }
       },
       "required": [
-        "name",
         "space_id"
       ],
       "title": "GenieRoomModel",
@@ -2246,6 +2220,7 @@
     },
     "IndexModel": {
       "additionalProperties": false,
+      "description": "Model representing a Databricks Vector Search index.",
       "properties": {
         "on_behalf_of_user": {
           "anyOf": [
@@ -2586,6 +2561,18 @@
           "title": "Name",
           "type": "string"
         },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
         "temperature": {
           "anyOf": [
             {
@@ -2827,10 +2814,6 @@
           "title": "Type",
           "type": "string"
         },
-        "name": {
-          "title": "Name",
-          "type": "string"
-        },
         "human_in_the_loop": {
           "anyOf": [
             {
@@ -2930,6 +2913,17 @@
           "title": "Args",
           "type": "array"
         },
+        "app": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DatabricksAppModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "connection": {
           "anyOf": [
             {
@@ -2985,11 +2979,40 @@
             }
           ],
           "default": null
+        },
+        "include_tools": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional list of tool names or glob patterns to include from the MCP server. If specified, only tools matching these patterns will be loaded. Supports glob patterns: * (any chars), ? (single char), [abc] (char set). Examples: ['execute_query', 'list_*', 'get_?_data']",
+          "title": "Include Tools"
+        },
+        "exclude_tools": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional list of tool names or glob patterns to exclude from the MCP server. Tools matching these patterns will not be loaded. Takes precedence over include_tools. Supports glob patterns: * (any chars), ? (single char), [abc] (char set). Examples: ['drop_*', 'delete_*', 'execute_ddl']",
+          "title": "Exclude Tools"
         }
       },
-      "required": [
-        "name"
-      ],
       "title": "McpFunctionModel",
       "type": "object"
     },
@@ -3293,6 +3316,12 @@
             }
           ],
           "title": "Tags"
+        },
+        "auto_register": {
+          "default": false,
+          "description": "Whether to automatically register the default_template to the prompt registry. If False, the prompt will only be loaded from the registry (never created/updated). Defaults to True for backward compatibility.",
+          "title": "Auto Register",
+          "type": "boolean"
         }
       },
       "required": [
@@ -3371,10 +3400,6 @@
           "title": "Type",
           "type": "string"
         },
-        "name": {
-          "title": "Name",
-          "type": "string"
-        },
         "human_in_the_loop": {
           "anyOf": [
             {
@@ -3385,6 +3410,10 @@
             }
           ],
           "default": null
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
         }
       },
       "required": [
@@ -3420,7 +3449,7 @@
     },
     "RerankParametersModel": {
       "additionalProperties": false,
-      "description": "Configuration for reranking retrieved documents using FlashRank.\n\nFlashRank provides fast, local reranking without API calls using lightweight\ncross-encoder models. Reranking improves retrieval quality by reordering results\nbased on semantic relevance to the query.\n\nTypical workflow:\n1. Retrieve more documents than needed (e.g., 50 via num_results)\n2. Rerank all retrieved documents\n3. Return top_n best matches (e.g., 5)\n\nExample:\n    ```yaml\n    retriever:\n      search_parameters:\n        num_results: 50  # Retrieve more candidates\n      rerank:\n        model: ms-marco-MiniLM-L-12-v2\n        top_n: 5  # Return top 5 after reranking\n    ```\n\nAvailable models (from fastest to most accurate):\n- \"ms-marco-TinyBERT-L-2-v2\" (fastest, smallest)\n- \"ms-marco-MiniLM-L-6-v2\"\n- \"ms-marco-MiniLM-L-12-v2\" (default, good balance)\n- \"rank-T5-flan\" (most accurate, slower)",
+      "description": "Configuration for reranking retrieved documents using FlashRank.\n\nFlashRank provides fast, local reranking without API calls using lightweight\ncross-encoder models. Reranking improves retrieval quality by reordering results\nbased on semantic relevance to the query.\n\nTypical workflow:\n1. Retrieve more documents than needed (e.g., 50 via num_results)\n2. Rerank all retrieved documents\n3. Return top_n best matches (e.g., 5)\n\nExample:\n    ```yaml\n    retriever:\n      search_parameters:\n        num_results: 50  # Retrieve more candidates\n      rerank:\n        model: ms-marco-MiniLM-L-12-v2\n        top_n: 5  # Return top 5 after reranking\n    ```\n\nAvailable models (see https://github.com/PrithivirajDamodaran/FlashRank):\n- \"ms-marco-TinyBERT-L-2-v2\" (~4MB, fastest)\n- \"ms-marco-MiniLM-L-12-v2\" (~34MB, best cross-encoder, default)\n- \"rank-T5-flan\" (~110MB, best non cross-encoder)\n- \"ms-marco-MultiBERT-L-12\" (~150MB, multilingual 100+ languages)\n- \"ce-esci-MiniLM-L12-v2\" (e-commerce optimized, Amazon ESCI)\n- \"miniReranker_arabic_v1\" (Arabic language)",
       "properties": {
         "model": {
           "default": "ms-marco-MiniLM-L-12-v2",
@@ -3450,8 +3479,8 @@
               "type": "null"
             }
           ],
-          "default": "/tmp/flashrank_cache",
-          "description": "Directory to cache downloaded model weights.",
+          "default": "~/.dao_ai/cache/flashrank",
+          "description": "Directory to cache downloaded model weights. Supports tilde expansion (e.g., ~/.dao_ai).",
           "title": "Cache Dir"
         },
         "columns": {
@@ -3634,12 +3663,62 @@
       "additionalProperties": false,
       "properties": {
         "catalog_name": {
-          "title": "Catalog Name",
-          "type": "string"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompositeVariableModel"
+            },
+            {
+              "$ref": "#/$defs/EnvironmentVariableModel"
+            },
+            {
+              "$ref": "#/$defs/SecretVariableModel"
+            },
+            {
+              "$ref": "#/$defs/PrimitiveVariableModel"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ],
+          "title": "Catalog Name"
         },
         "schema_name": {
-          "title": "Schema Name",
-          "type": "string"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompositeVariableModel"
+            },
+            {
+              "$ref": "#/$defs/EnvironmentVariableModel"
+            },
+            {
+              "$ref": "#/$defs/SecretVariableModel"
+            },
+            {
+              "$ref": "#/$defs/PrimitiveVariableModel"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ],
+          "title": "Schema Name"
         },
         "permissions": {
           "anyOf": [
@@ -3802,15 +3881,6 @@
       "title": "ServicePrincipalModel",
       "type": "object"
     },
-    "StorageType": {
-      "enum": [
-        "postgres",
-        "memory",
-        "lakebase"
-      ],
-      "title": "StorageType",
-      "type": "string"
-    },
     "StoreModel": {
       "additionalProperties": false,
       "properties": {
@@ -3828,17 +3898,6 @@
             }
           ],
           "default": null
-        },
-        "type": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/StorageType"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": "memory"
         },
         "dims": {
           "anyOf": [
@@ -3942,6 +4001,14 @@
           ],
           "default": null,
           "title": "Default Agent"
+        },
+        "middleware": {
+          "description": "List of middleware to apply to all agents in the swarm",
+          "items": {
+            "$ref": "#/$defs/MiddlewareModel"
+          },
+          "title": "Middleware",
+          "type": "array"
         },
         "handoffs": {
           "anyOf": [
@@ -4218,10 +4285,6 @@
           "title": "Type",
           "type": "string"
         },
-        "name": {
-          "title": "Name",
-          "type": "string"
-        },
         "human_in_the_loop": {
           "anyOf": [
             {
@@ -4233,16 +4296,8 @@
           ],
           "default": null
         },
-        "schema": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SchemaModel"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+        "resource": {
+          "$ref": "#/$defs/FunctionModel"
         },
         "partial_args": {
           "anyOf": [
@@ -4285,7 +4340,7 @@
         }
       },
       "required": [
-        "name"
+        "resource"
       ],
       "title": "UnityCatalogFunctionModel",
       "type": "object"
@@ -4294,7 +4349,7 @@
       "additionalProperties": false,
       "properties": {
         "function": {
-          "$ref": "#/$defs/UnityCatalogFunctionModel"
+          "$ref": "#/$defs/FunctionModel"
         },
         "ddl": {
           "title": "Ddl",
@@ -4378,6 +4433,7 @@
     },
     "VectorStoreModel": {
       "additionalProperties": false,
+      "description": "Configuration model for a Databricks Vector Search store.\n\nSupports two modes:\n1. **Use Existing Index**: Provide only `index` (fully qualified name).\n   Used for querying an existing vector search index at runtime.\n2. **Provisioning Mode**: Provide `source_table` + `embedding_source_column`.\n   Used for creating a new vector search index.\n\nExamples:\n    Minimal configuration (use existing index):\n    ```yaml\n    vector_stores:\n      products_search:\n        index:\n          name: catalog.schema.my_index\n    ```\n\n    Full provisioning configuration:\n    ```yaml\n    vector_stores:\n      products_search:\n        source_table:\n          schema: *my_schema\n          name: products\n        embedding_source_column: description\n        endpoint:\n          name: my_endpoint\n    ```",
       "properties": {
         "on_behalf_of_user": {
           "anyOf": [
@@ -4534,10 +4590,10 @@
           "default": null,
           "title": "Pat"
         },
-        "embedding_model": {
+        "index": {
           "anyOf": [
             {
-              "$ref": "#/$defs/LLMModel"
+              "$ref": "#/$defs/IndexModel"
             },
             {
               "type": "null"
@@ -4545,10 +4601,33 @@
           ],
           "default": null
         },
-        "index": {
+        "source_table": {
           "anyOf": [
             {
-              "$ref": "#/$defs/IndexModel"
+              "$ref": "#/$defs/TableModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "embedding_source_column": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Embedding Source Column"
+        },
+        "embedding_model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LLMModel"
             },
             {
               "type": "null"
@@ -4566,9 +4645,6 @@
             }
           ],
           "default": null
-        },
-        "source_table": {
-          "$ref": "#/$defs/TableModel"
         },
         "source_path": {
           "anyOf": [
@@ -4629,16 +4705,8 @@
           ],
           "default": null,
           "title": "Doc Uri"
-        },
-        "embedding_source_column": {
-          "title": "Embedding Source Column",
-          "type": "string"
         }
       },
-      "required": [
-        "source_table",
-        "embedding_source_column"
-      ],
       "title": "VectorStoreModel",
       "type": "object"
     },
@@ -4853,6 +4921,7 @@
       "type": "object"
     },
     "WarehouseModel": {
+      "additionalProperties": false,
       "properties": {
         "on_behalf_of_user": {
           "anyOf": [
@@ -5010,8 +5079,16 @@
           "title": "Pat"
         },
         "name": {
-          "title": "Name",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
         },
         "description": {
           "anyOf": [
@@ -5056,7 +5133,6 @@
         }
       },
       "required": [
-        "name",
         "warehouse_id"
       ],
       "title": "WarehouseModel",
