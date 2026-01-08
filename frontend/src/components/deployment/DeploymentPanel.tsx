@@ -80,14 +80,19 @@ const stepIcons: Record<string, React.ReactNode> = {
   deploy_agent: <Server className="w-4 h-4" />,
 };
 
-const stepLabels: Record<string, string> = {
-  validate: 'Validate Configuration',
-  create_agent: 'Create Agent Model',
-  deploy_agent: 'Deploy to Endpoint',
-};
-
 export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
   const { config } = useConfigStore();
+  
+  // Determine deployment target
+  const deploymentTarget = config.app?.deployment_target || 'model_serving';
+  const isModelServing = deploymentTarget === 'model_serving';
+  
+  // Dynamic step labels based on deployment target
+  const stepLabels: Record<string, string> = {
+    validate: 'Validate Configuration',
+    create_agent: 'Create Agent Model',
+    deploy_agent: isModelServing ? 'Deploy to Model Serving' : 'Deploy to Databricks Apps',
+  };
   const {
     deploymentId,
     deploymentStatus,
@@ -105,6 +110,7 @@ export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [isValidating, setIsValidating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [skipModelCreation, setSkipModelCreation] = useState(false);
   
   // Track the deployment ID being cancelled to prevent stale polling
   const cancellingDeploymentIdRef = useRef<string | null>(null);
@@ -379,7 +385,12 @@ export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ config: sanitizedConfig, credentials }),
+        body: JSON.stringify({ 
+          config: sanitizedConfig, 
+          credentials,
+          target: config.app?.deployment_target || 'model_serving',
+          skip_model_creation: skipModelCreation
+        }),
       });
       
       // Check content type to handle HTML error pages
@@ -418,6 +429,8 @@ export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
         return <XCircle className="w-5 h-5 text-red-400" />;
       case 'running':
         return <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />;
+      case 'skipped':
+        return <span className="text-xs text-slate-400 uppercase tracking-wide">Skipped</span>;
       default:
         return <Clock className="w-5 h-5 text-slate-500" />;
     }
@@ -473,6 +486,7 @@ export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
                 <p className="text-xs text-slate-400 mt-0.5">
                   {validation.app_name && `App: ${validation.app_name}`}
                   {validation.agent_count !== undefined && ` • ${validation.agent_count} agent(s)`}
+                  {` • Target: ${isModelServing ? 'Model Serving' : 'Databricks Apps'}`}
                 </p>
               </div>
             </div>
@@ -687,6 +701,24 @@ export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
                   ))}
                 </div>
               </div>
+              
+              {/* Skip model creation option - only for Apps deployment */}
+              {!isModelServing && (
+                <label className="flex items-start gap-3 p-3 rounded-lg border border-slate-700 bg-slate-800/30 cursor-pointer hover:bg-slate-800/50 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={skipModelCreation}
+                    onChange={(e) => setSkipModelCreation(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 rounded border-slate-600 bg-slate-700 text-violet-500 focus:ring-violet-500 focus:ring-offset-0"
+                  />
+                  <div>
+                    <span className="text-sm font-medium text-slate-200">Skip model creation</span>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Deploy without logging model to MLflow. Faster deployment but no model versioning or tracking.
+                    </p>
+                  </div>
+                </label>
+              )}
             </div>
           )}
 
@@ -730,6 +762,8 @@ export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
                           ? 'bg-green-950/20 border-green-900'
                           : effectiveStatus === 'failed'
                           ? 'bg-red-950/20 border-red-900'
+                          : effectiveStatus === 'skipped'
+                          ? 'bg-slate-800/20 border-slate-700 opacity-60'
                           : 'bg-slate-800/30 border-slate-700'
                       }`}
                     >
@@ -737,6 +771,7 @@ export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
                         effectiveStatus === 'running' ? 'bg-blue-500/20' :
                         effectiveStatus === 'completed' ? 'bg-green-500/20' :
                         effectiveStatus === 'failed' ? 'bg-red-500/20' :
+                        effectiveStatus === 'skipped' ? 'bg-slate-600/30' :
                         'bg-slate-700'
                       }`}>
                         {stepIcons[step.name] || <Settings className="w-4 h-4" />}
@@ -764,7 +799,7 @@ export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
                   </div>
                   <div className="space-y-2 text-sm">
                     <div className="flex items-center justify-between">
-                      <span className="text-slate-400">Endpoint:</span>
+                      <span className="text-slate-400">{isModelServing ? 'Endpoint:' : 'App Name:'}</span>
                       <code className="px-2 py-0.5 bg-slate-800 rounded text-green-300">
                         {deploymentStatus.result.endpoint_name}
                       </code>
@@ -859,7 +894,11 @@ export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
               )}
               
               {onClose && (
-                <Button variant="secondary" onClick={onClose} className="min-w-[120px]">
+                <Button variant="secondary" onClick={() => {
+                  // Reset deployment state when closing dialog
+                  resetDeployment();
+                  onClose();
+                }} className="min-w-[120px]">
                   Close
                 </Button>
               )}
@@ -875,6 +914,8 @@ export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
                   });
                   if (deploymentStatus?.status === 'completed') {
                     console.log('[DeploymentPanel] Closing dialog (completed)');
+                    // Reset deployment state so next deploy starts fresh
+                    resetDeployment();
                     onClose?.();
                   } else if (deploymentStatus?.status === 'failed' || deploymentStatus?.status === 'cancelled') {
                     console.log('[DeploymentPanel] Resetting deployment state');

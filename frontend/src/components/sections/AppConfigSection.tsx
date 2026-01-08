@@ -103,7 +103,7 @@ function toSnakeCase(str: string): string {
 }
 
 export default function AppConfigSection() {
-  const { config, updateApp } = useConfigStore();
+  const { config, updateApp, setHasUnsavedAppChanges } = useConfigStore();
   const app = config.app;
   const schemas = config.schemas || {};
   const agents = config.agents || {};
@@ -154,6 +154,7 @@ export default function AppConfigSection() {
       directSchema,
       workloadSize: app?.workload_size || 'Small',
       scaleToZero: app?.scale_to_zero ?? true,
+      deploymentTarget: app?.deployment_target || 'model_serving',
       servicePrincipalRef: spRef,
     };
   });
@@ -355,7 +356,6 @@ export default function AppConfigSection() {
       if (config.memory?.refName) {
         return config.memory.refName;
       }
-      return 'memory'; // Default
     }
     return '';
   });
@@ -390,6 +390,7 @@ export default function AppConfigSection() {
     if (formData.modelName !== (app?.registered_model?.name || '')) return true;
     if (formData.workloadSize !== (app?.workload_size || 'Small')) return true;
     if (formData.scaleToZero !== (app?.scale_to_zero ?? true)) return true;
+    if (formData.deploymentTarget !== (app?.deployment_target || 'model_serving')) return true;
     
     // Check model schema
     let savedModelSchemaKey = '';
@@ -406,17 +407,31 @@ export default function AppConfigSection() {
     if (formData.modelSchema !== savedModelSchemaKey) return true;
     
     // Check selected agents
-    const savedAgentKeys = (app?.agents || []).map(a => {
-      const matchedKey = Object.entries(agents).find(([, agent]) => agent.name === a.name)?.[0];
-      return matchedKey || '';
-    }).filter(Boolean).sort();
+    // Note: When app?.agents is empty/undefined, sync logic defaults to all agents,
+    // so comparison should use that same default
+    let savedAgentKeys: string[];
+    if (app?.agents && Array.isArray(app.agents) && app.agents.length > 0) {
+      savedAgentKeys = app.agents.map(a => {
+        const matchedKey = Object.entries(agents).find(([, agent]) => agent.name === a.name)?.[0];
+        return matchedKey || '';
+      }).filter(Boolean).sort();
+    } else {
+      // Default to all agents when no explicit selection exists (matches sync logic)
+      savedAgentKeys = Object.keys(agents).sort();
+    }
     const currentAgentKeys = [...selectedAgents].sort();
     if (JSON.stringify(savedAgentKeys) !== JSON.stringify(currentAgentKeys)) return true;
     
     // Check orchestration pattern
-    const savedPattern: OrchestrationPattern = 
+    // Note: Sync logic forces 'none' if insufficient agents for supervisor/swarm
+    let savedPattern: OrchestrationPattern = 
       app?.orchestration?.supervisor ? 'supervisor' :
       app?.orchestration?.swarm ? 'swarm' : 'none';
+    
+    // Match sync logic: override to 'none' if insufficient agents
+    if ((savedPattern === 'supervisor' || savedPattern === 'swarm') && currentAgentKeys.length <= 1) {
+      savedPattern = 'none';
+    }
     if (pattern !== savedPattern) return true;
     
     // Check orchestration details
@@ -506,6 +521,39 @@ export default function AppConfigSection() {
     });
     if (JSON.stringify(savedEnvVars) !== JSON.stringify(currentEnvVarsDict)) return true;
     
+    // Check service principal
+    let savedSpRef = '';
+    if (app?.service_principal) {
+      if (typeof app.service_principal === 'string') {
+        savedSpRef = app.service_principal.startsWith('*') ? app.service_principal.slice(1) : app.service_principal;
+      }
+    }
+    if (formData.servicePrincipalRef !== savedSpRef) return true;
+    
+    // Check chat history
+    const savedChatHistoryEnabled = !!app?.chat_history;
+    if (enableChatHistory !== savedChatHistoryEnabled) return true;
+    
+    if (enableChatHistory) {
+      // Check chat history LLM
+      const savedChatHistoryLLMName = app?.chat_history?.model?.name;
+      const currentChatHistoryLLMName = chatHistoryLLM ? llms[chatHistoryLLM]?.name : '';
+      if (savedChatHistoryLLMName !== currentChatHistoryLLMName) return true;
+      
+      // Check max tokens
+      if (chatHistoryMaxTokens !== (app?.chat_history?.max_tokens || 2048)) return true;
+      
+      // Check summarization settings
+      const savedUsesTokens = !!app?.chat_history?.max_tokens_before_summary;
+      if (chatHistoryUsesTokens !== savedUsesTokens) return true;
+      
+      if (chatHistoryUsesTokens) {
+        if (chatHistoryMaxTokensBeforeSummary !== (app?.chat_history?.max_tokens_before_summary || 20480)) return true;
+      } else {
+        if (chatHistoryMaxMessagesBeforeSummary !== (app?.chat_history?.max_messages_before_summary || 10)) return true;
+      }
+    }
+    
     return false;
   })();
 
@@ -534,6 +582,11 @@ export default function AppConfigSection() {
   
   const isValid = validationErrors.length === 0;
   const canSave = hasChanges && isValid;
+  
+  // Sync hasChanges with global store for Header to use
+  useEffect(() => {
+    setHasUnsavedAppChanges(hasChanges);
+  }, [hasChanges, setHasUnsavedAppChanges]);
 
   const llmOptions = [
     { value: '', label: 'Select an LLM...' },
@@ -619,6 +672,7 @@ export default function AppConfigSection() {
       directSchema,
       workloadSize: app?.workload_size || 'Small',
       scaleToZero: app?.scale_to_zero ?? true,
+      deploymentTarget: app?.deployment_target || 'model_serving',
       servicePrincipalRef: spRef,
     });
     
@@ -1028,6 +1082,7 @@ export default function AppConfigSection() {
       },
       workload_size: formData.workloadSize as 'Small' | 'Medium' | 'Large',
       scale_to_zero: formData.scaleToZero,
+      deployment_target: formData.deploymentTarget as 'model_serving' | 'apps',
       orchestration,
       agents: appAgents.length > 0 ? appAgents : undefined,
       tags: Object.keys(tags).length > 0 ? tags : undefined,
@@ -1035,6 +1090,7 @@ export default function AppConfigSection() {
       environment_vars: Object.keys(environmentVars).length > 0 ? environmentVars : undefined,
       chat_history: chatHistory,
     });
+    // Note: hasChanges will automatically become false after save since form now matches config
   };
 
   const toggleAgent = (agentKey: string) => {
@@ -1115,13 +1171,48 @@ export default function AppConfigSection() {
           onChange={(e) => setFormData({ ...formData, description: e.target.value })}
         />
 
-        <Input
-          label="Endpoint Name"
-          placeholder="e.g., my_agent_endpoint"
-          value={formData.endpointName}
-          onChange={(e) => setFormData({ ...formData, endpointName: e.target.value })}
-          hint="The name of the model serving endpoint"
-        />
+        {/* Deployment Target Toggle */}
+        <div className="space-y-1.5">
+          <label className="block text-sm font-medium text-slate-300">Deployment Target</label>
+          <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5">
+            <button
+              type="button"
+              onClick={() => setFormData({ ...formData, deploymentTarget: 'model_serving' })}
+              className={`px-4 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
+                formData.deploymentTarget === 'model_serving'
+                  ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                  : 'text-slate-400 border border-transparent hover:text-slate-300'
+              }`}
+            >
+              Model Serving
+            </button>
+            <button
+              type="button"
+              onClick={() => setFormData({ ...formData, deploymentTarget: 'apps' })}
+              className={`px-4 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
+                formData.deploymentTarget === 'apps'
+                  ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                  : 'text-slate-400 border border-transparent hover:text-slate-300'
+              }`}
+            >
+              Databricks Apps
+            </button>
+          </div>
+          <p className="text-xs text-slate-500">
+            Choose where your agent will be deployed
+          </p>
+        </div>
+
+        {/* Model Serving specific fields */}
+        {formData.deploymentTarget === 'model_serving' && (
+          <Input
+            label="Endpoint Name"
+            placeholder="e.g., my_agent_endpoint"
+            value={formData.endpointName}
+            onChange={(e) => setFormData({ ...formData, endpointName: e.target.value })}
+            hint="The name of the model serving endpoint"
+          />
+        )}
 
         {/* Service Principal Selection */}
         <Select
@@ -1855,46 +1946,48 @@ export default function AppConfigSection() {
         </div>
       </Card>
 
-      {/* Deployment Options */}
-      <Card className="space-y-4">
-        <h3 className="font-medium text-white">Deployment Options</h3>
+      {/* Deployment Options - Only for Model Serving */}
+      {formData.deploymentTarget === 'model_serving' && (
+        <Card className="space-y-4">
+          <h3 className="font-medium text-white">Model Serving Options</h3>
 
-        <div className="grid grid-cols-2 gap-4">
-          <Select
-            label="Workload Size"
-            options={WORKLOAD_SIZES}
-            value={formData.workloadSize}
-            onChange={(e) => setFormData({ ...formData, workloadSize: e.target.value as 'Small' | 'Medium' | 'Large' })}
-          />
-          <div className="space-y-1.5">
-            <label className="block text-sm font-medium text-slate-300">Scale to Zero</label>
-            <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5 mt-1">
-              <button
-                type="button"
-                onClick={() => setFormData({ ...formData, scaleToZero: true })}
-                className={`px-4 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
-                  formData.scaleToZero
-                    ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
-                    : 'text-slate-400 border border-transparent hover:text-slate-300'
-                }`}
-              >
-                Enabled
-              </button>
-              <button
-                type="button"
-                onClick={() => setFormData({ ...formData, scaleToZero: false })}
-                className={`px-4 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
-                  !formData.scaleToZero
-                    ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
-                    : 'text-slate-400 border border-transparent hover:text-slate-300'
-                }`}
-              >
-                Disabled
-              </button>
+          <div className="grid grid-cols-2 gap-4">
+            <Select
+              label="Workload Size"
+              options={WORKLOAD_SIZES}
+              value={formData.workloadSize}
+              onChange={(e) => setFormData({ ...formData, workloadSize: e.target.value as 'Small' | 'Medium' | 'Large' })}
+            />
+            <div className="space-y-1.5">
+              <label className="block text-sm font-medium text-slate-300">Scale to Zero</label>
+              <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5 mt-1">
+                <button
+                  type="button"
+                  onClick={() => setFormData({ ...formData, scaleToZero: true })}
+                  className={`px-4 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
+                    formData.scaleToZero
+                      ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                      : 'text-slate-400 border border-transparent hover:text-slate-300'
+                  }`}
+                >
+                  Enabled
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFormData({ ...formData, scaleToZero: false })}
+                  className={`px-4 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
+                    !formData.scaleToZero
+                      ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                      : 'text-slate-400 border border-transparent hover:text-slate-300'
+                  }`}
+                >
+                  Disabled
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      </Card>
+        </Card>
+      )}
 
       {/* Chat History Configuration */}
       <Card className="space-y-4">

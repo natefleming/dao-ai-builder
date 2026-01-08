@@ -4,7 +4,7 @@ import Modal from '../ui/Modal';
 import { useConfigStore } from '@/stores/configStore';
 import { useChatStore } from '@/stores/chatStore';
 import { downloadYAML } from '@/utils/yaml-generator';
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState } from 'react';
 import yaml from 'js-yaml';
 import { extractYamlReferences, setYamlReferences, clearYamlReferences, clearSectionAnchors } from '@/utils/yaml-references';
 import { AppConfig } from '@/types/dao-ai-types';
@@ -20,10 +20,9 @@ interface HeaderProps {
 }
 
 export default function Header({ showPreview, onTogglePreview }: HeaderProps) {
-  const { config, setConfig, reset } = useConfigStore();
+  const { config, setConfig, reset, daoAiVersion, hasUnsavedAppChanges } = useConfigStore();
   const { startNewSession } = useChatStore();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [daoAiVersion, setDaoAiVersion] = useState<string | null>(null);
   const [showVisualization, setShowVisualization] = useState(false);
   const [showDeployment, setShowDeployment] = useState(false);
   const [showChat, setShowChat] = useState(false);
@@ -34,17 +33,10 @@ export default function Header({ showPreview, onTogglePreview }: HeaderProps) {
   const hasOrchestration = !!(config.app?.orchestration?.supervisor || config.app?.orchestration?.swarm);
   // All actions require a saved app configuration with agents
   const hasValidConfig = hasAgents && hasApp && hasOrchestration;
-  const canDeploy = hasValidConfig;
-  const canChat = hasValidConfig;
+  // Disable deploy and chat when there are unsaved changes
+  const canDeploy = hasValidConfig && !hasUnsavedAppChanges;
+  const canChat = hasValidConfig && !hasUnsavedAppChanges;
   const canVisualize = hasValidConfig;
-
-  // Fetch dao-ai version on mount
-  useEffect(() => {
-    fetch('/api/version')
-      .then(res => res.json())
-      .then(data => setDaoAiVersion(data.dao_ai))
-      .catch(() => setDaoAiVersion(null));
-  }, []);
 
   const handleExport = () => {
     const appName = config.app?.name || 'model_config';
@@ -258,8 +250,12 @@ export default function Header({ showPreview, onTogglePreview }: HeaderProps) {
       <Modal
         isOpen={showDeployment}
         onClose={() => setShowDeployment(false)}
-        title="Deploy to Databricks"
-        description="Deploy your agent configuration to a Databricks workspace"
+        title={config.app?.deployment_target === 'apps' 
+          ? 'Deploy to Databricks Apps' 
+          : 'Deploy to Model Serving'}
+        description={config.app?.deployment_target === 'apps'
+          ? 'Deploy your agent as a Databricks App'
+          : 'Deploy your agent to Databricks Model Serving'}
         size="lg"
       >
         <DeploymentPanel onClose={() => setShowDeployment(false)} />

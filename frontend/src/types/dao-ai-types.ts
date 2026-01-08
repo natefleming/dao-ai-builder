@@ -429,6 +429,7 @@ export interface AppModel {
   environment_vars?: Record<string, any>;
   budget_policy_id?: string;
   workload_size?: "Small" | "Medium" | "Large";
+  deployment_target?: "model_serving" | "apps";
   permissions?: AppPermissionModel[];
   agents: AgentModel[];
   orchestration?: OrchestrationModel;
@@ -510,6 +511,7 @@ export interface ResourcesModel {
 }
 
 export interface AppConfig {
+  version?: string;
   variables?: Record<string, any>;
   schemas?: Record<string, SchemaModel>;
   service_principals?: Record<string, ServicePrincipalModel>;

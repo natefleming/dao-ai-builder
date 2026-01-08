@@ -3145,8 +3145,9 @@ def validate_deployment():
             if not registered_model.get('schema'):
                 errors.append('app.registered_model.schema is required')
         
-        # Check endpoint name
-        if not app_config.get('endpoint_name'):
+        # Check endpoint name (only for Model Serving deployments)
+        deployment_target = app_config.get('deployment_target', 'model_serving')
+        if deployment_target == 'model_serving' and not app_config.get('endpoint_name'):
             warnings.append('app.endpoint_name not set - will default to app name')
         
         # Check for agents
@@ -3196,15 +3197,23 @@ def validate_deployment():
         
         is_valid = len(errors) == 0
         
-        return jsonify({
-            'valid': is_valid,
-            'errors': errors,
-            'warnings': warnings,
-            'requirements': requirements,
-            'app_name': app_config.get('name'),
-            'endpoint_name': app_config.get('endpoint_name') or app_config.get('name'),
-            'agent_count': len(agents),
-            'deployment_options': {
+        # Dynamic deployment options based on deployment target
+        if deployment_target == 'apps':
+            deployment_options = {
+                'quick': {
+                    'description': 'Deploy model and app only (fast, ~2-5 min)',
+                    'provisions': ['MLflow Model', 'Databricks App'],
+                    'available': is_valid
+                },
+                'full': {
+                    'description': 'Full pipeline with infrastructure (complete, ~10-30 min)',
+                    'provisions': ['Data Ingestion', 'Vector Search', 'Lakebase', 'UC Functions', 'Model', 'Databricks App', 'Evaluation'],
+                    'available': is_valid,
+                    'requires_bundle': True
+                }
+            }
+        else:  # model_serving
+            deployment_options = {
                 'quick': {
                     'description': 'Deploy model and endpoint only (fast, ~2-5 min)',
                     'provisions': ['MLflow Model', 'Model Serving Endpoint'],
@@ -3217,6 +3226,16 @@ def validate_deployment():
                     'requires_bundle': True
                 }
             }
+        
+        return jsonify({
+            'valid': is_valid,
+            'errors': errors,
+            'warnings': warnings,
+            'requirements': requirements,
+            'app_name': app_config.get('name'),
+            'endpoint_name': app_config.get('endpoint_name') or app_config.get('name'),
+            'agent_count': len(agents),
+            'deployment_options': deployment_options
         })
         
     except Exception as e:
@@ -3408,9 +3427,16 @@ def deploy_quick():
         data = request.get_json()
         config = data.get('config')
         credentials = data.get('credentials', {})
+        target_str = data.get('target', 'model_serving')  # Default to model_serving
+        skip_model_creation = data.get('skip_model_creation', False)  # Default to not skipping
         
         if not config:
             return jsonify({'error': 'config is required'}), 400
+        
+        # Validate target
+        valid_targets = ['model_serving', 'apps']
+        if target_str not in valid_targets:
+            return jsonify({'error': f"Invalid target '{target_str}'. Must be one of: {valid_targets}"}), 400
         
         # Generate a unique deployment ID
         deployment_id = str(uuid.uuid4())[:8]
@@ -3498,7 +3524,9 @@ def deploy_quick():
         }
         
         def run_deployment(deployment_id: str, config: dict, auth_token: str | None, 
-                          auth_host: str, sp_client_id: str | None, sp_client_secret: str | None):
+                          auth_host: str, sp_client_id: str | None, sp_client_secret: str | None,
+                          deployment_target: str = 'model_serving',
+                          skip_model_creation: bool = False):
             """Run deployment in background thread."""
             try:
                 status = _deployment_status[deployment_id]
@@ -3580,7 +3608,7 @@ def deploy_quick():
                     
                     status['steps'][0]['status'] = 'completed'
                     
-                    # Step 2: Create agent
+                    # Step 2: Create agent (or skip if requested for Apps deployment)
                     # Pass credentials directly to create_agent - the updated dao_ai library
                     # now supports passing pat/client_id/client_secret/workspace_host directly
                     # Use lock to atomically check cancelled flag and update status
@@ -3589,39 +3617,49 @@ def deploy_quick():
                             log('info', f"Deployment {deployment_id} cancelled before agent creation")
                             # Status already set to 'cancelled' by cancel endpoint
                             return
-                        status['steps'][1]['status'] = 'running'
-                        status['current_step'] = 1
-                        status['status'] = 'creating_agent'
+                        
+                        # Check if we should skip model creation (only allowed for Apps deployment)
+                        if skip_model_creation and deployment_target == 'apps':
+                            log('info', f"Skipping model creation for Apps deployment (skip_model_creation=True)")
+                            status['steps'][1]['status'] = 'skipped'
+                            status['current_step'] = 1
+                            status['status'] = 'skipping_model_creation'
+                        else:
+                            status['steps'][1]['status'] = 'running'
+                            status['current_step'] = 1
+                            status['status'] = 'creating_agent'
                     
-                    # Monkey-patch DatabricksFunctionClient to skip Spark session initialization
-                    # This is needed because the function client tries to create a Spark session
-                    # via Databricks Connect, which requires OAuth scopes that deployment tokens
-                    # typically don't have (Invalid scope error)
-                    original_set_spark = None
-                    try:
-                        from unitycatalog.ai.core.databricks import DatabricksFunctionClient
-                        original_set_spark = DatabricksFunctionClient.set_spark_session
-                        def skip_spark_session(self):
-                            log('info', "Skipping Spark session initialization for deployment")
-                            self.spark = None
-                        DatabricksFunctionClient.set_spark_session = skip_spark_session
-                        log('info', "Patched DatabricksFunctionClient to skip Spark session")
-                    except ImportError:
-                        log('warning', "Could not patch DatabricksFunctionClient - unitycatalog not found")
-                    
-                    log('info', f"Creating agent with {'PAT token' if auth_token else 'service principal'} auth for host: {auth_host}")
-                    try:
-                        app_config.create_agent(
-                            pat=auth_token,
-                            client_id=sp_client_id,
-                            client_secret=sp_client_secret,
-                            workspace_host=auth_host,
-                        )
-                    finally:
-                        # Restore original method
-                        if original_set_spark:
-                            DatabricksFunctionClient.set_spark_session = original_set_spark
-                            log('info', "Restored DatabricksFunctionClient.set_spark_session")
+                    # Only run model creation if not skipped
+                    if not (skip_model_creation and deployment_target == 'apps'):
+                        # Monkey-patch DatabricksFunctionClient to skip Spark session initialization
+                        # This is needed because the function client tries to create a Spark session
+                        # via Databricks Connect, which requires OAuth scopes that deployment tokens
+                        # typically don't have (Invalid scope error)
+                        original_set_spark = None
+                        try:
+                            from unitycatalog.ai.core.databricks import DatabricksFunctionClient
+                            original_set_spark = DatabricksFunctionClient.set_spark_session
+                            def skip_spark_session(self):
+                                log('info', "Skipping Spark session initialization for deployment")
+                                self.spark = None
+                            DatabricksFunctionClient.set_spark_session = skip_spark_session
+                            log('info', "Patched DatabricksFunctionClient to skip Spark session")
+                        except ImportError:
+                            log('warning', "Could not patch DatabricksFunctionClient - unitycatalog not found")
+                        
+                        log('info', f"Creating agent with {'PAT token' if auth_token else 'service principal'} auth for host: {auth_host}")
+                        try:
+                            app_config.create_agent(
+                                pat=auth_token,
+                                client_id=sp_client_id,
+                                client_secret=sp_client_secret,
+                                workspace_host=auth_host,
+                            )
+                        finally:
+                            # Restore original method
+                            if original_set_spark:
+                                DatabricksFunctionClient.set_spark_session = original_set_spark
+                                log('info', "Restored DatabricksFunctionClient.set_spark_session")
                     # Step 3: Deploy agent
                     # Use lock to atomically check cancelled flag and update status
                     with _deployment_status_lock:
@@ -3629,14 +3667,20 @@ def deploy_quick():
                             log('info', f"Deployment {deployment_id} cancelled before deployment")
                             # Status already set to 'cancelled' by cancel endpoint
                             return
-                        # Mark step 1 as completed and start step 2
-                        status['steps'][1]['status'] = 'completed'
+                        # Mark step 1 as completed (if not skipped) and start step 2
+                        if status['steps'][1]['status'] != 'skipped':
+                            status['steps'][1]['status'] = 'completed'
                         status['steps'][2]['status'] = 'running'
                         status['current_step'] = 2
                         status['status'] = 'deploying'
                     
-                    log('info', f"Deploying agent with {'PAT token' if auth_token else 'service principal'} auth for host: {auth_host}")
+                    # Import DeploymentTarget enum
+                    from dao_ai.config import DeploymentTarget
+                    target = DeploymentTarget(deployment_target)
+                    
+                    log('info', f"Deploying agent with {'PAT token' if auth_token else 'service principal'} auth for host: {auth_host}, target: {deployment_target}")
                     app_config.deploy_agent(
+                        target=target,
                         pat=auth_token,
                         client_id=sp_client_id,
                         client_secret=sp_client_secret,
@@ -3693,7 +3737,7 @@ def deploy_quick():
         # Start deployment in background with auth credentials
         thread = threading.Thread(
             target=run_deployment, 
-            args=(deployment_id, config, token, host, client_id, client_secret)
+            args=(deployment_id, config, token, host, client_id, client_secret, target_str, skip_model_creation)
         )
         thread.daemon = True
         thread.start()

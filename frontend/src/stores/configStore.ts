@@ -23,11 +23,35 @@ import {
   ServicePrincipalModel,
 } from '@/types/dao-ai-types';
 
+// Cache for DAO AI version
+let cachedDaoAiVersion: string | null = null;
+
+// Fetch DAO AI version from backend
+async function fetchDaoAiVersion(): Promise<string | undefined> {
+  if (cachedDaoAiVersion) {
+    return cachedDaoAiVersion;
+  }
+  
+  try {
+    const response = await fetch('/api/version');
+    const data = await response.json();
+    cachedDaoAiVersion = data.dao_ai;
+    return cachedDaoAiVersion || undefined;
+  } catch (error) {
+    console.error('Failed to fetch DAO AI version:', error);
+    return undefined;
+  }
+}
+
 interface ConfigState {
   config: AppConfig;
   skippedSteps: Set<string>; // UI state: track which optional steps are skipped
+  daoAiVersion: string | null;
+  hasUnsavedAppChanges: boolean; // Track if Application Configuration has unsaved changes
   setConfig: (config: AppConfig) => void;
   updateConfig: (updates: Partial<AppConfig>) => void;
+  setDaoAiVersion: (version: string | null) => void;
+  setHasUnsavedAppChanges: (hasChanges: boolean) => void;
   skipStep: (stepId: string) => void;
   unskipStep: (stepId: string) => void;
   
@@ -159,11 +183,17 @@ const defaultConfig: AppConfig = {
   app: undefined,
 };
 
-export const useConfigStore = create<ConfigState>((set) => ({
+export const useConfigStore = create<ConfigState>((set, get) => ({
   config: defaultConfig,
   skippedSteps: new Set<string>(),
+  daoAiVersion: null,
+  hasUnsavedAppChanges: false,
   
-  setConfig: (config) => set({ config, skippedSteps: new Set<string>() }),
+  setConfig: (config) => set({ config, skippedSteps: new Set<string>(), hasUnsavedAppChanges: false }),
+  
+  setDaoAiVersion: (version) => set({ daoAiVersion: version }),
+  
+  setHasUnsavedAppChanges: (hasChanges) => set({ hasUnsavedAppChanges: hasChanges }),
   
   updateConfig: (updates) =>
     set((state) => ({
@@ -1034,6 +1064,32 @@ export const useConfigStore = create<ConfigState>((set) => ({
       },
     })),
   
-  reset: () => set({ config: defaultConfig, skippedSteps: new Set<string>() }),
+  reset: () => {
+    const version = get().daoAiVersion || undefined;
+    const newConfig = {
+      ...defaultConfig,
+      version,
+    };
+    set({ config: newConfig, skippedSteps: new Set<string>() });
+  },
 }));
 
+// Initialize DAO AI version on store creation
+fetchDaoAiVersion().then(version => {
+  if (version) {
+    useConfigStore.getState().setDaoAiVersion(version);
+  }
+});
+
+// Update config version if it doesn't have one when DAO AI version is fetched
+fetchDaoAiVersion().then(version => {
+  if (version) {
+    const currentConfig = useConfigStore.getState().config;
+    if (!currentConfig.version) {
+      useConfigStore.getState().updateConfig({ version });
+    }
+  }
+});
+
+// Export for use in other components
+export { fetchDaoAiVersion };

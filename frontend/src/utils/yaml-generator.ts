@@ -1470,6 +1470,11 @@ function formatVariable(variable: VariableModel): any {
 export function generateYAML(config: AppConfig): string {
   const yamlConfig: any = {};
   
+  // Version (at the very top)
+  if (config.version) {
+    yamlConfig.version = config.version;
+  }
+  
   // Clear and set section-level anchor overrides from config
   clearSectionAnchors();
   
@@ -1485,7 +1490,7 @@ export function generateYAML(config: AppConfig): string {
   // Define shared references for use throughout generation
   const definedSchemas = config.schemas || {};
 
-  // Variables (at the top of the config)
+  // Variables (after version, at the top of the config)
   if (config.variables && Object.keys(config.variables).length > 0) {
     yamlConfig.variables = {};
     Object.entries(config.variables).forEach(([key, variable]) => {
@@ -2277,9 +2282,11 @@ export function generateYAML(config: AppConfig): string {
       ...(config.app.description && { description: config.app.description }),
       ...(config.app.log_level && { log_level: config.app.log_level }),
       ...(appServicePrincipal && { service_principal: appServicePrincipal }),
-      ...(config.app.endpoint_name && { endpoint_name: config.app.endpoint_name }),
-      ...(config.app.workload_size && { workload_size: config.app.workload_size }),
-      ...(config.app.scale_to_zero !== undefined && { scale_to_zero: config.app.scale_to_zero }),
+      ...(config.app.deployment_target && { deployment_target: config.app.deployment_target }),
+      // Model Serving specific fields - only include if deployment_target is model_serving or not set (defaults to model_serving)
+      ...((config.app.deployment_target === 'model_serving' || !config.app.deployment_target) && config.app.endpoint_name && { endpoint_name: config.app.endpoint_name }),
+      ...((config.app.deployment_target === 'model_serving' || !config.app.deployment_target) && config.app.workload_size && { workload_size: config.app.workload_size }),
+      ...((config.app.deployment_target === 'model_serving' || !config.app.deployment_target) && config.app.scale_to_zero !== undefined && { scale_to_zero: config.app.scale_to_zero }),
       ...(config.app.environment_vars && Object.keys(config.app.environment_vars).length > 0 && { 
         environment_vars: formatEnvironmentVars(config.app.environment_vars) 
       }),

@@ -6,7 +6,7 @@ import { create } from 'zustand';
 
 export interface DeploymentStep {
   name: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
   error?: string;
 }
 
