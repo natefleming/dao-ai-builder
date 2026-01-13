@@ -506,6 +506,56 @@ function generateToolName(functionName: string): string {
   return normalized ? `${normalized}_tool` : '';
 }
 
+/**
+ * Generate a normalized name for MCP tools based on the resource type and identifier.
+ * Used to auto-populate reference name and tool name when selecting MCP resources.
+ * 
+ * @param sourceType - The MCP source type (genie, vector_search, functions, etc.)
+ * @param identifier - The resource identifier (name, space_id, catalog/schema, etc.)
+ * @returns A normalized tool name with appropriate suffix
+ */
+function generateMcpToolName(sourceType: string, identifier: string): string {
+  if (!identifier) return '';
+  
+  // Normalize the identifier: lowercase, replace non-alphanumeric with underscores
+  let normalized = identifier
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  
+  // Add source-specific suffix based on the MCP type
+  let suffix = '';
+  switch (sourceType) {
+    case 'genie':
+      suffix = '_genie_tool';
+      break;
+    case 'vector_search':
+      suffix = '_vector_search_tool';
+      break;
+    case 'functions':
+      suffix = '_uc_functions_tool';
+      break;
+    case 'sql':
+      suffix = '_sql_tool';
+      break;
+    case 'app':
+      suffix = '_app_tool';
+      break;
+    case 'connection':
+      suffix = '_connection_tool';
+      break;
+    case 'url':
+      suffix = '_mcp_tool';
+      break;
+    default:
+      suffix = '_tool';
+  }
+  
+  return normalized ? `${normalized}${suffix}` : '';
+}
+
 export default function ToolsSection() {
   const { config, addTool, updateTool, removeTool } = useConfigStore();
   const { data: connectionStatus } = useConnectionStatus();
@@ -870,27 +920,39 @@ export default function ToolsSection() {
         }
         break;
       case 'vector_search':
-        base.vector_search = {
-          source_table: {
-            schema: {
-              catalog_name: mcpForm.vectorCatalog,
-              schema_name: mcpForm.vectorSchema,
+        // Use reference format if from configured vector store
+        if (mcpForm.vectorStoreSource === 'configured' && mcpForm.vectorStoreRefName) {
+          base.vector_search = `*${mcpForm.vectorStoreRefName}` as any;
+        } else if (mcpForm.vectorStoreSource === 'select' && mcpForm.vectorIndex) {
+          // Create inline vector search configuration
+          base.vector_search = {
+            source_table: {
+              schema: {
+                catalog_name: mcpForm.vectorCatalog,
+                schema_name: mcpForm.vectorSchema,
+              },
             },
-          },
-          embedding_source_column: 'content', // Default, can be customized
-          index: {
-            name: mcpForm.vectorIndex,
-          },
-          endpoint: {
-            name: mcpForm.vectorEndpoint,
-          },
-        };
+            embedding_source_column: 'content', // Default, can be customized
+            index: {
+              name: mcpForm.vectorIndex,
+            },
+            endpoint: {
+              name: mcpForm.vectorEndpoint,
+            },
+          };
+        }
         break;
       case 'functions':
-        base.functions = {
-          catalog_name: mcpForm.functionsCatalog,
-          schema_name: mcpForm.functionsSchema,
-        };
+        // Use reference format if from configured schema
+        if (mcpForm.schemaSource === 'configured' && mcpForm.schemaRefName) {
+          base.functions = `*${mcpForm.schemaRefName}` as any;
+        } else if (mcpForm.functionsCatalog && mcpForm.functionsSchema) {
+          // Create inline schema configuration
+          base.functions = {
+            catalog_name: mcpForm.functionsCatalog,
+            schema_name: mcpForm.functionsSchema,
+          };
+        }
         break;
       case 'sql':
         base.sql = true;
@@ -2319,7 +2381,13 @@ export default function ToolsSection() {
               placeholder="e.g., find_product_by_sku_tool"
               value={formData.refName}
               onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                setFormData({ ...formData, refName: normalizeRefNameWhileTyping(e.target.value) });
+                const normalizedValue = normalizeRefNameWhileTyping(e.target.value);
+                // If Tool Name hasn't been manually edited, sync it with Reference Name
+                if (!nameManuallyEdited) {
+                  setFormData({ ...formData, refName: normalizedValue, name: normalizedValue });
+                } else {
+                  setFormData({ ...formData, refName: normalizedValue });
+                }
                 setRefNameManuallyEdited(true);
               }}
               hint="YAML key (spaces become underscores)"
@@ -2338,12 +2406,19 @@ export default function ToolsSection() {
             placeholder="e.g., find_product_by_sku_uc"
             value={formData.name}
             onChange={(e: ChangeEvent<HTMLInputElement>) => {
-              setFormData({ ...formData, name: e.target.value });
+              const newName = e.target.value;
+              // If Reference Name hasn't been manually edited, sync it with Tool Name
+              if (!refNameManuallyEdited) {
+                const normalizedRefName = normalizeRefNameWhileTyping(newName);
+                setFormData({ ...formData, name: newName, refName: normalizedRefName });
+              } else {
+                setFormData({ ...formData, name: newName });
+              }
               setNameManuallyEdited(true);
             }}
             hint="The name property inside the tool config (can differ from reference name)"
-                required
-              />
+            required
+          />
 
           {/* Factory Tool Configuration */}
           {formData.type === 'factory' && (
@@ -3552,7 +3627,19 @@ export default function ToolsSection() {
                       <button
                         key={source.value}
                         type="button"
-                        onClick={() => setMcpForm({ ...mcpForm, sourceType: source.value as MCPFormData['sourceType'] })}
+                        onClick={() => {
+                          setMcpForm({ ...mcpForm, sourceType: source.value as MCPFormData['sourceType'] });
+                          
+                          // For SQL type, auto-generate default names if not manually edited
+                          if (source.value === 'sql' && !nameManuallyEdited) {
+                            const generatedName = generateMcpToolName('sql', 'databricks');
+                            setFormData(prev => ({ ...prev, name: generatedName }));
+                          }
+                          if (source.value === 'sql' && !refNameManuallyEdited) {
+                            const generatedName = generateMcpToolName('sql', 'databricks');
+                            setFormData(prev => ({ ...prev, refName: generatedName }));
+                          }
+                        }}
                         className={`p-3 rounded-lg border text-left transition-all ${
                           isSelected
                             ? 'border-purple-500 bg-purple-500/10'
@@ -3646,6 +3733,8 @@ export default function ToolsSection() {
                       onConfiguredChange={(value) => {
                         // Auto-populate name and description from configured Genie Room
                         const room = configuredGenieRooms[value];
+                        const generatedName = generateMcpToolName('genie', room?.name || value);
+                        
                         setMcpForm({ 
                           ...mcpForm, 
                           genieRefName: value, 
@@ -3653,6 +3742,14 @@ export default function ToolsSection() {
                           genieName: room?.name || value,
                           genieDescription: room?.description || ''
                         });
+                        
+                        // Auto-generate tool name and ref name if not manually edited
+                        if (!nameManuallyEdited) {
+                          setFormData(prev => ({ ...prev, name: generatedName }));
+                        }
+                        if (!refNameManuallyEdited) {
+                          setFormData(prev => ({ ...prev, refName: generatedName }));
+                        }
                       }}
                       source={mcpForm.genieSource}
                       onSourceChange={(source) => {
@@ -3695,6 +3792,7 @@ export default function ToolsSection() {
                           const space = genieSpaces?.find(s => s.space_id === value);
                           const spaceName = space?.title || '';
                           const spaceDesc = space?.description || '';
+                          const generatedName = generateMcpToolName('genie', spaceName || value);
                           
                           setMcpForm({ 
                             ...mcpForm, 
@@ -3703,6 +3801,14 @@ export default function ToolsSection() {
                             genieName: spaceName,
                             genieDescription: spaceDesc
                           });
+                          
+                          // Auto-generate tool name and ref name if not manually edited
+                          if (!nameManuallyEdited) {
+                            setFormData(prev => ({ ...prev, name: generatedName }));
+                          }
+                          if (!refNameManuallyEdited) {
+                            setFormData(prev => ({ ...prev, refName: generatedName }));
+                          }
                         }}
                         required
                       />
@@ -3731,6 +3837,10 @@ export default function ToolsSection() {
                     configuredOptions={configuredVectorStoreOptions}
                     configuredValue={mcpForm.vectorStoreRefName}
                     onConfiguredChange={(value) => {
+                      const vectorStore = configuredVectorStores[value];
+                      const indexName = (vectorStore as any)?.index?.name || value;
+                      const generatedName = generateMcpToolName('vector_search', indexName);
+                      
                       setMcpForm({ 
                         ...mcpForm, 
                         vectorStoreRefName: value, 
@@ -3739,6 +3849,14 @@ export default function ToolsSection() {
                         vectorCatalog: '',
                         vectorSchema: ''
                       });
+                      
+                      // Auto-generate tool name and ref name if not manually edited
+                      if (!nameManuallyEdited) {
+                        setFormData(prev => ({ ...prev, name: generatedName }));
+                      }
+                      if (!refNameManuallyEdited) {
+                        setFormData(prev => ({ ...prev, refName: generatedName }));
+                      }
                     }}
                     source={mcpForm.vectorStoreSource}
                     onSourceChange={(source) => setMcpForm({ ...mcpForm, vectorStoreSource: source })}
@@ -3783,7 +3901,20 @@ export default function ToolsSection() {
                         <Select
                           options={mcpVectorIndexOptions}
                           value={mcpForm.vectorIndex}
-                          onChange={(e: ChangeEvent<HTMLSelectElement>) => setMcpForm({ ...mcpForm, vectorIndex: e.target.value })}
+                          onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                            const indexName = e.target.value;
+                            const generatedName = generateMcpToolName('vector_search', indexName);
+                            
+                            setMcpForm({ ...mcpForm, vectorIndex: indexName });
+                            
+                            // Auto-generate tool name and ref name if not manually edited
+                            if (!nameManuallyEdited) {
+                              setFormData(prev => ({ ...prev, name: generatedName }));
+                            }
+                            if (!refNameManuallyEdited) {
+                              setFormData(prev => ({ ...prev, refName: generatedName }));
+                            }
+                          }}
                           disabled={!mcpForm.vectorEndpoint || mcpVectorIndexesLoading}
                           required
                         />
@@ -3800,12 +3931,23 @@ export default function ToolsSection() {
                     configuredValue={mcpForm.schemaRefName}
                     onConfiguredChange={(value) => {
                       const schema = configuredSchemas[value];
+                      const schemaName = getVariableDisplayValue(schema?.schema_name) || value;
+                      const generatedName = generateMcpToolName('functions', schemaName);
+                      
                       setMcpForm({ 
                         ...mcpForm, 
                         schemaRefName: value,
                         functionsCatalog: getVariableDisplayValue(schema?.catalog_name),
                         functionsSchema: getVariableDisplayValue(schema?.schema_name)
                       });
+                      
+                      // Auto-generate tool name and ref name if not manually edited
+                      if (!nameManuallyEdited) {
+                        setFormData(prev => ({ ...prev, name: generatedName }));
+                      }
+                      if (!refNameManuallyEdited) {
+                        setFormData(prev => ({ ...prev, refName: generatedName }));
+                      }
                     }}
                     source={mcpForm.schemaSource}
                     onSourceChange={(source) => setMcpForm({ ...mcpForm, schemaSource: source })}
@@ -3820,7 +3962,19 @@ export default function ToolsSection() {
                       <SchemaSelect
                         label="Schema"
                         value={mcpForm.functionsSchema}
-                        onChange={(value) => setMcpForm({ ...mcpForm, functionsSchema: value, schemaRefName: '' })}
+                        onChange={(value) => {
+                          const generatedName = generateMcpToolName('functions', value);
+                          
+                          setMcpForm({ ...mcpForm, functionsSchema: value, schemaRefName: '' });
+                          
+                          // Auto-generate tool name and ref name if not manually edited
+                          if (!nameManuallyEdited) {
+                            setFormData(prev => ({ ...prev, name: generatedName }));
+                          }
+                          if (!refNameManuallyEdited) {
+                            setFormData(prev => ({ ...prev, refName: generatedName }));
+                          }
+                        }}
                         catalog={mcpForm.functionsCatalog || null}
                         required
                       />
@@ -3846,11 +4000,24 @@ export default function ToolsSection() {
                     configuredOptions={configuredAppOptions}
                     configuredValue={mcpForm.appRefName}
                     onConfiguredChange={(value) => {
+                      const apps = config.resources?.apps || {};
+                      const app = apps[value];
+                      const appName = app?.name || value;
+                      const generatedName = generateMcpToolName('app', appName);
+                      
                       setMcpForm({ 
                         ...mcpForm, 
                         appRefName: value, 
                         appName: ''
                       });
+                      
+                      // Auto-generate tool name and ref name if not manually edited
+                      if (!nameManuallyEdited) {
+                        setFormData(prev => ({ ...prev, name: generatedName }));
+                      }
+                      if (!refNameManuallyEdited) {
+                        setFormData(prev => ({ ...prev, refName: generatedName }));
+                      }
                     }}
                     source={mcpForm.appSource}
                     onSourceChange={(source) => setMcpForm({ ...mcpForm, appSource: source })}
@@ -3858,7 +4025,19 @@ export default function ToolsSection() {
                   >
                     <DatabricksAppSelect
                       value={mcpForm.appName}
-                      onChange={(value) => setMcpForm({ ...mcpForm, appName: value, appRefName: '' })}
+                      onChange={(value) => {
+                        const generatedName = generateMcpToolName('app', value);
+                        
+                        setMcpForm({ ...mcpForm, appName: value, appRefName: '' });
+                        
+                        // Auto-generate tool name and ref name if not manually edited
+                        if (!nameManuallyEdited) {
+                          setFormData(prev => ({ ...prev, name: generatedName }));
+                        }
+                        if (!refNameManuallyEdited) {
+                          setFormData(prev => ({ ...prev, refName: generatedName }));
+                        }
+                      }}
                       required
                     />
                   </ResourceSelector>
@@ -3872,11 +4051,22 @@ export default function ToolsSection() {
                     configuredValue={mcpForm.connectionRefName}
                     onConfiguredChange={(value) => {
                       const conn = configuredConnections[value];
+                      const connName = conn?.name || value;
+                      const generatedName = generateMcpToolName('connection', connName);
+                      
                       setMcpForm({ 
                         ...mcpForm, 
                         connectionRefName: value,
                         connectionName: conn?.name || ''
                       });
+                      
+                      // Auto-generate tool name and ref name if not manually edited
+                      if (!nameManuallyEdited) {
+                        setFormData(prev => ({ ...prev, name: generatedName }));
+                      }
+                      if (!refNameManuallyEdited) {
+                        setFormData(prev => ({ ...prev, refName: generatedName }));
+                      }
                     }}
                     source={mcpForm.connectionSource}
                     onSourceChange={(source) => setMcpForm({ ...mcpForm, connectionSource: source })}
@@ -3884,7 +4074,19 @@ export default function ToolsSection() {
                     <UCConnectionSelect
                       label="Select Connection"
                       value={mcpForm.connectionName}
-                      onChange={(value) => setMcpForm({ ...mcpForm, connectionName: value, connectionRefName: '' })}
+                      onChange={(value) => {
+                        const generatedName = generateMcpToolName('connection', value);
+                        
+                        setMcpForm({ ...mcpForm, connectionName: value, connectionRefName: '' });
+                        
+                        // Auto-generate tool name and ref name if not manually edited
+                        if (!nameManuallyEdited) {
+                          setFormData(prev => ({ ...prev, name: generatedName }));
+                        }
+                        if (!refNameManuallyEdited) {
+                          setFormData(prev => ({ ...prev, refName: generatedName }));
+                        }
+                      }}
                       required
                     />
                   </ResourceSelector>

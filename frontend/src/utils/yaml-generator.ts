@@ -1200,19 +1200,31 @@ function formatToolFunction(func: ToolFunctionModel, toolKey?: string, definedCo
       }
     }
     if ('functions' in func && func.functions) {
-      // Check if functions schema matches a defined schema
-      const matchingSchema = findMatchingSchema(func.functions);
-      if (matchingSchema) {
-        result.functions = createReference(matchingSchema);
+      const funcsVal = func.functions as any;
+      // Handle reference string (starts with *)
+      if (typeof funcsVal === 'string' && funcsVal.startsWith('*')) {
+        result.functions = createReference(funcsVal.slice(1));
       } else {
-        result.functions = func.functions;
+        // Check if functions schema matches a defined schema
+        const matchingSchema = findMatchingSchema(func.functions);
+        if (matchingSchema) {
+          result.functions = createReference(matchingSchema);
+        } else {
+          result.functions = func.functions;
+        }
       }
     }
     
     // Check for original references for genie_room
     if ('genie_room' in func && func.genie_room) {
-      const genieRef = toolKey ? findOriginalReference(`tools.${toolKey}.function.genie_room`, func.genie_room) : null;
-      result.genie_room = genieRef ? createReference(genieRef) : func.genie_room;
+      const genieVal = func.genie_room as any;
+      // Handle reference string (starts with *)
+      if (typeof genieVal === 'string' && genieVal.startsWith('*')) {
+        result.genie_room = createReference(genieVal.slice(1));
+      } else {
+        const genieRef = toolKey ? findOriginalReference(`tools.${toolKey}.function.genie_room`, func.genie_room) : null;
+        result.genie_room = genieRef ? createReference(genieRef) : func.genie_room;
+      }
     }
     
     if ('sql' in func && func.sql) result.sql = func.sql;
@@ -1231,18 +1243,24 @@ function formatToolFunction(func: ToolFunctionModel, toolKey?: string, definedCo
     
     // Check for original references for vector_search/retriever
     if ('vector_search' in func && func.vector_search) {
-      const vsRef = toolKey ? findOriginalReference(`tools.${toolKey}.function.vector_search`, func.vector_search) : null;
-      if (vsRef) {
-        result.vector_search = createReference(vsRef);
-      } else if ('retriever' in (func.vector_search as any)) {
-        // Also check retriever reference
-        const retrieverRef = toolKey ? findOriginalReference(`tools.${toolKey}.function.vector_search.retriever`, (func.vector_search as any).retriever) : null;
-        result.vector_search = {
-          ...(func.vector_search as any),
-          retriever: retrieverRef ? createReference(retrieverRef) : (func.vector_search as any).retriever,
-        };
+      const vsVal = func.vector_search as any;
+      // Handle reference string (starts with *)
+      if (typeof vsVal === 'string' && vsVal.startsWith('*')) {
+        result.vector_search = createReference(vsVal.slice(1));
       } else {
-        result.vector_search = func.vector_search;
+        const vsRef = toolKey ? findOriginalReference(`tools.${toolKey}.function.vector_search`, func.vector_search) : null;
+        if (vsRef) {
+          result.vector_search = createReference(vsRef);
+        } else if ('retriever' in vsVal) {
+          // Also check retriever reference
+          const retrieverRef = toolKey ? findOriginalReference(`tools.${toolKey}.function.vector_search.retriever`, vsVal.retriever) : null;
+          result.vector_search = {
+            ...vsVal,
+            retriever: retrieverRef ? createReference(retrieverRef) : vsVal.retriever,
+          };
+        } else {
+          result.vector_search = func.vector_search;
+        }
       }
     }
     
