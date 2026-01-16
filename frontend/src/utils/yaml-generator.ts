@@ -403,15 +403,30 @@ function createReference(refName: string): string {
 
 /**
  * Format environment variables for YAML output.
- * Converts variable references (values starting with *) to __REF__ markers
- * so they get properly converted to unquoted YAML aliases.
+ * Converts variable references to __REF__ markers so they get properly 
+ * converted to unquoted YAML aliases.
+ * 
+ * Handles:
+ * 1. String references starting with * (e.g., "*client_id")
+ * 2. Object values that match a defined variable (resolved YAML references)
  */
-function formatEnvironmentVars(envVars: Record<string, any>): Record<string, string> {
-  const result: Record<string, string> = {};
+function formatEnvironmentVars(envVars: Record<string, any>, definedVariables: Record<string, any>): Record<string, any> {
+  const result: Record<string, any> = {};
   for (const [key, value] of Object.entries(envVars)) {
     if (typeof value === 'string' && value.startsWith('*')) {
-      // This is a variable reference - use __REF__ marker so it becomes an unquoted alias
+      // This is a string variable reference - use __REF__ marker
       result[key] = createReference(value.slice(1));
+    } else if (typeof value === 'object' && value !== null) {
+      // This might be a resolved variable reference - find matching variable key
+      const matchedVar = Object.entries(definedVariables).find(
+        ([, v]) => JSON.stringify(v) === JSON.stringify(value)
+      );
+      if (matchedVar) {
+        result[key] = createReference(matchedVar[0]);
+      } else {
+        // Object doesn't match any variable - stringify it
+        result[key] = String(value);
+      }
     } else {
       result[key] = String(value);
     }
@@ -841,7 +856,7 @@ function formatVolumePath(
  * Format orchestration configuration for YAML output.
  * Handles swarm handoffs where null means "any agent" and [] means "no handoffs".
  */
-function formatOrchestration(orchestration: OrchestrationModel, definedLLMs: Record<string, any>, definedTools: Record<string, any>, definedMiddleware: Record<string, any>): any {
+function formatOrchestration(orchestration: OrchestrationModel, definedLLMs: Record<string, any>, definedTools: Record<string, any>, definedMiddleware: Record<string, any>, definedAgents: Record<string, any>): any {
   const result: any = {};
   
   if (orchestration.supervisor) {
@@ -932,15 +947,31 @@ function formatOrchestration(orchestration: OrchestrationModel, definedLLMs: Rec
   if (orchestration.swarm) {
     result.swarm = {};
     
-    // Handle default_agent - can be string or AgentModel
-    if (orchestration.swarm.default_agent) {
-      const defaultAgent = orchestration.swarm.default_agent;
-      if (typeof defaultAgent === 'string') {
-        result.swarm.default_agent = defaultAgent;
-      } else if ('name' in defaultAgent) {
-        // Reference by name for YAML anchors
-        result.swarm.default_agent = defaultAgent.name;
+    // Helper to find agent key and create reference
+    const findAgentReference = (agent: string | { name: string } | any): any => {
+      const agentName = typeof agent === 'string' ? agent : agent?.name;
+      if (!agentName) return null;
+      
+      // Strategy 1: Check if agentName is already a valid key in definedAgents
+      if (definedAgents[agentName]) {
+        return createReference(agentName);
       }
+      
+      // Strategy 2: Find the key in definedAgents that matches this agent's name
+      const matchedByName = Object.entries(definedAgents).find(
+        ([, a]) => (a as any).name === agentName
+      );
+      if (matchedByName) {
+        return createReference(matchedByName[0]);
+      }
+      
+      // Fallback: return the name as-is (shouldn't happen in normal usage)
+      return agentName;
+    };
+    
+    // Handle default_agent - create a reference to the agent
+    if (orchestration.swarm.default_agent) {
+      result.swarm.default_agent = findAgentReference(orchestration.swarm.default_agent);
     }
     
     // Handle handoffs - null means any, [] means none, array means specific
@@ -955,10 +986,8 @@ function formatOrchestration(orchestration: OrchestrationModel, definedLLMs: Rec
             // Empty array means no handoffs (terminal agent)
             result.swarm.handoffs[agentName] = [];
           } else {
-            // Specific targets - convert AgentModel to string names
-            result.swarm.handoffs[agentName] = targets.map(t => 
-              typeof t === 'string' ? t : (t as any).name
-            );
+            // Specific targets - create references to agents
+            result.swarm.handoffs[agentName] = targets.map(t => findAgentReference(t));
           }
         }
       });
@@ -2356,7 +2385,7 @@ export function generateYAML(config: AppConfig): string {
       ...((config.app.deployment_target === 'model_serving' || !config.app.deployment_target) && config.app.workload_size && { workload_size: config.app.workload_size }),
       ...((config.app.deployment_target === 'model_serving' || !config.app.deployment_target) && config.app.scale_to_zero !== undefined && { scale_to_zero: config.app.scale_to_zero }),
       ...(config.app.environment_vars && Object.keys(config.app.environment_vars).length > 0 && { 
-        environment_vars: formatEnvironmentVars(config.app.environment_vars) 
+        environment_vars: formatEnvironmentVars(config.app.environment_vars, config.variables || {}) 
       }),
       ...(config.app.tags && Object.keys(config.app.tags).length > 0 && { tags: config.app.tags }),
       ...(config.app.permissions && config.app.permissions.length > 0 && { permissions: config.app.permissions }),
@@ -2368,7 +2397,8 @@ export function generateYAML(config: AppConfig): string {
       const definedLLMs = config.resources?.llms || {};
       const definedTools = config.tools || {};
       const definedMiddleware = config.middleware || {};
-      yamlConfig.app.orchestration = formatOrchestration(config.app.orchestration, definedLLMs, definedTools, definedMiddleware);
+      const definedAgents = config.agents || {};
+      yamlConfig.app.orchestration = formatOrchestration(config.app.orchestration, definedLLMs, definedTools, definedMiddleware, definedAgents);
     }
     
     // Format chat_history
