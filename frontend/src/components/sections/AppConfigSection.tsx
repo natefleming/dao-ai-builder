@@ -702,9 +702,8 @@ export default function AppConfigSection() {
     
     setPattern(newPattern);
     
-    // Sync orchestration model
-    const existingModel = app?.orchestration?.supervisor?.model?.name || 
-                          app?.orchestration?.swarm?.model?.name;
+    // Sync orchestration model (only supervisor uses a model)
+    const existingModel = app?.orchestration?.supervisor?.model?.name;
     if (existingModel) {
       const found = Object.entries(llms).find(([, llm]) => llm.name === existingModel);
       setSelectedLLM(found ? found[0] : '');

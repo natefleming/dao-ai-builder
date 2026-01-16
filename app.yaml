@@ -4,7 +4,14 @@
 command:
   - uv
   - run
-  - dao-ai-builder
+  - gunicorn
+  - "--bind"
+  - "0.0.0.0:8000"
+  - "--workers"
+  - "2"
+  - "--timeout"
+  - "120"
+  - "app:app"
 
 env:
   - name: STATIC_FOLDER
