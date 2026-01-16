@@ -354,7 +354,8 @@ export const getCredentialValue = (
 export const parseResourceAuth = (
   resource: any,
   safeStartsWith: (val: unknown, prefix: string) => boolean,
-  safeString: (val: unknown) => string
+  safeString: (val: unknown) => string,
+  servicePrincipals?: Record<string, any>
 ): ResourceAuthFormData => {
   const isVariableRef = (val?: unknown): boolean => safeStartsWith(val, '*');
   const getVarSlice = (val?: unknown): string => {
@@ -372,11 +373,30 @@ export const parseResourceAuth = (
     authMethod = 'pat';
   }
   
+  // Determine service principal ref
+  let servicePrincipalRef = '';
+  if (resource.service_principal) {
+    if (safeStartsWith(resource.service_principal, '*')) {
+      // It's a string reference like "*retail_sp"
+      servicePrincipalRef = safeString(resource.service_principal).slice(1);
+    } else if (typeof resource.service_principal === 'object' && servicePrincipals) {
+      // It's an object (YAML alias was resolved) - try to match against configured service principals
+      const sp = resource.service_principal;
+      const matchingKey = Object.entries(servicePrincipals).find(([, spConfig]) => {
+        // Match by client_id (compare the actual values, handling variable references)
+        const spClientId = safeString((spConfig as any).client_id);
+        const resourceClientId = safeString(sp.client_id);
+        return spClientId && resourceClientId && spClientId === resourceClientId;
+      })?.[0];
+      if (matchingKey) {
+        servicePrincipalRef = matchingKey;
+      }
+    }
+  }
+  
   return {
     authMethod,
-    servicePrincipalRef: safeStartsWith(resource.service_principal, '*') 
-      ? safeString(resource.service_principal).slice(1) 
-      : '',
+    servicePrincipalRef,
     clientIdSource: isVariableRef(resource.client_id) ? 'variable' : 'manual',
     clientSecretSource: isVariableRef(resource.client_secret) ? 'variable' : 'manual',
     workspaceHostSource: isVariableRef(resource.workspace_host) ? 'variable' : 'manual',

@@ -611,7 +611,7 @@ function LLMsPanel() {
     });
     
     // Parse authentication data
-    const authData = parseResourceAuth(llm, safeStartsWith, safeString);
+    const authData = parseResourceAuth(llm, safeStartsWith, safeString, config.service_principals || {});
     
     setFormData({
       name: key,
@@ -1066,6 +1066,7 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
   const { config, addGenieRoom, updateGenieRoom, removeGenieRoom } = useConfigStore();
   const genieRooms = config.resources?.genie_rooms || {};
   const variables = config.variables || {};
+  const servicePrincipals = config.service_principals || {};
   const { data: genieSpaces, loading, refetch: refetchSpaces } = useGenieSpaces();
   
   const [spaceIdSource, setSpaceIdSource] = useState<SpaceIdSource>('select');
@@ -1132,7 +1133,7 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
     }
     
     // Parse authentication data
-    const authData = parseResourceAuth(room, safeStartsWith, safeString);
+    const authData = parseResourceAuth(room, safeStartsWith, safeString, servicePrincipals);
     
     // Auto-populate name and description from Genie space if not provided
     let name = room.name || '';
@@ -1512,6 +1513,7 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
   const { config, addWarehouse, updateWarehouse, removeWarehouse } = useConfigStore();
   const warehouses = config.resources?.warehouses || {};
   const variables = config.variables || {};
+  const servicePrincipals = config.service_principals || {};
   const { data: sqlWarehouses, loading, refetch: refetchWarehouses } = useSQLWarehouses();
   
   const [warehouseIdSource, setWarehouseIdSource] = useState<WarehouseIdSource>('select');
@@ -1557,7 +1559,7 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
     }
     
     // Parse authentication data
-    const authData = parseResourceAuth(wh, safeStartsWith, safeString);
+    const authData = parseResourceAuth(wh, safeStartsWith, safeString, servicePrincipals);
     
     // Auto-populate name from SQL warehouse if not provided
     let name = wh.name || '';
@@ -2010,7 +2012,7 @@ function TablesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose
       schema_name: tableSchemaDisplay,
       name: table.name || '',
       // Parse authentication data (includes on_behalf_of_user)
-      ...parseResourceAuth(table, safeStartsWith, safeString),
+      ...parseResourceAuth(table, safeStartsWith, safeString, servicePrincipals),
     });
     setEditingKey(key);
     setShowForm(true);
@@ -3120,6 +3122,7 @@ function FunctionsPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
 function ConnectionsPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose }: PanelProps) {
   const { config, addConnection, updateConnection, removeConnection } = useConfigStore();
   const connections = config.resources?.connections || {};
+  const servicePrincipals = config.service_principals || {};
   const { data: ucConnections, loading } = useUCConnections();
   
   const [formData, setFormData] = useState({
@@ -3148,7 +3151,7 @@ function ConnectionsPanel({ showForm, setShowForm, editingKey, setEditingKey, on
     const conn = connections[key];
     
     // Parse authentication data
-    const authData = parseResourceAuth(conn, safeStartsWith, safeString);
+    const authData = parseResourceAuth(conn, safeStartsWith, safeString, servicePrincipals);
     
     setFormData({
       refName: key,
@@ -4732,7 +4735,7 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
         checkpointPathVolumeName,
         checkpointPathPath,
         // Parse authentication data (includes on_behalf_of_user)
-        ...parseResourceAuth(vs, safeStartsWith, safeString),
+        ...parseResourceAuth(vs, safeStartsWith, safeString, servicePrincipals),
       });
       setColumnsInput((vs.columns || []).join(', '));
       setEditingKey(key);
@@ -5660,7 +5663,7 @@ function DatabricksAppsPanel({ showForm, setShowForm, editingKey, setEditingKey,
     const app = apps[key];
     
     // Parse authentication data
-    const authData = parseResourceAuth(app, safeStartsWith, safeString);
+    const authData = parseResourceAuth(app, safeStartsWith, safeString, servicePrincipals);
     
     setFormData({
       refName: key,
@@ -5883,22 +5886,7 @@ function DatabricksAppsPanel({ showForm, setShowForm, editingKey, setEditingKey,
             )}
           </div>
           
-          {/* On Behalf of User toggle */}
-          <div className="flex items-center space-x-3">
-            <input
-              type="checkbox"
-              id="app-obo"
-              checked={formData.on_behalf_of_user}
-              onChange={(e) => setFormData({ ...formData, on_behalf_of_user: e.target.checked })}
-              className="rounded border-slate-600 bg-slate-700 text-blue-500"
-            />
-            <label htmlFor="app-obo" className="text-sm text-slate-300 flex items-center space-x-2">
-              <UserCheck className="w-4 h-4" />
-              <span>On Behalf of User</span>
-            </label>
-          </div>
-          
-          {/* Authentication Section */}
+          {/* Authentication Section (includes On Behalf of User option) */}
           <ResourceAuthSection
             formData={formData as any}
             setFormData={(data) => setFormData({ ...formData, ...data })}

@@ -4460,6 +4460,83 @@ export default function ToolsSection() {
                                 break;
                             }
                             
+                            // Add authentication configuration if credentials are enabled
+                            if (mcpForm.useCredentials) {
+                              if (mcpForm.credentialsMode === 'service_principal' && mcpForm.servicePrincipalRef) {
+                                // Get the service principal config and inline it
+                                const spConfig = config.service_principals?.[mcpForm.servicePrincipalRef];
+                                if (spConfig) {
+                                  // Resolve variable references in service principal
+                                  const resolveValue = (val: unknown): string | undefined => {
+                                    if (typeof val === 'string') {
+                                      if (val.startsWith('*')) {
+                                        const varName = val.slice(1);
+                                        const varConfig = config.variables?.[varName];
+                                        if (varConfig && typeof varConfig === 'object' && 'value' in varConfig) {
+                                          return String(varConfig.value);
+                                        }
+                                        if (typeof varConfig === 'string') return varConfig;
+                                      }
+                                      return val;
+                                    }
+                                    return undefined;
+                                  };
+                                  
+                                  mcpConfig.client_id = resolveValue(spConfig.client_id);
+                                  mcpConfig.client_secret = resolveValue(spConfig.client_secret);
+                                  // Include workspace host for OAuth token endpoint (ensure https:// prefix)
+                                  if (databricksHost) {
+                                    let host = databricksHost.replace(/\/$/, '');
+                                    if (!host.startsWith('http://') && !host.startsWith('https://')) {
+                                      host = `https://${host}`;
+                                    }
+                                    mcpConfig.workspace_host = host;
+                                  }
+                                } else {
+                                  console.warn('Service principal not found:', mcpForm.servicePrincipalRef);
+                                }
+                              } else if (mcpForm.credentialsMode === 'service_principal' && !mcpForm.servicePrincipalRef) {
+                                // Service principal mode but none selected - use ambient auth
+                                // Just add workspace host so backend knows which workspace to use
+                                console.log('No service principal selected, using ambient auth');
+                                if (databricksHost) {
+                                  let host = databricksHost.replace(/\/$/, '');
+                                  if (!host.startsWith('http://') && !host.startsWith('https://')) {
+                                    host = `https://${host}`;
+                                  }
+                                  mcpConfig.workspace_host = host;
+                                }
+                              } else if (mcpForm.credentialsMode === 'manual') {
+                                // Manual credentials
+                                if (mcpForm.clientIdSource === 'variable' && mcpForm.clientIdVar) {
+                                  const varConfig = config.variables?.[mcpForm.clientIdVar];
+                                  if (varConfig && typeof varConfig === 'object' && 'value' in varConfig) {
+                                    mcpConfig.client_id = String(varConfig.value);
+                                  }
+                                } else if (mcpForm.clientIdManual) {
+                                  mcpConfig.client_id = mcpForm.clientIdManual;
+                                }
+                                
+                                if (mcpForm.clientSecretSource === 'variable' && mcpForm.clientSecretVar) {
+                                  const varConfig = config.variables?.[mcpForm.clientSecretVar];
+                                  if (varConfig && typeof varConfig === 'object' && 'value' in varConfig) {
+                                    mcpConfig.client_secret = String(varConfig.value);
+                                  }
+                                } else if (mcpForm.clientSecretManual) {
+                                  mcpConfig.client_secret = mcpForm.clientSecretManual;
+                                }
+                                
+                                if (mcpForm.workspaceHostSource === 'variable' && mcpForm.workspaceHostVar) {
+                                  const varConfig = config.variables?.[mcpForm.workspaceHostVar];
+                                  if (varConfig && typeof varConfig === 'object' && 'value' in varConfig) {
+                                    mcpConfig.workspace_host = String(varConfig.value);
+                                  }
+                                } else if (mcpForm.workspaceHostManual) {
+                                  mcpConfig.workspace_host = mcpForm.workspaceHostManual;
+                                }
+                              }
+                            }
+                            
                             // Call the backend API with Databricks host header
                             const headers: Record<string, string> = { 'Content-Type': 'application/json' };
                             if (databricksHost) {

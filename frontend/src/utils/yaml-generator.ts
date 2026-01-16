@@ -1050,8 +1050,9 @@ function formatHITL(hitl: HumanInTheLoopModel): any {
  * @param func - The tool function model
  * @param toolKey - Optional tool key for looking up original references
  * @param definedConnections - Optional map of defined connections for reference resolution
+ * @param definedApps - Optional map of defined Databricks Apps for reference resolution
  */
-function formatToolFunction(func: ToolFunctionModel, toolKey?: string, definedConnections?: Record<string, any>): any {
+function formatToolFunction(func: ToolFunctionModel, toolKey?: string, definedConnections?: Record<string, any>, definedApps?: Record<string, any>): any {
   if (typeof func === 'string') {
     return func;
   }
@@ -1231,13 +1232,32 @@ function formatToolFunction(func: ToolFunctionModel, toolKey?: string, definedCo
     
     // Check for app reference (Databricks App)
     if ('app' in func && func.app) {
-      const appVal = func.app as string | { name: string };
-      if (typeof appVal === 'string' && safeStartsWith(appVal, '*')) {
+      const appVal = func.app as any;
+      // Handle reference string (starts with *)
+      if (typeof appVal === 'string' && appVal.startsWith('*')) {
         result.app = createReference(appVal.slice(1));
-      } else if (typeof appVal === 'string') {
-        result.app = createReference(appVal);
       } else {
-        result.app = appVal;
+        // Check if app was originally a reference in imported YAML
+        const appRef = toolKey ? findOriginalReference(`tools.${toolKey}.function.app`, appVal) : null;
+        if (appRef) {
+          result.app = createReference(appRef);
+        } else {
+          // Try to match by name against defined apps
+          // This handles the case where YAML aliases were resolved on import
+          const appName = typeof appVal === 'object' && appVal.name ? appVal.name : null;
+          if (appName && definedApps) {
+            const matchingAppKey = Object.entries(definedApps).find(
+              ([, a]) => (a as any).name === appName
+            )?.[0];
+            if (matchingAppKey) {
+              result.app = createReference(matchingAppKey);
+            } else {
+              result.app = appVal;
+            }
+          } else {
+            result.app = appVal;
+          }
+        }
       }
     }
     
@@ -1375,6 +1395,59 @@ function formatCredentialWithPath(value: unknown, path?: string): any {
   
   // Fall back to regular credential formatting
   return formatCredential(value);
+}
+
+/**
+ * Format authentication fields for a resource.
+ * Handles service_principal, client_id, client_secret, workspace_host, and pat.
+ * 
+ * @param resource - The resource with auth fields
+ * @param basePath - The base path for reference lookup
+ * @returns Object with formatted auth fields to spread into the resource config
+ */
+function formatResourceAuth(resource: any, basePath?: string): Record<string, any> {
+  const authFields: Record<string, any> = {};
+  
+  // Service Principal reference (takes precedence over inline credentials)
+  if (resource.service_principal) {
+    if (typeof resource.service_principal === 'string') {
+      // It's already a reference string like "*my_sp"
+      if (resource.service_principal.startsWith('*')) {
+        authFields.service_principal = createReference(resource.service_principal.slice(1));
+      } else {
+        authFields.service_principal = createReference(resource.service_principal);
+      }
+    } else {
+      // Check if service_principal was originally a reference
+      const spPath = basePath ? `${basePath}.service_principal` : 'service_principal';
+      const spRef = findOriginalReference(spPath, resource.service_principal);
+      if (spRef) {
+        authFields.service_principal = createReference(spRef);
+      } else {
+        // It's an inline ServicePrincipalModel object
+        authFields.service_principal = {
+          client_id: formatCredentialWithPath(resource.service_principal.client_id, basePath ? `${basePath}.service_principal.client_id` : undefined),
+          client_secret: formatCredentialWithPath(resource.service_principal.client_secret, basePath ? `${basePath}.service_principal.client_secret` : undefined),
+        };
+      }
+    }
+  } else {
+    // OAuth credentials (only if no service_principal)
+    if (resource.client_id) {
+      authFields.client_id = formatCredentialWithPath(resource.client_id, basePath ? `${basePath}.client_id` : undefined);
+    }
+    if (resource.client_secret) {
+      authFields.client_secret = formatCredentialWithPath(resource.client_secret, basePath ? `${basePath}.client_secret` : undefined);
+    }
+    if (resource.workspace_host) {
+      authFields.workspace_host = formatCredentialWithPath(resource.workspace_host, basePath ? `${basePath}.workspace_host` : undefined);
+    }
+    if (resource.pat) {
+      authFields.pat = formatCredentialWithPath(resource.pat, basePath ? `${basePath}.pat` : undefined);
+    }
+  }
+  
+  return authFields;
 }
 
 /**
@@ -1577,6 +1650,7 @@ export function generateYAML(config: AppConfig): string {
           ...(llm.max_tokens !== undefined && { max_tokens: llm.max_tokens }),
           ...(llm.on_behalf_of_user !== undefined && { on_behalf_of_user: llm.on_behalf_of_user }),
           ...(formattedFallbacks && formattedFallbacks.length > 0 && { fallbacks: formattedFallbacks }),
+          ...formatResourceAuth(llm, `resources.llms.${key}`),
         };
       });
     }
@@ -1640,6 +1714,7 @@ export function generateYAML(config: AppConfig): string {
           ...(vs.source_path && { source_path: formatVolumePath(vs.source_path, definedVolumes) }),
           ...(vs.checkpoint_path && { checkpoint_path: formatVolumePath(vs.checkpoint_path, definedVolumes) }),
           ...(vs.on_behalf_of_user !== undefined && { on_behalf_of_user: vs.on_behalf_of_user }),
+          ...formatResourceAuth(vs, `resources.vector_stores.${key}`),
         };
       });
     }
@@ -1665,6 +1740,7 @@ export function generateYAML(config: AppConfig): string {
           space_id: spaceIdValue,
           ...(room.description && { description: room.description }),
           ...(room.on_behalf_of_user !== undefined && { on_behalf_of_user: room.on_behalf_of_user }),
+          ...formatResourceAuth(room, `resources.genie_rooms.${key}`),
         };
       });
     }
@@ -1677,6 +1753,7 @@ export function generateYAML(config: AppConfig): string {
           ...(schemaRef && { schema: schemaRef }),
           ...(table.name && { name: table.name }),
           ...(table.on_behalf_of_user !== undefined && { on_behalf_of_user: table.on_behalf_of_user }),
+          ...formatResourceAuth(table, `resources.tables.${key}`),
         };
       });
     }
@@ -1720,6 +1797,7 @@ export function generateYAML(config: AppConfig): string {
           warehouse_id: warehouseIdValue,
           ...(warehouse.description && { description: warehouse.description }),
           ...(warehouse.on_behalf_of_user !== undefined && { on_behalf_of_user: warehouse.on_behalf_of_user }),
+          ...formatResourceAuth(warehouse, `resources.warehouses.${key}`),
         };
       });
     }
@@ -1730,6 +1808,7 @@ export function generateYAML(config: AppConfig): string {
         yamlConfig.resources.connections[key] = {
           name: connection.name,
           ...(connection.on_behalf_of_user !== undefined && { on_behalf_of_user: connection.on_behalf_of_user }),
+          ...formatResourceAuth(connection, `resources.connections.${key}`),
         };
       });
     }
@@ -1745,39 +1824,11 @@ export function generateYAML(config: AppConfig): string {
       yamlConfig.resources.apps = {};
       Object.entries(config.resources!.apps).forEach(([key, app]) => {
         // Note: URL is not included as it's dynamically retrieved at runtime from the workspace
-        const appEntry: Record<string, unknown> = {
+        yamlConfig.resources.apps[key] = {
           name: app.name,
+          ...(app.on_behalf_of_user !== undefined && { on_behalf_of_user: app.on_behalf_of_user }),
+          ...formatResourceAuth(app, `resources.apps.${key}`),
         };
-        
-        if (app.on_behalf_of_user !== undefined) {
-          appEntry.on_behalf_of_user = app.on_behalf_of_user;
-        }
-        
-        // Service Principal reference (takes precedence over inline credentials)
-        if (app.service_principal) {
-          if (typeof app.service_principal === 'string') {
-            // It's a reference string like "*my_sp"
-            if (app.service_principal.startsWith('*')) {
-              appEntry.service_principal = createReference(app.service_principal.slice(1));
-            } else {
-              appEntry.service_principal = createReference(app.service_principal);
-            }
-          } else {
-            // It's an inline ServicePrincipalModel object
-            appEntry.service_principal = {
-              client_id: formatCredential(app.service_principal.client_id),
-              client_secret: formatCredential(app.service_principal.client_secret),
-            };
-          }
-        } else {
-          // OAuth credentials (only if no service_principal)
-          if (app.client_id) appEntry.client_id = formatCredential(app.client_id);
-          if (app.client_secret) appEntry.client_secret = formatCredential(app.client_secret);
-          if (app.workspace_host) appEntry.workspace_host = formatCredential(app.workspace_host);
-          if (app.pat) appEntry.pat = formatCredential(app.pat);
-        }
-        
-        yamlConfig.resources.apps[key] = appEntry;
       });
     }
   }
@@ -1845,11 +1896,12 @@ export function generateYAML(config: AppConfig): string {
   // Tools
   if (config.tools && Object.keys(config.tools).length > 0) {
     const definedConnections = config.resources?.connections || {};
+    const definedApps = config.resources?.apps || {};
     yamlConfig.tools = {};
     Object.entries(config.tools).forEach(([key, tool]) => {
       yamlConfig.tools[key] = {
         name: tool.name,
-        function: formatToolFunction(tool.function, key, definedConnections),
+        function: formatToolFunction(tool.function, key, definedConnections, definedApps),
       };
     });
   }

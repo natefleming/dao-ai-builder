@@ -333,12 +333,3 @@ else
     echo -e "  ${BLUE}./deploy.sh --force${NC}                          - Clean redeploy (removes all artifacts)"
 fi
 echo ""
-
-# Open the app in browser (macOS)
-if command -v open &> /dev/null; then
-    read -p "Open app in browser? [Y/n] " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
-        open "${APP_URL}"
-    fi
-fi

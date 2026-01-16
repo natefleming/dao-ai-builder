@@ -1,22 +1,17 @@
 # Databricks Apps runtime configuration
 # Databricks Apps default to port 8000
+# uv manages dependencies from pyproject.toml
 command:
-  - gunicorn
-  - --bind
-  - 0.0.0.0:8000
-  - --workers
-  - "2"
-  - --timeout
-  - "120"
-  - app:app
+  - uv
+  - run
+  - dao-ai-builder
 
 env:
   - name: STATIC_FOLDER
     value: static
   - name: PORT
     value: "8000"
-  - name: DAO_AI_VERSION
-    value: "0.1.12"
+  # DAO_AI_VERSION is now dynamically discovered from the installed package
   # GitHub repository for config templates
   - name: GITHUB_CONFIG_REPO
     value: "natefleming/dao-ai"

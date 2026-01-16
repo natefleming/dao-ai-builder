@@ -1,9 +1,2 @@
-# Databricks App Dependencies
-flask>=3.0.0
-gunicorn>=21.0.0
-requests>=2.31.0
-python-dotenv>=1.2.1
-databricks-sdk>=0.74.0
-mlflow[databricks]>=3.8.1
-dao-ai>=0.1.12
-jsonschema>=4.0.0
+# Bootstrap dependency - uv manages all other dependencies from pyproject.toml
+uv

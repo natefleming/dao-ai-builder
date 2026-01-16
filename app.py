@@ -2708,8 +2708,9 @@ def list_vector_search_indexes():
                     
                     all_indexes.append(index_info)
                     
-            except AttributeError as e:
-                log('warning', f"Vector search indexes API not available for endpoint {ep_name}: {e}")
+            except AttributeError:
+                # Some index types (e.g., MiniVectorIndex) don't have delta_sync_index_spec - skip silently
+                pass
             except Exception as e:
                 log('warning', f"Error fetching indexes for endpoint {ep_name}: {e}")
         
@@ -2757,7 +2758,13 @@ def list_mcp_tools_endpoint():
         if not config:
             return jsonify({'error': 'No configuration provided', 'tools': []}), 400
         
-        log('debug', f'MCP list-tools request: {json.dumps(config, default=str)[:500]}')
+        # Log the full request for debugging
+        log('info', f'MCP list-tools request received')
+        log('debug', f'MCP request keys: {list(config.keys())}')
+        log('debug', f'MCP request app: {config.get("app")}')
+        log('debug', f'MCP request has client_id: {bool(config.get("client_id"))}')
+        log('debug', f'MCP request has client_secret: {bool(config.get("client_secret"))}')
+        log('debug', f'MCP request workspace_host: {config.get("workspace_host")}')
         
         # Get workspace client for authentication
         w = get_workspace_client()
@@ -2781,8 +2788,86 @@ def list_mcp_tools_endpoint():
             mcp_config['functions'] = config['functions']
         if config.get('connection'):
             mcp_config['connection'] = config['connection']
+            # Log connection details for debugging UC Connection MCP
+            conn_config = config['connection']
+            conn_name = conn_config.get('name') if isinstance(conn_config, dict) else conn_config
+            log('debug', f'UC Connection MCP: connection_name={conn_name}')
+            # The MCP URL will be: {workspace_host}/api/2.0/mcp/external/{connection_name}
         if config.get('app'):
-            mcp_config['app'] = config['app']
+            # Resolve the app URL here in the builder, not in dao-ai
+            # This ensures we use the correct credentials and don't depend on dao-ai version
+            app_config = config['app']
+            if isinstance(app_config, dict) and app_config.get('name'):
+                app_name = app_config['name']
+                log('debug', f'Resolving URL for Databricks App: {app_name}')
+                
+                # Build a workspace client with appropriate credentials for URL resolution
+                url_resolution_client = None
+                
+                # Check for credentials (client_id/secret or PAT)
+                if config.get('client_id') and config.get('client_secret'):
+                    try:
+                        from databricks.sdk import WorkspaceClient
+                        host = config.get('workspace_host') or w.config.host
+                        if host and not host.startswith('http://') and not host.startswith('https://'):
+                            host = f'https://{host}'
+                        log('debug', f'Creating WorkspaceClient with OAuth credentials for app URL resolution, host={host}')
+                        url_resolution_client = WorkspaceClient(
+                            host=host,
+                            client_id=config['client_id'],
+                            client_secret=config['client_secret'],
+                        )
+                    except Exception as auth_err:
+                        log('warning', f'Failed to create client with OAuth credentials: {auth_err}')
+                
+                # Fall back to ambient workspace client
+                if not url_resolution_client:
+                    log('debug', 'Using ambient credentials for app URL resolution')
+                    url_resolution_client = w
+                
+                try:
+                    app_details = url_resolution_client.apps.get(name=app_name)
+                    log('debug', f'Got app details: url={app_details.url}, status={app_details.status}')
+                    if app_details and app_details.url:
+                        # Set URL at MCP function level - append /mcp suffix
+                        mcp_url = app_details.url.rstrip('/') + '/mcp'
+                        mcp_config['url'] = mcp_url
+                        log('info', f'Resolved app MCP URL: {mcp_url}')
+                    else:
+                        log('warning', f'App {app_name} found but has no URL. Is it deployed?')
+                        return jsonify({'error': f'App {app_name} has no URL. Is it deployed?'}), 400
+                except Exception as app_err:
+                    log('error', f'Failed to resolve app URL for {app_name}: {app_err}')
+                    return jsonify({'error': f'Failed to resolve app URL: {str(app_err)}'}), 400
+        
+        # Add authentication fields if present
+        # These are inherited from IsDatabricksResource on McpFunctionModel
+        if config.get('service_principal'):
+            mcp_config['service_principal'] = config['service_principal']
+        if config.get('client_id'):
+            mcp_config['client_id'] = config['client_id']
+        if config.get('client_secret'):
+            mcp_config['client_secret'] = config['client_secret']
+        if config.get('workspace_host'):
+            host = config['workspace_host']
+            # Ensure host has https:// prefix
+            if host and not host.startswith('http://') and not host.startswith('https://'):
+                host = f'https://{host}'
+            mcp_config['workspace_host'] = host
+            log('debug', f'Using provided workspace host for OAuth: {host}')
+        elif config.get('client_id') or config.get('client_secret'):
+            # If credentials are provided but no workspace_host, use the backend's host
+            # This is required for OAuth token endpoint construction
+            host = w.config.host
+            # Ensure host has https:// prefix
+            if host and not host.startswith('http://') and not host.startswith('https://'):
+                host = f'https://{host}'
+            mcp_config['workspace_host'] = host
+            log('debug', f'Using backend workspace host for OAuth: {host}')
+        if config.get('pat'):
+            mcp_config['pat'] = config['pat']
+        if config.get('on_behalf_of_user'):
+            mcp_config['on_behalf_of_user'] = config['on_behalf_of_user']
         
         # Add include/exclude tools if provided (for filtering)
         if config.get('include_tools'):
@@ -2790,24 +2875,45 @@ def list_mcp_tools_endpoint():
         if config.get('exclude_tools'):
             mcp_config['exclude_tools'] = config['exclude_tools']
         
-        log('debug', f'Creating McpFunctionModel with config: {mcp_config}')
+        # Log config (mask secrets)
+        safe_config = {k: ('***' if 'secret' in k.lower() else v) for k, v in mcp_config.items()}
+        log('debug', f'Creating McpFunctionModel with config: {safe_config}')
+        
+        # Determine what MCP source is configured
+        url_info = mcp_config.get("url")
+        mcp_source = 'url' if url_info else None
+        if not mcp_source and mcp_config.get("genie_room"):
+            mcp_source = 'genie_room'
+        if not mcp_source and mcp_config.get("sql"):
+            mcp_source = 'sql'
+        if not mcp_source and mcp_config.get("connection"):
+            mcp_source = 'connection'
+        if not mcp_source and mcp_config.get("vector_search"):
+            mcp_source = 'vector_search'
+        if not mcp_source and mcp_config.get("functions"):
+            mcp_source = 'functions'
+        
+        log('info', f'MCP source: {mcp_source}, url: {url_info}, workspace_host: {mcp_config.get("workspace_host")}, has_client_id: {bool(mcp_config.get("client_id"))}, has_client_secret: {bool(mcp_config.get("client_secret"))}')
+        
+        # Validate that we have a valid MCP source
+        if not mcp_source:
+            log('error', f'No valid MCP source configured. Request config: {json.dumps(config, default=str)}')
+            return jsonify({'error': 'No valid MCP source configured. Please provide url, app, genie_room, sql, connection, vector_search, or functions.'}), 400
+        
+        # Additional logging for UC Connection to help debug
+        if mcp_config.get('connection'):
+            conn = mcp_config['connection']
+            conn_name = conn.get('name') if isinstance(conn, dict) else conn
+            ws_host = mcp_config.get('workspace_host') or w.config.host
+            expected_url = f'{ws_host}/api/2.0/mcp/external/{conn_name}'
+            log('info', f'UC Connection expected MCP URL: {expected_url}')
         
         # Create the MCP function model
         mcp_function = McpFunctionModel(**mcp_config)
         
-        # Inject the workspace client for authentication
-        mcp_function._workspace_client = w
-        
-        # Also inject workspace client into nested resources if present
-        # This ensures authentication works when using inline resource configurations
-        if mcp_function.vector_search:
-            mcp_function.vector_search._workspace_client = w
-        if mcp_function.genie_room:
-            mcp_function.genie_room._workspace_client = w
-        if mcp_function.connection:
-            mcp_function.connection._workspace_client = w
-        if mcp_function.app:
-            mcp_function.app._workspace_client = w
+        # Note: The dao-ai library's IsDatabricksResource.workspace_client property
+        # creates a new WorkspaceClient with ambient auth on each access.
+        # This should work in the Databricks App context for all resource types.
         
         # List available tools
         tools = list_mcp_tools(mcp_function, apply_filters=False)
@@ -2829,8 +2935,22 @@ def list_mcp_tools_endpoint():
         log('error', f'Error listing MCP tools: {e}')
         import traceback
         log('error', traceback.format_exc())
+        
+        # Try to extract more detail from ExceptionGroup (Python 3.11+)
+        error_detail = str(e)
+        if hasattr(e, '__cause__') and e.__cause__:
+            cause = e.__cause__
+            if hasattr(cause, 'exceptions'):
+                # ExceptionGroup - get sub-exceptions
+                for sub_exc in cause.exceptions:
+                    log('error', f'Sub-exception: {type(sub_exc).__name__}: {sub_exc}')
+                    error_detail = f"{error_detail} | {type(sub_exc).__name__}: {sub_exc}"
+            else:
+                log('error', f'Cause: {type(cause).__name__}: {cause}')
+                error_detail = f"{error_detail} | Cause: {cause}"
+        
         return jsonify({
-            'error': str(e),
+            'error': error_detail,
             'tools': []
         }), 500
 
@@ -4679,8 +4799,32 @@ Output ONLY the prompt text, without any additional explanation or markdown code
 # Main Entry Point
 # =============================================================================
 
+def main():
+    """Run the DAO AI Builder server with gunicorn."""
+    import subprocess
+    import sys
+    
+    port = os.environ.get('PORT', '8000')
+    workers = os.environ.get('WORKERS', '2')
+    timeout = os.environ.get('TIMEOUT', '120')
+    
+    print(f"Starting DAO AI Builder on port {port}")
+    if os.environ.get('DATABRICKS_HOST'):
+        print(f"DATABRICKS_HOST: {os.environ.get('DATABRICKS_HOST')}")
+    
+    # Run gunicorn
+    cmd = [
+        'gunicorn',
+        '--bind', f'0.0.0.0:{port}',
+        '--workers', workers,
+        '--timeout', timeout,
+        'app:app'
+    ]
+    subprocess.run(cmd, check=True)
+
+
 if __name__ == '__main__':
-    # Local development mode
+    # Local development mode - use Flask's built-in server
     from dotenv import load_dotenv
     
     # Load .env file
@@ -4688,16 +4832,20 @@ if __name__ == '__main__':
     if env_path.exists():
         load_dotenv(env_path)
     
-    # Databricks Apps use port 8000 by default
-    port = int(os.environ.get('PORT', 8000))
-    debug = os.environ.get('DEBUG', 'false').lower() == 'true'
-    
-    print(f"Starting DAO AI Builder on port {port}")
-    if os.environ.get('DATABRICKS_HOST'):
-        print(f"DATABRICKS_HOST: {os.environ.get('DATABRICKS_HOST')}")
-    if os.environ.get('DATABRICKS_TOKEN'):
-        print("DATABRICKS_TOKEN: [set]")
-    if OAUTH_CLIENT_ID:
-        print("OAuth configured")
-    
-    app.run(host='0.0.0.0', port=port, debug=debug)
+    # Check if running in production mode
+    if os.environ.get('PRODUCTION', 'false').lower() == 'true':
+        main()
+    else:
+        # Databricks Apps use port 8000 by default
+        port = int(os.environ.get('PORT', 8000))
+        debug = os.environ.get('DEBUG', 'false').lower() == 'true'
+        
+        print(f"Starting DAO AI Builder (dev mode) on port {port}")
+        if os.environ.get('DATABRICKS_HOST'):
+            print(f"DATABRICKS_HOST: {os.environ.get('DATABRICKS_HOST')}")
+        if os.environ.get('DATABRICKS_TOKEN'):
+            print("DATABRICKS_TOKEN: [set]")
+        if OAUTH_CLIENT_ID:
+            print("OAuth configured")
+        
+        app.run(host='0.0.0.0', port=port, debug=debug)

@@ -7,6 +7,7 @@ import Select from '@/components/ui/Select';
 import { useConfigStore } from '@/stores/configStore';
 import { safeDelete } from '@/utils/safe-delete';
 import { useYamlScrollStore } from '@/stores/yamlScrollStore';
+import { normalizeRefNameWhileTyping } from '@/utils/name-utils';
 import {
   VariableModel,
   VariableType,
@@ -315,16 +316,9 @@ export function VariablesSection() {
               placeholder="e.g., client_id, workspace_host"
               value={formData.name}
               onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                // Normalize variable name: trim spaces, convert to lowercase, replace special chars with underscores
-                const normalized = e.target.value
-                  .trim()
-                  .toLowerCase()
-                  .replace(/[^a-z0-9_]/g, '_')
-                  .replace(/_+/g, '_')
-                  .replace(/^_|_$/g, '');
-                setFormData({ ...formData, name: normalized });
+                setFormData({ ...formData, name: normalizeRefNameWhileTyping(e.target.value) });
               }}
-              hint="Variable names are normalized: lowercase, underscores only, no spaces"
+              hint="Type naturally - spaces become underscores"
             />
             <Select
               label="Variable Type"

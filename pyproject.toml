@@ -5,9 +5,15 @@ description = "Visual configuration builder for Databricks Agent-Orchestrated Ap
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "dao-ai>=0.1.12",
+    "flask>=3.0.0",
+    "gunicorn>=21.0.0",
+    "dao-ai>=0.1.16",
     "databricks-sdk>=0.74.0",
     "mlflow[databricks]>=3.8.1",
     "python-dotenv>=1.2.1",
     "requests>=2.31.0",
+    "jsonschema>=4.0.0",
 ]
+
+[project.scripts]
+dao-ai-builder = "app:main"
