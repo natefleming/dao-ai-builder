@@ -268,8 +268,8 @@ export default function AppConfigSection() {
   const [supervisorAiContext, setSupervisorAiContext] = useState('');
   
   const [selectedLLM, setSelectedLLM] = useState(() => {
-    const existingModel = config.app?.orchestration?.supervisor?.model?.name || 
-                          config.app?.orchestration?.swarm?.model?.name;
+    // Only supervisor uses a model - swarm no longer has a model field
+    const existingModel = config.app?.orchestration?.supervisor?.model?.name;
     if (existingModel) {
       const found = Object.entries(llms).find(([, llm]) => llm.name === existingModel);
       return found ? found[0] : '';
@@ -461,10 +461,7 @@ export default function AppConfigSection() {
       const currentSupervisorMiddleware = [...supervisorMiddleware].sort();
       if (JSON.stringify(savedSupervisorMiddleware) !== JSON.stringify(currentSupervisorMiddleware)) return true;
     } else if (pattern === 'swarm') {
-      const savedLLMName = app?.orchestration?.swarm?.model?.name;
-      const currentLLMName = selectedLLM ? llms[selectedLLM]?.name : '';
-      if (savedLLMName !== currentLLMName) return true;
-      
+      // Swarm no longer has a model field - just check default_agent and handoffs
       const savedDefaultAgent = app?.orchestration?.swarm?.default_agent;
       const savedDefaultAgentName = typeof savedDefaultAgent === 'string' ? savedDefaultAgent : savedDefaultAgent?.name || '';
       if (defaultAgent !== savedDefaultAgentName) return true;
@@ -575,9 +572,9 @@ export default function AppConfigSection() {
     validationErrors.push('At least one agent must be selected');
   }
   
-  // For Supervisor/Swarm patterns, an LLM must be selected
-  if (pattern !== 'none' && !selectedLLM) {
-    validationErrors.push(`${pattern === 'supervisor' ? 'Supervisor' : 'Swarm'} orchestration requires an LLM`);
+  // For Supervisor pattern, an LLM must be selected (swarm doesn't use a model)
+  if (pattern === 'supervisor' && !selectedLLM) {
+    validationErrors.push('Supervisor orchestration requires an LLM');
   }
   
   const isValid = validationErrors.length === 0;
@@ -967,7 +964,8 @@ export default function AppConfigSection() {
         // Add memory reference if configured
         ...(orchestrationMemoryRef && { memory: `*${orchestrationMemoryRef}` }),
       };
-    } else if (pattern === 'swarm' && selectedLLM && llms[selectedLLM]) {
+    } else if (pattern === 'swarm') {
+      // Swarm no longer uses a model - each agent uses its own model
       const handoffsDict: Record<string, string[] | null> = {};
       handoffs.forEach(h => {
         if (h.type === 'any') {
@@ -986,7 +984,6 @@ export default function AppConfigSection() {
 
       orchestration = {
         swarm: {
-          model: llms[selectedLLM],
           ...(defaultAgent && agents[defaultAgent] && { default_agent: defaultAgent }),
           ...(Object.keys(handoffsDict).length > 0 && { handoffs: handoffsDict }),
           ...(swarmMiddlewareArray.length > 0 && { middleware: swarmMiddlewareArray }),
@@ -999,16 +996,9 @@ export default function AppConfigSection() {
       // This ensures Chat/Visualize/Deploy are enabled with a valid configuration
       const existingOrchestration = config.app?.orchestration;
       
-      // Get model from first selected agent for the swarm
-      let agentModel: any = undefined;
+      // Get the first selected agent name for default_agent
       const firstAgentKey = selectedAgents[0];
-      if (firstAgentKey && agents[firstAgentKey]) {
-        agentModel = agents[firstAgentKey].model;
-      }
-      // Fallback: Get from app.agents array
-      if (!agentModel && app?.agents && Array.isArray(app.agents) && app.agents.length > 0) {
-        agentModel = app.agents[0].model;
-      }
+      const firstAgentName = firstAgentKey && agents[firstAgentKey] ? agents[firstAgentKey].name : undefined;
       
       if (orchestrationMemoryRef) {
         // Memory is configured - preserve existing orchestration or create minimal swarm
@@ -1023,16 +1013,17 @@ export default function AppConfigSection() {
             memory: `*${orchestrationMemoryRef}`,
           };
         } else {
+          // Swarm no longer uses model - just set default_agent
           orchestration = {
-            swarm: agentModel ? { model: agentModel } : {},
+            swarm: firstAgentName ? { default_agent: firstAgentName } : {},
             memory: `*${orchestrationMemoryRef}`,
           };
         }
-      } else if (selectedAgents.length > 0 && agentModel) {
+      } else if (selectedAgents.length > 0 && firstAgentName) {
         // No memory, but agents exist - create minimal swarm of one
         // This ensures the app has valid orchestration for chat/deploy
         orchestration = {
-          swarm: { model: agentModel },
+          swarm: { default_agent: firstAgentName },
         };
       }
     }
@@ -1436,22 +1427,24 @@ export default function AppConfigSection() {
         {/* Pattern Configuration */}
         {pattern !== 'none' && (
           <div className="space-y-4 pt-4 border-t border-slate-700">
-            {Object.keys(llms).length === 0 && (
-              <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 text-amber-400 text-sm">
-                Add an LLM in Resources first to configure orchestration.
-              </div>
-            )}
+            {/* Only show LLM selection for supervisor pattern - swarm doesn't use a model */}
+            {pattern === 'supervisor' && (
+              <>
+                {Object.keys(llms).length === 0 && (
+                  <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 text-amber-400 text-sm">
+                    Add an LLM in Resources first to configure supervisor orchestration.
+                  </div>
+                )}
 
-            <Select
-              label="Orchestration Model"
-              options={llmOptions}
-              value={selectedLLM}
-              onChange={(e) => setSelectedLLM(e.target.value)}
-              hint={pattern === 'supervisor' 
-                ? 'The LLM that will route requests to appropriate agents'
-                : 'The LLM used for agent handoff decisions'
-              }
-            />
+                <Select
+                  label="Orchestration Model"
+                  options={llmOptions}
+                  value={selectedLLM}
+                  onChange={(e) => setSelectedLLM(e.target.value)}
+                  hint="The LLM that will route requests to appropriate agents"
+                />
+              </>
+            )}
 
             {pattern === 'supervisor' && (
               <>

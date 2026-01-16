@@ -930,9 +930,7 @@ function formatOrchestration(orchestration: OrchestrationModel, definedLLMs: Rec
   }
   
   if (orchestration.swarm) {
-    result.swarm = {
-      model: formatModelReference(orchestration.swarm.model, definedLLMs, 'orchestration.swarm.model'),
-    };
+    result.swarm = {};
     
     // Handle default_agent - can be string or AgentModel
     if (orchestration.swarm.default_agent) {

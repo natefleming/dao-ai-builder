@@ -377,7 +377,6 @@ export interface SupervisorModel {
 }
 
 export interface SwarmModel {
-  model: LLMModel;
   default_agent?: AgentModel | string;
   handoffs?: Record<string, (AgentModel | string)[] | null>;
   middleware?: MiddlewareModel[];
