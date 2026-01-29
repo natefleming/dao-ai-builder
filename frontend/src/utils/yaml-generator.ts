@@ -1903,16 +1903,140 @@ export function generateYAML(config: AppConfig): string {
         retrieverConfig.search_parameters = searchParams;
       }
       
+      // Handle router configuration
+      if (retriever.router) {
+        const routerConfig: Record<string, any> = {};
+        if (retriever.router.model) {
+          // Check for LLM reference
+          const modelRef = typeof retriever.router.model === 'string' 
+            ? retriever.router.model 
+            : retriever.router.model?.name;
+          if (modelRef) {
+            const llmRef = findOriginalReference(`retrievers.${key}.router.model`, retriever.router.model);
+            routerConfig.model = llmRef ? createReference(llmRef) : createReference(modelRef);
+          }
+        }
+        if (retriever.router.default_mode) {
+          routerConfig.default_mode = retriever.router.default_mode;
+        }
+        if (retriever.router.auto_bypass !== undefined) {
+          routerConfig.auto_bypass = retriever.router.auto_bypass;
+        }
+        if (Object.keys(routerConfig).length > 0) {
+          retrieverConfig.router = routerConfig;
+        }
+      }
+
+      // Handle rerank configuration
       if (retriever.rerank) {
         if (typeof retriever.rerank === 'boolean') {
           retrieverConfig.rerank = retriever.rerank;
         } else {
-          retrieverConfig.rerank = {
+          const rerankConfig: Record<string, any> = {
             ...(retriever.rerank.model && { model: retriever.rerank.model }),
             ...(retriever.rerank.top_n !== undefined && { top_n: retriever.rerank.top_n }),
             ...(retriever.rerank.cache_dir && { cache_dir: retriever.rerank.cache_dir }),
             ...(retriever.rerank.columns && retriever.rerank.columns.length > 0 && { columns: retriever.rerank.columns }),
           };
+          
+          // Handle instruction_aware configuration
+          if (retriever.rerank.instruction_aware) {
+            const iaConfig: Record<string, any> = {};
+            if (retriever.rerank.instruction_aware.model) {
+              const modelRef = typeof retriever.rerank.instruction_aware.model === 'string'
+                ? retriever.rerank.instruction_aware.model
+                : retriever.rerank.instruction_aware.model?.name;
+              if (modelRef) {
+                const llmRef = findOriginalReference(`retrievers.${key}.rerank.instruction_aware.model`, retriever.rerank.instruction_aware.model);
+                iaConfig.model = llmRef ? createReference(llmRef) : createReference(modelRef);
+              }
+            }
+            if (retriever.rerank.instruction_aware.instructions) {
+              iaConfig.instructions = retriever.rerank.instruction_aware.instructions;
+            }
+            if (retriever.rerank.instruction_aware.top_n !== undefined) {
+              iaConfig.top_n = retriever.rerank.instruction_aware.top_n;
+            }
+            if (Object.keys(iaConfig).length > 0) {
+              rerankConfig.instruction_aware = iaConfig;
+            }
+          }
+          
+          retrieverConfig.rerank = rerankConfig;
+        }
+      }
+
+      // Handle instructed retrieval configuration
+      if (retriever.instructed) {
+        const instructedConfig: Record<string, any> = {
+          schema_description: retriever.instructed.schema_description,
+        };
+        
+        if (retriever.instructed.decomposition_model) {
+          const modelRef = typeof retriever.instructed.decomposition_model === 'string'
+            ? retriever.instructed.decomposition_model
+            : retriever.instructed.decomposition_model?.name;
+          if (modelRef) {
+            const llmRef = findOriginalReference(`retrievers.${key}.instructed.decomposition_model`, retriever.instructed.decomposition_model);
+            instructedConfig.decomposition_model = llmRef ? createReference(llmRef) : createReference(modelRef);
+          }
+        }
+        
+        if (retriever.instructed.columns && retriever.instructed.columns.length > 0) {
+          instructedConfig.columns = retriever.instructed.columns.map(col => ({
+            name: col.name,
+            ...(col.type && { type: col.type }),
+            ...(col.operators && col.operators.length > 0 && { operators: col.operators }),
+          }));
+        }
+        
+        if (retriever.instructed.constraints && retriever.instructed.constraints.length > 0) {
+          instructedConfig.constraints = retriever.instructed.constraints;
+        }
+        
+        if (retriever.instructed.max_subqueries !== undefined && retriever.instructed.max_subqueries !== 3) {
+          instructedConfig.max_subqueries = retriever.instructed.max_subqueries;
+        }
+        
+        if (retriever.instructed.rrf_k !== undefined && retriever.instructed.rrf_k !== 60) {
+          instructedConfig.rrf_k = retriever.instructed.rrf_k;
+        }
+        
+        if (retriever.instructed.examples && retriever.instructed.examples.length > 0) {
+          instructedConfig.examples = retriever.instructed.examples;
+        }
+        
+        if (retriever.instructed.normalize_filter_case) {
+          instructedConfig.normalize_filter_case = retriever.instructed.normalize_filter_case;
+        }
+        
+        retrieverConfig.instructed = instructedConfig;
+      }
+
+      // Handle verifier configuration
+      if (retriever.verifier) {
+        const verifierConfig: Record<string, any> = {};
+        
+        if (retriever.verifier.model) {
+          const modelRef = typeof retriever.verifier.model === 'string'
+            ? retriever.verifier.model
+            : retriever.verifier.model?.name;
+          if (modelRef) {
+            const llmRef = findOriginalReference(`retrievers.${key}.verifier.model`, retriever.verifier.model);
+            verifierConfig.model = llmRef ? createReference(llmRef) : createReference(modelRef);
+          }
+        }
+        
+        if (retriever.verifier.on_failure) {
+          verifierConfig.on_failure = retriever.verifier.on_failure;
+        }
+        
+        if (retriever.verifier.max_retries !== undefined) {
+          verifierConfig.max_retries = retriever.verifier.max_retries;
+        }
+        
+        if (Object.keys(verifierConfig).length > 0) {
+          retrieverConfig.verifier = verifierConfig;
         }
       }
       

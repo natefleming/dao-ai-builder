@@ -1,7 +1,8 @@
 import { useState, ChangeEvent } from 'react';
-import { Plus, Trash2, Edit2, Search, Layers, Filter, X } from 'lucide-react';
+import { Plus, Trash2, Edit2, Search, Layers, Filter, X, ChevronDown, ChevronRight, Zap, CheckCircle, Route } from 'lucide-react';
 import { useConfigStore } from '@/stores/configStore';
-import { RetrieverModel, SearchParametersModel, RerankParametersModel } from '@/types/dao-ai-types';
+import { RetrieverModel, SearchParametersModel, RerankParametersModel, RouterModel, InstructedRetrieverModel, VerifierModel, ColumnInfo, InstructionAwareRerankModel } from '@/types/dao-ai-types';
+import Textarea from '../ui/Textarea';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
 import Select from '../ui/Select';
@@ -43,8 +44,9 @@ import { useYamlScrollStore } from '@/stores/yamlScrollStore';
 
 // Valid FlashRank reranking models - see https://github.com/PrithivirajDamodaran/FlashRank
 const RERANK_MODELS = [
-  { value: 'ms-marco-TinyBERT-L-2-v2', label: 'TinyBERT L-2 (~4MB, fastest, default)' },
-  { value: 'ms-marco-MiniLM-L-12-v2', label: 'MiniLM L-12 (~34MB, best cross-encoder)' },
+  { value: '', label: 'None (use Databricks columns reranking only)' },
+  { value: 'ms-marco-TinyBERT-L-2-v2', label: 'TinyBERT L-2 (~4MB, fastest)' },
+  { value: 'ms-marco-MiniLM-L-12-v2', label: 'MiniLM L-12 (~34MB, best cross-encoder, recommended)' },
   { value: 'rank-T5-flan', label: 'T5-flan (~110MB, best non cross-encoder)' },
   { value: 'ms-marco-MultiBERT-L-12', label: 'MultiBERT L-12 (~150MB, 100+ languages)' },
   { value: 'ce-esci-MiniLM-L12-v2', label: 'ESCI MiniLM L-12 (e-commerce optimized)' },
@@ -57,6 +59,21 @@ const QUERY_TYPES = [
   { value: 'HYBRID', label: 'Hybrid' },
 ];
 
+// Column info entry for instructed retrieval
+interface ColumnInfoEntry {
+  id: string;
+  name: string;
+  type: "string" | "number" | "boolean" | "datetime";
+  operators: string;  // Comma-separated
+}
+
+// Example entry for instructed retrieval
+interface ExampleEntry {
+  id: string;
+  query: string;
+  filters: string;  // JSON string
+}
+
 interface FormData {
   refName: string;
   vectorStoreRef: string;
@@ -64,17 +81,57 @@ interface FormData {
   numResults: string;
   queryType: string;
   filters: FilterEntry[];
+  // Router settings
+  enableRouter: boolean;
+  routerModelRef: string;
+  routerDefaultMode: "standard" | "instructed";
+  routerAutoBypass: boolean;
+  // Instructed retrieval settings
+  enableInstructed: boolean;
+  instructedModelRef: string;
+  instructedSchemaDescription: string;
+  instructedColumns: ColumnInfoEntry[];
+  instructedConstraints: string;  // Newline-separated
+  instructedMaxSubqueries: string;
+  instructedRrfK: string;
+  instructedExamples: ExampleEntry[];
+  instructedNormalizeFilterCase: "" | "uppercase" | "lowercase";
+  // Verifier settings
+  enableVerifier: boolean;
+  verifierModelRef: string;
+  verifierOnFailure: "warn" | "retry" | "warn_and_retry";
+  verifierMaxRetries: string;
+  // Rerank settings
   enableRerank: boolean;
+  rerankMode: 'default' | 'custom';  // 'default' = rerank: true, 'custom' = full config
   rerankModel: string;
   rerankTopN: string;
   rerankCacheDir: string;
   rerankColumns: string;
+  // Instruction-aware reranking
+  enableInstructionAwareRerank: boolean;
+  instructionAwareModelRef: string;
+  instructionAwareInstructions: string;
+  instructionAwareTopN: string;
+}
+
+function generateColumnInfoId(): string {
+  return `col_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+}
+
+function generateExampleId(): string {
+  return `ex_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
 }
 
 export default function RetrieversSection() {
   const { config, addRetriever, updateRetriever, removeRetriever } = useConfigStore();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingKey, setEditingKey] = useState<string | null>(null);
+  // Collapsible section states
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showRouterSection, setShowRouterSection] = useState(false);
+  const [showInstructedSection, setShowInstructedSection] = useState(false);
+  const [showVerifierSection, setShowVerifierSection] = useState(false);
   const [formData, setFormData] = useState<FormData>({
     refName: '',
     vectorStoreRef: '',
@@ -82,15 +139,43 @@ export default function RetrieversSection() {
     numResults: '10',
     queryType: 'ANN',
     filters: [],
+    // Router
+    enableRouter: false,
+    routerModelRef: '',
+    routerDefaultMode: 'standard',
+    routerAutoBypass: true,
+    // Instructed
+    enableInstructed: false,
+    instructedModelRef: '',
+    instructedSchemaDescription: '',
+    instructedColumns: [],
+    instructedConstraints: '',
+    instructedMaxSubqueries: '3',
+    instructedRrfK: '60',
+    instructedExamples: [],
+    instructedNormalizeFilterCase: '',
+    // Verifier
+    enableVerifier: false,
+    verifierModelRef: '',
+    verifierOnFailure: 'warn',
+    verifierMaxRetries: '1',
+    // Rerank
     enableRerank: false,
+    rerankMode: 'default',
     rerankModel: 'ms-marco-MiniLM-L-12-v2',
     rerankTopN: '',
     rerankCacheDir: '~/.dao_ai/cache/flashrank',
     rerankColumns: '',
+    // Instruction-aware rerank
+    enableInstructionAwareRerank: false,
+    instructionAwareModelRef: '',
+    instructionAwareInstructions: '',
+    instructionAwareTopN: '',
   });
 
   const retrievers = config.retrievers || {};
   const vectorStores = config.resources?.vector_stores || {};
+  const llms = config.resources?.llms || {};
   
   const hasVectorStores = Object.keys(vectorStores).length > 0;
 
@@ -98,6 +183,12 @@ export default function RetrieversSection() {
   const vectorStoreOptions = Object.entries(vectorStores).map(([key, vs]) => ({
     value: key,
     label: `${key} (${vs.embedding_source_column || 'no column'})`,
+  }));
+
+  // Get LLM options for model selection
+  const llmOptions = Object.entries(llms).map(([key, llm]) => ({
+    value: key,
+    label: `${key} (${llm.name})`,
   }));
 
   const resetForm = () => {
@@ -108,16 +199,81 @@ export default function RetrieversSection() {
       numResults: '10',
       queryType: 'ANN',
       filters: [],
+      // Router
+      enableRouter: false,
+      routerModelRef: '',
+      routerDefaultMode: 'standard',
+      routerAutoBypass: true,
+      // Instructed
+      enableInstructed: false,
+      instructedModelRef: '',
+      instructedSchemaDescription: '',
+      instructedColumns: [],
+      instructedConstraints: '',
+      instructedMaxSubqueries: '3',
+      instructedRrfK: '60',
+      instructedExamples: [],
+      instructedNormalizeFilterCase: '',
+      // Verifier
+      enableVerifier: false,
+      verifierModelRef: '',
+      verifierOnFailure: 'warn',
+      verifierMaxRetries: '1',
+      // Rerank
       enableRerank: false,
+      rerankMode: 'default',
       rerankModel: 'ms-marco-MiniLM-L-12-v2',
       rerankTopN: '',
       rerankCacheDir: '~/.dao_ai/cache/flashrank',
       rerankColumns: '',
+      // Instruction-aware rerank
+      enableInstructionAwareRerank: false,
+      instructionAwareModelRef: '',
+      instructionAwareInstructions: '',
+      instructionAwareTopN: '',
     });
     setEditingKey(null);
+    // Reset section visibility
+    setShowAdvanced(false);
+    setShowRouterSection(false);
+    setShowInstructedSection(false);
+    setShowVerifierSection(false);
   };
 
   const { scrollToAsset } = useYamlScrollStore();
+
+  // Helper to find LLM key by matching the model properties
+  const findLLMKeyByModel = (model: any): string => {
+    if (!model) return '';
+    
+    // If it's already a string reference, return it
+    if (typeof model === 'string') {
+      // Check if it's a YAML reference like "*fast_llm"
+      if (model.startsWith('*')) return model.slice(1);
+      return model;
+    }
+    
+    // It's an expanded LLMModel object - find matching key in configured LLMs
+    const modelName = model.name;
+    if (!modelName) return '';
+    
+    // Search through configured LLMs to find matching key
+    for (const [llmKey, llm] of Object.entries(llms)) {
+      if (llm.name === modelName) {
+        // Found a match - verify other properties match too for disambiguation
+        const tempMatch = model.temperature === undefined || llm.temperature === undefined || 
+                          model.temperature === llm.temperature;
+        const tokensMatch = model.max_tokens === undefined || llm.max_tokens === undefined || 
+                            model.max_tokens === llm.max_tokens;
+        if (tempMatch && tokensMatch) {
+          return llmKey;
+        }
+      }
+    }
+    
+    // No match found in configured LLMs
+    return '';
+  };
 
   const handleEdit = (key: string) => {
     scrollToAsset(key);
@@ -137,20 +293,96 @@ export default function RetrieversSection() {
       }
     }
     
+    // Handle router settings
+    let enableRouter = false;
+    let routerModelRef = '';
+    let routerDefaultMode: "standard" | "instructed" = 'standard';
+    let routerAutoBypass = true;
+    
+    if (retriever.router) {
+      enableRouter = true;
+      routerModelRef = findLLMKeyByModel(retriever.router.model);
+      routerDefaultMode = retriever.router.default_mode || 'standard';
+      routerAutoBypass = retriever.router.auto_bypass !== false;
+    }
+    
+    // Handle instructed retrieval settings
+    let enableInstructed = false;
+    let instructedModelRef = '';
+    let instructedSchemaDescription = '';
+    let instructedColumns: ColumnInfoEntry[] = [];
+    let instructedConstraints = '';
+    let instructedMaxSubqueries = '3';
+    let instructedRrfK = '60';
+    let instructedExamples: ExampleEntry[] = [];
+    let instructedNormalizeFilterCase: "" | "uppercase" | "lowercase" = '';
+    
+    if (retriever.instructed) {
+      enableInstructed = true;
+      instructedModelRef = findLLMKeyByModel(retriever.instructed.decomposition_model);
+      instructedSchemaDescription = retriever.instructed.schema_description || '';
+      instructedColumns = (retriever.instructed.columns || []).map(col => ({
+        id: generateColumnInfoId(),
+        name: col.name,
+        type: col.type || 'string',
+        operators: col.operators?.join(', ') || '',
+      }));
+      instructedConstraints = (retriever.instructed.constraints || []).join('\n');
+      instructedMaxSubqueries = retriever.instructed.max_subqueries?.toString() || '3';
+      instructedRrfK = retriever.instructed.rrf_k?.toString() || '60';
+      instructedExamples = (retriever.instructed.examples || []).map(ex => ({
+        id: generateExampleId(),
+        query: ex.query,
+        filters: JSON.stringify(ex.filters || {}),
+      }));
+      instructedNormalizeFilterCase = retriever.instructed.normalize_filter_case || '';
+    }
+    
+    // Handle verifier settings
+    let enableVerifier = false;
+    let verifierModelRef = '';
+    let verifierOnFailure: "warn" | "retry" | "warn_and_retry" = 'warn';
+    let verifierMaxRetries = '1';
+    
+    if (retriever.verifier) {
+      enableVerifier = true;
+      verifierModelRef = findLLMKeyByModel(retriever.verifier.model);
+      verifierOnFailure = retriever.verifier.on_failure || 'warn';
+      verifierMaxRetries = retriever.verifier.max_retries?.toString() || '1';
+    }
+    
     // Handle rerank settings
     let enableRerank = false;
+    let rerankMode: 'default' | 'custom' = 'default';
     let rerankModel = 'ms-marco-MiniLM-L-12-v2';
     let rerankTopN = '';
     let rerankCacheDir = '~/.dao_ai/cache/flashrank';
     let rerankColumns = '';
+    let enableInstructionAwareRerank = false;
+    let instructionAwareModelRef = '';
+    let instructionAwareInstructions = '';
+    let instructionAwareTopN = '';
     
     if (retriever.rerank) {
       enableRerank = true;
-      if (typeof retriever.rerank === 'object') {
-        rerankModel = retriever.rerank.model || rerankModel;
+      if (typeof retriever.rerank === 'boolean') {
+        // rerank: true - use defaults
+        rerankMode = 'default';
+      } else {
+        // rerank: { ... } - custom configuration
+        rerankMode = 'custom';
+        rerankModel = retriever.rerank.model || '';
         rerankTopN = retriever.rerank.top_n?.toString() || '';
         rerankCacheDir = retriever.rerank.cache_dir || rerankCacheDir;
         rerankColumns = retriever.rerank.columns?.join(', ') || '';
+        
+        // Handle instruction-aware reranking
+        if (retriever.rerank.instruction_aware) {
+          enableInstructionAwareRerank = true;
+          instructionAwareModelRef = findLLMKeyByModel(retriever.rerank.instruction_aware.model);
+          instructionAwareInstructions = retriever.rerank.instruction_aware.instructions || '';
+          instructionAwareTopN = retriever.rerank.instruction_aware.top_n?.toString() || '';
+        }
       }
     }
     
@@ -205,11 +437,38 @@ export default function RetrieversSection() {
       numResults: retriever.search_parameters?.num_results?.toString() || '10',
       queryType: retriever.search_parameters?.query_type || 'ANN',
       filters,
+      // Router
+      enableRouter,
+      routerModelRef,
+      routerDefaultMode,
+      routerAutoBypass,
+      // Instructed
+      enableInstructed,
+      instructedModelRef,
+      instructedSchemaDescription,
+      instructedColumns,
+      instructedConstraints,
+      instructedMaxSubqueries,
+      instructedRrfK,
+      instructedExamples,
+      instructedNormalizeFilterCase,
+      // Verifier
+      enableVerifier,
+      verifierModelRef,
+      verifierOnFailure,
+      verifierMaxRetries,
+      // Rerank
       enableRerank,
+      rerankMode,
       rerankModel,
       rerankTopN,
       rerankCacheDir,
       rerankColumns,
+      // Instruction-aware rerank
+      enableInstructionAwareRerank,
+      instructionAwareModelRef,
+      instructionAwareInstructions,
+      instructionAwareTopN,
     });
     setEditingKey(key);
     setIsModalOpen(true);
@@ -256,27 +515,109 @@ export default function RetrieversSection() {
       query_type: formData.queryType,
     };
 
-    // Build rerank config
-    let rerank: RerankParametersModel | boolean | undefined;
-    if (formData.enableRerank) {
-      const rerankColumns = formData.rerankColumns
-        .split(',')
+    // Build router config
+    let router: RouterModel | undefined;
+    if (formData.enableRouter) {
+      router = {
+        model: formData.routerModelRef || undefined,
+        default_mode: formData.routerDefaultMode,
+        auto_bypass: formData.routerAutoBypass,
+      };
+    }
+
+    // Build instructed config
+    let instructed: InstructedRetrieverModel | undefined;
+    if (formData.enableInstructed && formData.instructedSchemaDescription) {
+      const instructedColumnsArr: ColumnInfo[] = formData.instructedColumns
+        .filter(col => col.name.trim())
+        .map(col => ({
+          name: col.name.trim(),
+          type: col.type,
+          operators: col.operators
+            ? col.operators.split(',').map(o => o.trim()).filter(o => o)
+            : undefined,
+        }));
+      
+      const constraintsArr = formData.instructedConstraints
+        .split('\n')
         .map(c => c.trim())
         .filter(c => c.length > 0);
       
-      rerank = {
-        model: formData.rerankModel,
-        top_n: formData.rerankTopN ? parseInt(formData.rerankTopN) : undefined,
-        cache_dir: formData.rerankCacheDir || undefined,
-        columns: rerankColumns.length > 0 ? rerankColumns : undefined,
+      const examplesArr = formData.instructedExamples
+        .filter(ex => ex.query.trim())
+        .map(ex => {
+          let filters = {};
+          try {
+            filters = JSON.parse(ex.filters || '{}');
+          } catch {
+            filters = {};
+          }
+          return { query: ex.query.trim(), filters };
+        });
+      
+      instructed = {
+        decomposition_model: formData.instructedModelRef || undefined,
+        schema_description: formData.instructedSchemaDescription,
+        columns: instructedColumnsArr.length > 0 ? instructedColumnsArr : undefined,
+        constraints: constraintsArr.length > 0 ? constraintsArr : undefined,
+        max_subqueries: parseInt(formData.instructedMaxSubqueries) || 3,
+        rrf_k: parseInt(formData.instructedRrfK) || 60,
+        examples: examplesArr.length > 0 ? examplesArr : undefined,
+        normalize_filter_case: formData.instructedNormalizeFilterCase || undefined,
       };
+    }
+
+    // Build verifier config
+    let verifier: VerifierModel | undefined;
+    if (formData.enableVerifier) {
+      verifier = {
+        model: formData.verifierModelRef || undefined,
+        on_failure: formData.verifierOnFailure,
+        max_retries: parseInt(formData.verifierMaxRetries) || 1,
+      };
+    }
+
+    // Build rerank config
+    let rerank: RerankParametersModel | boolean | undefined;
+    if (formData.enableRerank) {
+      if (formData.rerankMode === 'default') {
+        // Simple mode: just enable with defaults
+        rerank = true;
+      } else {
+        // Custom mode: full configuration
+        const rerankColumns = formData.rerankColumns
+          .split(',')
+          .map(c => c.trim())
+          .filter(c => c.length > 0);
+        
+        // Build instruction-aware rerank config
+        let instruction_aware: InstructionAwareRerankModel | undefined;
+        if (formData.enableInstructionAwareRerank) {
+          instruction_aware = {
+            model: formData.instructionAwareModelRef || undefined,
+            instructions: formData.instructionAwareInstructions || undefined,
+            top_n: formData.instructionAwareTopN ? parseInt(formData.instructionAwareTopN) : undefined,
+          };
+        }
+        
+        rerank = {
+          model: formData.rerankModel || undefined,
+          top_n: formData.rerankTopN ? parseInt(formData.rerankTopN) : undefined,
+          cache_dir: formData.rerankCacheDir || undefined,
+          columns: rerankColumns.length > 0 ? rerankColumns : undefined,
+          instruction_aware,
+        };
+      }
     }
 
     const retriever: RetrieverModel = {
       vector_store: vectorStore,
       columns: columns.length > 0 ? columns : undefined,
       search_parameters: searchParameters,
+      router,
       rerank,
+      instructed,
+      verifier,
     };
 
     if (editingKey && editingKey !== formData.refName) {
@@ -797,6 +1138,406 @@ export default function RetrieversSection() {
             </p>
           </div>
 
+          {/* Advanced Retrieval Options */}
+          <div className="space-y-4">
+            <button
+              type="button"
+              onClick={() => setShowAdvanced(!showAdvanced)}
+              className="flex items-center gap-2 text-sm font-medium text-slate-300 border-b border-slate-700 pb-2 w-full hover:text-slate-100 transition-colors"
+            >
+              {showAdvanced ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+              <Zap className="w-4 h-4 text-amber-400" />
+              Advanced Retrieval Options
+              {(formData.enableRouter || formData.enableInstructed || formData.enableVerifier) && (
+                <Badge variant="info" className="ml-2">
+                  {[formData.enableRouter && 'Router', formData.enableInstructed && 'Instructed', formData.enableVerifier && 'Verifier'].filter(Boolean).join(', ')}
+                </Badge>
+              )}
+            </button>
+
+            {showAdvanced && (
+              <div className="space-y-4 pl-4 border-l-2 border-amber-500/30">
+                {/* Router Section */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={() => setShowRouterSection(!showRouterSection)}
+                      className="flex items-center gap-2 text-sm font-medium text-slate-300 hover:text-slate-100"
+                    >
+                      {showRouterSection ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                      <Route className="w-4 h-4 text-blue-400" />
+                      Query Router
+                    </button>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        name="enableRouter"
+                        checked={formData.enableRouter}
+                        onChange={handleChange}
+                        className="rounded border-slate-600 bg-slate-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-slate-800"
+                      />
+                      <span className="text-slate-400">Enable</span>
+                    </label>
+                  </div>
+
+                  {showRouterSection && formData.enableRouter && (
+                    <div className="space-y-3 p-3 bg-slate-800/30 rounded-lg border border-slate-700/50">
+                      <p className="text-xs text-slate-500 mb-3">
+                        Routes queries to standard or instructed execution mode based on query characteristics.
+                      </p>
+                      <div className="grid grid-cols-2 gap-3">
+                        <Select
+                          label="Router Model"
+                          value={formData.routerModelRef}
+                          onChange={(e) => setFormData(prev => ({ ...prev, routerModelRef: e.target.value }))}
+                          options={[
+                            { value: '', label: 'Select LLM...' },
+                            ...llmOptions,
+                          ]}
+                          hint="Fast model recommended"
+                        />
+                        <Select
+                          label="Default Mode"
+                          value={formData.routerDefaultMode}
+                          onChange={(e) => setFormData(prev => ({ ...prev, routerDefaultMode: e.target.value as "standard" | "instructed" }))}
+                          options={[
+                            { value: 'standard', label: 'Standard' },
+                            { value: 'instructed', label: 'Instructed' },
+                          ]}
+                          hint="Fallback if routing fails"
+                        />
+                      </div>
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          name="routerAutoBypass"
+                          checked={formData.routerAutoBypass}
+                          onChange={handleChange}
+                          className="rounded border-slate-600 bg-slate-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-slate-800"
+                        />
+                        <span className="text-slate-400">Auto-bypass instruction reranker and verifier for standard mode</span>
+                      </label>
+                    </div>
+                  )}
+                </div>
+
+                {/* Instructed Retrieval Section */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={() => setShowInstructedSection(!showInstructedSection)}
+                      className="flex items-center gap-2 text-sm font-medium text-slate-300 hover:text-slate-100"
+                    >
+                      {showInstructedSection ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                      <Zap className="w-4 h-4 text-amber-400" />
+                      Instructed Retrieval
+                    </button>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        name="enableInstructed"
+                        checked={formData.enableInstructed}
+                        onChange={handleChange}
+                        className="rounded border-slate-600 bg-slate-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-slate-800"
+                      />
+                      <span className="text-slate-400">Enable</span>
+                    </label>
+                  </div>
+
+                  {showInstructedSection && formData.enableInstructed && (
+                    <div className="space-y-4 p-3 bg-slate-800/30 rounded-lg border border-slate-700/50">
+                      <p className="text-xs text-slate-500">
+                        Decomposes user queries into multiple subqueries with metadata filters and merges results using RRF.
+                      </p>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <Select
+                          label="Decomposition Model"
+                          value={formData.instructedModelRef}
+                          onChange={(e) => setFormData(prev => ({ ...prev, instructedModelRef: e.target.value }))}
+                          options={[
+                            { value: '', label: 'Select LLM...' },
+                            ...llmOptions,
+                          ]}
+                          hint="Fast model recommended"
+                        />
+                        <Select
+                          label="Normalize Filter Case"
+                          value={formData.instructedNormalizeFilterCase}
+                          onChange={(e) => setFormData(prev => ({ ...prev, instructedNormalizeFilterCase: e.target.value as "" | "uppercase" | "lowercase" }))}
+                          options={[
+                            { value: '', label: 'No normalization' },
+                            { value: 'uppercase', label: 'Uppercase' },
+                            { value: 'lowercase', label: 'Lowercase' },
+                          ]}
+                          hint="Auto-normalize filter values"
+                        />
+                      </div>
+
+                      <Textarea
+                        label="Schema Description"
+                        name="instructedSchemaDescription"
+                        value={formData.instructedSchemaDescription}
+                        onChange={handleChange}
+                        placeholder="Products table: product_id, brand_name, category, price&#10;Filter operators: {&quot;col&quot;: val}, {&quot;col >&quot;: val}, {&quot;col NOT&quot;: val}"
+                        rows={4}
+                        hint="Column names, types, and valid filter syntax for the LLM (required)"
+                        required
+                      />
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <Input
+                          label="Max Subqueries"
+                          name="instructedMaxSubqueries"
+                          type="number"
+                          value={formData.instructedMaxSubqueries}
+                          onChange={handleChange}
+                          placeholder="3"
+                          hint="Maximum parallel subqueries"
+                        />
+                        <Input
+                          label="RRF K Constant"
+                          name="instructedRrfK"
+                          type="number"
+                          value={formData.instructedRrfK}
+                          onChange={handleChange}
+                          placeholder="60"
+                          hint="Lower values weight top ranks more"
+                        />
+                      </div>
+
+                      <Textarea
+                        label="Default Constraints"
+                        name="instructedConstraints"
+                        value={formData.instructedConstraints}
+                        onChange={handleChange}
+                        placeholder="Prefer recent products&#10;Prioritize exact brand matches"
+                        rows={3}
+                        hint="One constraint per line"
+                      />
+
+                      {/* Column Info Editor */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <label className="text-sm font-medium text-slate-300">Schema Columns (Optional)</label>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setFormData(prev => ({
+                              ...prev,
+                              instructedColumns: [...prev.instructedColumns, {
+                                id: generateColumnInfoId(),
+                                name: '',
+                                type: 'string',
+                                operators: '',
+                              }],
+                            }))}
+                          >
+                            <Plus className="w-3 h-3 mr-1" />
+                            Add Column
+                          </Button>
+                        </div>
+                        {formData.instructedColumns.length > 0 && (
+                          <div className="space-y-2">
+                            {formData.instructedColumns.map((col, idx) => (
+                              <div key={col.id} className="flex items-center gap-2 p-2 bg-slate-900/50 rounded border border-slate-700/50">
+                                <input
+                                  type="text"
+                                  value={col.name}
+                                  onChange={(e) => {
+                                    const updated = [...formData.instructedColumns];
+                                    updated[idx] = { ...col, name: e.target.value };
+                                    setFormData(prev => ({ ...prev, instructedColumns: updated }));
+                                  }}
+                                  placeholder="Column name"
+                                  className="flex-1 px-2 py-1 bg-slate-800 border border-slate-700 rounded text-sm text-slate-100 placeholder-slate-500"
+                                />
+                                <select
+                                  value={col.type}
+                                  onChange={(e) => {
+                                    const updated = [...formData.instructedColumns];
+                                    updated[idx] = { ...col, type: e.target.value as any };
+                                    setFormData(prev => ({ ...prev, instructedColumns: updated }));
+                                  }}
+                                  className="px-2 py-1 bg-slate-800 border border-slate-700 rounded text-sm text-slate-100"
+                                >
+                                  <option value="string">string</option>
+                                  <option value="number">number</option>
+                                  <option value="boolean">boolean</option>
+                                  <option value="datetime">datetime</option>
+                                </select>
+                                <input
+                                  type="text"
+                                  value={col.operators}
+                                  onChange={(e) => {
+                                    const updated = [...formData.instructedColumns];
+                                    updated[idx] = { ...col, operators: e.target.value };
+                                    setFormData(prev => ({ ...prev, instructedColumns: updated }));
+                                  }}
+                                  placeholder="Operators (comma-sep)"
+                                  className="w-32 px-2 py-1 bg-slate-800 border border-slate-700 rounded text-sm text-slate-100 placeholder-slate-500"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => setFormData(prev => ({
+                                    ...prev,
+                                    instructedColumns: prev.instructedColumns.filter(c => c.id !== col.id),
+                                  }))}
+                                  className="p-1 text-slate-400 hover:text-red-400"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <p className="text-xs text-slate-500">
+                          Structured column info improves LLM filter accuracy. Operators: empty for equality, NOT, &lt;, &lt;=, &gt;, &gt;=, LIKE
+                        </p>
+                      </div>
+
+                      {/* Examples Editor */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <label className="text-sm font-medium text-slate-300">Few-Shot Examples (Optional)</label>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setFormData(prev => ({
+                              ...prev,
+                              instructedExamples: [...prev.instructedExamples, {
+                                id: generateExampleId(),
+                                query: '',
+                                filters: '{}',
+                              }],
+                            }))}
+                          >
+                            <Plus className="w-3 h-3 mr-1" />
+                            Add Example
+                          </Button>
+                        </div>
+                        {formData.instructedExamples.length > 0 && (
+                          <div className="space-y-2">
+                            {formData.instructedExamples.map((ex, idx) => (
+                              <div key={ex.id} className="flex items-start gap-2 p-2 bg-slate-900/50 rounded border border-slate-700/50">
+                                <div className="flex-1 space-y-2">
+                                  <input
+                                    type="text"
+                                    value={ex.query}
+                                    onChange={(e) => {
+                                      const updated = [...formData.instructedExamples];
+                                      updated[idx] = { ...ex, query: e.target.value };
+                                      setFormData(prev => ({ ...prev, instructedExamples: updated }));
+                                    }}
+                                    placeholder="Query: e.g., cheap drills"
+                                    className="w-full px-2 py-1 bg-slate-800 border border-slate-700 rounded text-sm text-slate-100 placeholder-slate-500"
+                                  />
+                                  <input
+                                    type="text"
+                                    value={ex.filters}
+                                    onChange={(e) => {
+                                      const updated = [...formData.instructedExamples];
+                                      updated[idx] = { ...ex, filters: e.target.value };
+                                      setFormData(prev => ({ ...prev, instructedExamples: updated }));
+                                    }}
+                                    placeholder='Filters JSON: e.g., {"price <": 100}'
+                                    className="w-full px-2 py-1 bg-slate-800 border border-slate-700 rounded text-sm text-slate-100 placeholder-slate-500 font-mono text-xs"
+                                  />
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => setFormData(prev => ({
+                                    ...prev,
+                                    instructedExamples: prev.instructedExamples.filter(e => e.id !== ex.id),
+                                  }))}
+                                  className="p-1 text-slate-400 hover:text-red-400"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <p className="text-xs text-slate-500">
+                          Domain-specific examples for better filter translation
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Verifier Section */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={() => setShowVerifierSection(!showVerifierSection)}
+                      className="flex items-center gap-2 text-sm font-medium text-slate-300 hover:text-slate-100"
+                    >
+                      {showVerifierSection ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                      <CheckCircle className="w-4 h-4 text-green-400" />
+                      Result Verifier
+                    </button>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        name="enableVerifier"
+                        checked={formData.enableVerifier}
+                        onChange={handleChange}
+                        className="rounded border-slate-600 bg-slate-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-slate-800"
+                      />
+                      <span className="text-slate-400">Enable</span>
+                    </label>
+                  </div>
+
+                  {showVerifierSection && formData.enableVerifier && (
+                    <div className="space-y-3 p-3 bg-slate-800/30 rounded-lg border border-slate-700/50">
+                      <p className="text-xs text-slate-500 mb-3">
+                        Validates search results against user constraints with structured feedback for retry.
+                      </p>
+                      <div className="grid grid-cols-3 gap-3">
+                        <Select
+                          label="Verifier Model"
+                          value={formData.verifierModelRef}
+                          onChange={(e) => setFormData(prev => ({ ...prev, verifierModelRef: e.target.value }))}
+                          options={[
+                            { value: '', label: 'Select LLM...' },
+                            ...llmOptions,
+                          ]}
+                          hint="Fast model recommended"
+                        />
+                        <Select
+                          label="On Failure"
+                          value={formData.verifierOnFailure}
+                          onChange={(e) => setFormData(prev => ({ ...prev, verifierOnFailure: e.target.value as "warn" | "retry" | "warn_and_retry" }))}
+                          options={[
+                            { value: 'warn', label: 'Warn' },
+                            { value: 'retry', label: 'Retry' },
+                            { value: 'warn_and_retry', label: 'Warn & Retry' },
+                          ]}
+                          hint="Behavior when verification fails"
+                        />
+                        <Input
+                          label="Max Retries"
+                          name="verifierMaxRetries"
+                          type="number"
+                          value={formData.verifierMaxRetries}
+                          onChange={handleChange}
+                          placeholder="1"
+                          hint="Retry attempts before warning"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Reranking */}
           <div className="space-y-4">
             <div className="flex items-center justify-between border-b border-slate-700 pb-2">
@@ -817,13 +1558,50 @@ export default function RetrieversSection() {
             
             {formData.enableRerank && (
               <div className="space-y-4 pl-4 border-l-2 border-slate-700">
+                {/* Mode selector */}
+                <div className="flex gap-4 mb-4">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="rerankMode"
+                      value="default"
+                      checked={formData.rerankMode === 'default'}
+                      onChange={() => setFormData(prev => ({ ...prev, rerankMode: 'default' }))}
+                      className="text-blue-500 focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-slate-300">Use defaults</span>
+                    <span className="text-xs text-slate-500">(rerank: true)</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="rerankMode"
+                      value="custom"
+                      checked={formData.rerankMode === 'custom'}
+                      onChange={() => setFormData(prev => ({ ...prev, rerankMode: 'custom' }))}
+                      className="text-blue-500 focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-slate-300">Custom configuration</span>
+                  </label>
+                </div>
+
+                {formData.rerankMode === 'default' ? (
+                  <div className="p-3 bg-slate-800/30 rounded-lg border border-slate-700/50 text-sm text-slate-400">
+                    Uses FlashRank with default settings (ms-marco-MiniLM-L-12-v2 model).
+                    Switch to custom configuration for advanced options.
+                  </div>
+                ) : (
+                  <>
+                <p className="text-xs text-slate-500 mb-3">
+                  Choose between FlashRank (local cross-encoder) and/or Databricks server-side column reranking.
+                </p>
                 <div className="grid grid-cols-2 gap-4">
                   <Select
-                    label="Rerank Model"
+                    label="FlashRank Model (Local)"
                     value={formData.rerankModel}
                     onChange={(e) => setFormData(prev => ({ ...prev, rerankModel: e.target.value }))}
                     options={RERANK_MODELS}
-                    hint="FlashRank model for reranking"
+                    hint="Cross-encoder model for semantic reranking"
                   />
                   
                   <Input
@@ -837,11 +1615,14 @@ export default function RetrieversSection() {
                   />
                 </div>
                 
-                {/* Rerank Columns - populated from selected vector store */}
+                {/* Rerank Columns - Databricks server-side reranking */}
                 <div className="space-y-2">
                   <label className="block text-sm font-medium text-slate-300">
-                    Columns to Rerank
+                    Databricks Columns (Server-side Reranking)
                   </label>
+                  <p className="text-xs text-slate-500 mb-2">
+                    Select columns for Databricks server-side reranking. Can be used with or without FlashRank.
+                  </p>
                   {availableColumns.length > 0 ? (
                     <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto p-3 bg-slate-900/50 rounded-lg border border-slate-600">
                       {availableColumns.map((col) => {
@@ -878,10 +1659,11 @@ export default function RetrieversSection() {
                         : "Select a vector store to see available columns"}
                     </div>
                   )}
-                  <p className="text-xs text-slate-500">
-                    Select columns from the vector store to use for reranking. 
-                    {formData.rerankColumns && ` Selected: ${formData.rerankColumns}`}
-                  </p>
+                  {formData.rerankColumns && (
+                    <p className="text-xs text-slate-400">
+                      Selected: {formData.rerankColumns}
+                    </p>
+                  )}
                 </div>
                 
                 <Input
@@ -892,6 +1674,66 @@ export default function RetrieversSection() {
                   placeholder="~/.dao_ai/cache/flashrank"
                   hint="Directory to cache downloaded model weights"
                 />
+
+                {/* Instruction-Aware Reranking */}
+                <div className="mt-4 pt-4 border-t border-slate-700/50 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-medium text-slate-300 flex items-center gap-2">
+                      <Zap className="w-4 h-4 text-amber-400" />
+                      Instruction-Aware Reranking
+                    </h4>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        name="enableInstructionAwareRerank"
+                        checked={formData.enableInstructionAwareRerank}
+                        onChange={handleChange}
+                        className="rounded border-slate-600 bg-slate-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-slate-800"
+                      />
+                      <span className="text-slate-400">Enable</span>
+                    </label>
+                  </div>
+
+                  {formData.enableInstructionAwareRerank && (
+                    <div className="space-y-3 p-3 bg-slate-800/30 rounded-lg border border-slate-700/50">
+                      <p className="text-xs text-slate-500">
+                        LLM-based reranking that considers user instructions and constraints. Runs after FlashRank.
+                      </p>
+                      <div className="grid grid-cols-2 gap-3">
+                        <Select
+                          label="Reranking Model"
+                          value={formData.instructionAwareModelRef}
+                          onChange={(e) => setFormData(prev => ({ ...prev, instructionAwareModelRef: e.target.value }))}
+                          options={[
+                            { value: '', label: 'Select LLM...' },
+                            ...llmOptions,
+                          ]}
+                          hint="Fast model recommended"
+                        />
+                        <Input
+                          label="Top N Results"
+                          name="instructionAwareTopN"
+                          type="number"
+                          value={formData.instructionAwareTopN}
+                          onChange={handleChange}
+                          placeholder="10"
+                          hint="Number of results after instruction reranking"
+                        />
+                      </div>
+                      <Textarea
+                        label="Reranking Instructions"
+                        name="instructionAwareInstructions"
+                        value={formData.instructionAwareInstructions}
+                        onChange={handleChange}
+                        placeholder="Prioritize results matching price and brand constraints."
+                        rows={3}
+                        hint="Custom instructions for constraint prioritization"
+                      />
+                    </div>
+                  )}
+                </div>
+                  </>
+                )}
               </div>
             )}
           </div>

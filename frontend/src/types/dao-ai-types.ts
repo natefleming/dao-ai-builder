@@ -186,7 +186,7 @@ export type DatabaseType = "postgres" | "lakebase";
 
 export interface DatabaseModel {
   on_behalf_of_user?: boolean;
-  name: string;
+  name?: string;  // Optional - auto-populated from instance_name for Lakebase
   // NOTE: type field is for UI only, not included in YAML output (inferred from instance_name vs host)
   _uiType?: DatabaseType;
   instance_name?: string;  // Lakebase instance name
@@ -235,7 +235,49 @@ export interface RetrieverModel {
   vector_store: VectorStoreModel;
   columns?: string[];
   search_parameters?: SearchParametersModel;
+  router?: RouterModel;
   rerank?: RerankParametersModel | boolean;
+  instructed?: InstructedRetrieverModel;
+  verifier?: VerifierModel;
+}
+
+// Router for selecting standard vs instructed execution mode
+export interface RouterModel {
+  model?: LLMModel | string;  // Reference to LLM resource
+  default_mode?: "standard" | "instructed";
+  auto_bypass?: boolean;  // Skip Instruction Reranker and Verifier for standard mode
+}
+
+// Instructed retrieval with query decomposition and RRF merging
+export interface InstructedRetrieverModel {
+  decomposition_model?: LLMModel | string;  // Reference to LLM resource
+  schema_description: string;  // Required - column names, types, and filter syntax
+  columns?: ColumnInfo[];
+  constraints?: string[];
+  max_subqueries?: number;  // Default: 3
+  rrf_k?: number;  // Default: 60
+  examples?: InstructedRetrieverExample[];
+  normalize_filter_case?: "uppercase" | "lowercase";
+}
+
+// Column metadata for dynamic schema generation in instructed retrieval
+export interface ColumnInfo {
+  name: string;
+  type?: "string" | "number" | "boolean" | "datetime";
+  operators?: string[];  // Default: ["", "NOT", "<", "<=", ">", ">=", "LIKE", "NOT LIKE"]
+}
+
+// Few-shot example for instructed retrieval
+export interface InstructedRetrieverExample {
+  query: string;
+  filters: Record<string, any>;
+}
+
+// Verifier for result validation with retry support
+export interface VerifierModel {
+  model?: LLMModel | string;  // Reference to LLM resource
+  on_failure?: "warn" | "retry" | "warn_and_retry";
+  max_retries?: number;  // Default: 1
 }
 
 export interface SearchParametersModel {
@@ -245,10 +287,18 @@ export interface SearchParametersModel {
 }
 
 export interface RerankParametersModel {
-  model?: string;
+  model?: string;  // FlashRank model name (optional - use columns for Databricks reranking)
   top_n?: number;
   cache_dir?: string;
   columns?: string[];
+  instruction_aware?: InstructionAwareRerankModel;
+}
+
+// LLM-based instruction-aware reranking (runs after FlashRank)
+export interface InstructionAwareRerankModel {
+  model?: LLMModel | string;  // Reference to LLM resource
+  instructions?: string;  // Custom reranking instructions
+  top_n?: number;
 }
 
 export type ToolFunctionType = "python" | "factory" | "unity_catalog" | "mcp";

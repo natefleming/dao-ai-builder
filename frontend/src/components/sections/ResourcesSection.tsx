@@ -3560,7 +3560,7 @@ function DatabasesPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
       
       setFormData({
         refName: key,
-        name: db.name,
+        name: db.name || db.instance_name || '',  // name is optional, falls back to instance_name for Lakebase
         // Infer type from instance_name (Lakebase) or host (PostgreSQL)
         type: db._uiType || (db.instance_name ? 'lakebase' : 'postgres'),
         instanceSource: 'existing',
