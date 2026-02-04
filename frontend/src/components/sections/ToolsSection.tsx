@@ -1,5 +1,5 @@
 import { useState, ChangeEvent } from 'react';
-import { Plus, Trash2, Wrench, RefreshCw, Database, MessageSquare, Search, Clock, Bot, Link2, UserCheck, ChevronDown, ChevronUp, Pencil, Mail, Table2, Timer, Calculator } from 'lucide-react';
+import { Plus, Trash2, Wrench, RefreshCw, Database, MessageSquare, Search, Clock, Bot, Link2, UserCheck, ChevronDown, ChevronUp, Pencil, Mail, Table2, Timer, Calculator, Code } from 'lucide-react';
 import { useConfigStore } from '@/stores/configStore';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
@@ -230,6 +230,7 @@ function ResourceSelector({
 const TOOL_TYPES = [
   { value: 'factory', label: 'Factory Function' },
   { value: 'python', label: 'Python Function' },
+  { value: 'inline', label: 'Inline Function' },
   { value: 'unity_catalog', label: 'Unity Catalog Function' },
   { value: 'mcp', label: 'MCP Server' },
 ];
@@ -565,10 +566,12 @@ export default function ToolsSection() {
   const [formData, setFormData] = useState({
     refName: '', // YAML key (reference name) - independent of tool name
     name: '',    // Tool's internal name
-    type: 'factory' as 'factory' | 'python' | 'unity_catalog' | 'mcp',
+    type: 'factory' as 'factory' | 'python' | 'unity_catalog' | 'mcp' | 'inline',
     functionName: '',
     customFunctionName: '',
     args: '{}',
+    // For inline function type (new in dao-ai 0.1.21)
+    inlineCode: '',
     // For Genie tool - with resource source
     genieSource: 'configured' as ResourceSource, // Default to configured
     genieRefName: '', // Reference to configured genie room
@@ -602,6 +605,24 @@ export default function ToolsSection() {
     genieSemanticCacheWarehouseSource: 'configured' as ResourceSource,
     genieSemanticCacheWarehouseRefName: '',
     genieSemanticCacheWarehouseId: '',
+    // Genie In-Memory Semantic Cache (new in dao-ai 0.1.21 - no database required)
+    genieInMemoryCacheEnabled: false,
+    genieInMemoryCacheTtl: 604800, // 1 week in seconds (default)
+    genieInMemoryCacheTtlNeverExpires: false,
+    genieInMemoryCacheCapacity: 10000, // Default max cache entries
+    genieInMemoryCacheCapacityUnlimited: false,
+    genieInMemoryCacheSimilarityThreshold: 0.85,
+    genieInMemoryCacheContextSimilarityThreshold: 0.80,
+    genieInMemoryCacheQuestionWeight: 0.6,
+    genieInMemoryCacheContextWeight: 0.4,
+    genieInMemoryCacheContextWindowSize: 3,
+    genieInMemoryCacheMaxContextTokens: 2000,
+    genieInMemoryCacheEmbeddingModelSource: 'configured' as ResourceSource,
+    genieInMemoryCacheEmbeddingModelRefName: '',
+    genieInMemoryCacheEmbeddingModelManual: 'databricks-gte-large-en',
+    genieInMemoryCacheWarehouseSource: 'configured' as ResourceSource,
+    genieInMemoryCacheWarehouseRefName: '',
+    genieInMemoryCacheWarehouseId: '',
     // For Warehouse - with resource source
     warehouseSource: 'configured' as ResourceSource, // Default to configured
     warehouseRefName: '', // Reference to configured warehouse
@@ -1074,6 +1095,36 @@ export default function ToolsSection() {
           genieArgs.semantic_cache_parameters = semanticCacheParams;
         }
 
+        // Add in-memory semantic cache parameters if enabled (new in dao-ai 0.1.21)
+        if (formData.genieInMemoryCacheEnabled) {
+          const inMemoryCacheParams: Record<string, unknown> = {
+            time_to_live_seconds: formData.genieInMemoryCacheTtlNeverExpires ? null : formData.genieInMemoryCacheTtl,
+            similarity_threshold: formData.genieInMemoryCacheSimilarityThreshold,
+            context_similarity_threshold: formData.genieInMemoryCacheContextSimilarityThreshold,
+            question_weight: formData.genieInMemoryCacheQuestionWeight,
+            context_weight: formData.genieInMemoryCacheContextWeight,
+            context_window_size: formData.genieInMemoryCacheContextWindowSize,
+            max_context_tokens: formData.genieInMemoryCacheMaxContextTokens,
+            capacity: formData.genieInMemoryCacheCapacityUnlimited ? null : formData.genieInMemoryCacheCapacity,
+          };
+          // Add embedding model - configured LLM reference or manual string
+          if (formData.genieInMemoryCacheEmbeddingModelSource === 'configured' && formData.genieInMemoryCacheEmbeddingModelRefName) {
+            inMemoryCacheParams.embedding_model = `__REF__${formData.genieInMemoryCacheEmbeddingModelRefName}`;
+          } else if (formData.genieInMemoryCacheEmbeddingModelManual) {
+            inMemoryCacheParams.embedding_model = formData.genieInMemoryCacheEmbeddingModelManual;
+          }
+          // Add warehouse reference or inline (required)
+          if (formData.genieInMemoryCacheWarehouseSource === 'configured' && formData.genieInMemoryCacheWarehouseRefName) {
+            inMemoryCacheParams.warehouse = `__REF__${formData.genieInMemoryCacheWarehouseRefName}`;
+          } else if (formData.genieInMemoryCacheWarehouseId) {
+            inMemoryCacheParams.warehouse = {
+              name: 'in_memory_cache_warehouse',
+              warehouse_id: formData.genieInMemoryCacheWarehouseId,
+            };
+          }
+          genieArgs.in_memory_semantic_cache_parameters = inMemoryCacheParams;
+        }
+
         parsedArgs = genieArgs;
       } else if (formData.functionName === 'dao_ai.tools.create_vector_search_tool') {
         // Vector search tool supports either retriever or vector_store (mutually exclusive)
@@ -1219,6 +1270,13 @@ export default function ToolsSection() {
         name: funcName,
         ...(hitlConfig && { human_in_the_loop: hitlConfig }),
       };
+    } else if (formData.type === 'inline') {
+      // Inline function type (new in dao-ai 0.1.21)
+      functionConfig = {
+        type: 'inline',
+        code: formData.inlineCode,
+        ...(hitlConfig && { human_in_the_loop: hitlConfig }),
+      };
     } else if (formData.type === 'unity_catalog') {
       // Build partial_args if any are configured
       let partialArgs: Record<string, string> | undefined;
@@ -1314,6 +1372,8 @@ export default function ToolsSection() {
       functionName: '',
       customFunctionName: '',
       args: '{}',
+      // For inline function type
+      inlineCode: '',
       genieSource: 'configured',
       genieRefName: '',
       genieSpaceId: '',
@@ -1346,6 +1406,24 @@ export default function ToolsSection() {
       genieSemanticCacheWarehouseSource: 'configured',
       genieSemanticCacheWarehouseRefName: '',
       genieSemanticCacheWarehouseId: '',
+      // Genie In-Memory Semantic Cache
+      genieInMemoryCacheEnabled: false,
+      genieInMemoryCacheTtl: 604800,
+      genieInMemoryCacheTtlNeverExpires: false,
+      genieInMemoryCacheCapacity: 10000,
+      genieInMemoryCacheCapacityUnlimited: false,
+      genieInMemoryCacheSimilarityThreshold: 0.85,
+      genieInMemoryCacheContextSimilarityThreshold: 0.80,
+      genieInMemoryCacheQuestionWeight: 0.6,
+      genieInMemoryCacheContextWeight: 0.4,
+      genieInMemoryCacheContextWindowSize: 3,
+      genieInMemoryCacheMaxContextTokens: 2000,
+      genieInMemoryCacheEmbeddingModelSource: 'configured',
+      genieInMemoryCacheEmbeddingModelRefName: '',
+      genieInMemoryCacheEmbeddingModelManual: 'databricks-gte-large-en',
+      genieInMemoryCacheWarehouseSource: 'configured',
+      genieInMemoryCacheWarehouseRefName: '',
+      genieInMemoryCacheWarehouseId: '',
       warehouseSource: 'configured',
       warehouseRefName: '',
       warehouseId: '',
@@ -1828,6 +1906,101 @@ export default function ToolsSection() {
           }
         }
 
+        // Extract in-memory semantic cache parameters (new in dao-ai 0.1.21)
+        let genieInMemoryCacheEnabled = false;
+        let genieInMemoryCacheTtl = 604800;
+        let genieInMemoryCacheTtlNeverExpires = false;
+        let genieInMemoryCacheCapacity = 10000;
+        let genieInMemoryCacheCapacityUnlimited = false;
+        let genieInMemoryCacheSimilarityThreshold = 0.85;
+        let genieInMemoryCacheContextSimilarityThreshold = 0.80;
+        let genieInMemoryCacheQuestionWeight = 0.6;
+        let genieInMemoryCacheContextWeight = 0.4;
+        let genieInMemoryCacheContextWindowSize = 3;
+        let genieInMemoryCacheMaxContextTokens = 2000;
+        let genieInMemoryCacheEmbeddingModelSource: ResourceSource = 'configured';
+        let genieInMemoryCacheEmbeddingModelRefName = '';
+        let genieInMemoryCacheEmbeddingModelManual = 'databricks-gte-large-en';
+        let genieInMemoryCacheWarehouseSource: ResourceSource = 'configured';
+        let genieInMemoryCacheWarehouseRefName = '';
+        let genieInMemoryCacheWarehouseId = '';
+
+        if (args.in_memory_semantic_cache_parameters) {
+          genieInMemoryCacheEnabled = true;
+          const inMemParams = args.in_memory_semantic_cache_parameters as Record<string, unknown>;
+          if (inMemParams.time_to_live_seconds === null) {
+            genieInMemoryCacheTtlNeverExpires = true;
+          } else {
+            genieInMemoryCacheTtl = (inMemParams.time_to_live_seconds as number) ?? 604800;
+          }
+          if (inMemParams.capacity === null) {
+            genieInMemoryCacheCapacityUnlimited = true;
+          } else {
+            genieInMemoryCacheCapacity = (inMemParams.capacity as number) ?? 10000;
+          }
+          genieInMemoryCacheSimilarityThreshold = (inMemParams.similarity_threshold as number) ?? 0.85;
+          genieInMemoryCacheContextSimilarityThreshold = (inMemParams.context_similarity_threshold as number) ?? 0.80;
+          genieInMemoryCacheQuestionWeight = (inMemParams.question_weight as number) ?? 0.6;
+          genieInMemoryCacheContextWeight = (inMemParams.context_weight as number) ?? 0.4;
+          genieInMemoryCacheContextWindowSize = (inMemParams.context_window_size as number) ?? 3;
+          genieInMemoryCacheMaxContextTokens = (inMemParams.max_context_tokens as number) ?? 2000;
+          
+          // Extract embedding model
+          const inMemEmbeddingModelRefPath = `tools.${key}.function.args.in_memory_semantic_cache_parameters.embedding_model`;
+          const inMemEmbeddingModelOriginalRef = findOriginalReferenceForPath(inMemEmbeddingModelRefPath);
+          
+          if (inMemEmbeddingModelOriginalRef && configuredLlms[inMemEmbeddingModelOriginalRef]) {
+            genieInMemoryCacheEmbeddingModelRefName = inMemEmbeddingModelOriginalRef;
+            genieInMemoryCacheEmbeddingModelSource = 'configured';
+          } else if (typeof inMemParams.embedding_model === 'string') {
+            if (inMemParams.embedding_model.startsWith('__REF__')) {
+              genieInMemoryCacheEmbeddingModelRefName = inMemParams.embedding_model.replace('__REF__', '');
+              genieInMemoryCacheEmbeddingModelSource = 'configured';
+            } else {
+              const matchingLlm = Object.entries(configuredLlms).find(([, llm]) => llm.name === inMemParams.embedding_model);
+              if (matchingLlm) {
+                genieInMemoryCacheEmbeddingModelRefName = matchingLlm[0];
+                genieInMemoryCacheEmbeddingModelSource = 'configured';
+              } else {
+                genieInMemoryCacheEmbeddingModelManual = inMemParams.embedding_model as string;
+                genieInMemoryCacheEmbeddingModelSource = 'select';
+              }
+            }
+          } else if (typeof inMemParams.embedding_model === 'object' && inMemParams.embedding_model !== null) {
+            const embModel = inMemParams.embedding_model as { name?: string };
+            const matchingKey = findConfiguredLlm(embModel);
+            if (matchingKey) {
+              genieInMemoryCacheEmbeddingModelRefName = matchingKey;
+              genieInMemoryCacheEmbeddingModelSource = 'configured';
+            } else if (embModel.name) {
+              genieInMemoryCacheEmbeddingModelManual = embModel.name;
+              genieInMemoryCacheEmbeddingModelSource = 'select';
+            }
+          }
+          
+          // Extract warehouse reference
+          const inMemWarehouseRefPath = `tools.${key}.function.args.in_memory_semantic_cache_parameters.warehouse`;
+          const inMemWarehouseOriginalRef = findOriginalReferenceForPath(inMemWarehouseRefPath);
+          
+          if (inMemWarehouseOriginalRef && configuredWarehouses[inMemWarehouseOriginalRef]) {
+            genieInMemoryCacheWarehouseRefName = inMemWarehouseOriginalRef;
+            genieInMemoryCacheWarehouseSource = 'configured';
+          } else if (typeof inMemParams.warehouse === 'string' && inMemParams.warehouse.startsWith('__REF__')) {
+            genieInMemoryCacheWarehouseRefName = inMemParams.warehouse.replace('__REF__', '');
+            genieInMemoryCacheWarehouseSource = 'configured';
+          } else if (typeof inMemParams.warehouse === 'object' && inMemParams.warehouse !== null) {
+            const wh = inMemParams.warehouse as { warehouse_id?: string };
+            const matchingKey = findConfiguredWarehouse(wh);
+            if (matchingKey) {
+              genieInMemoryCacheWarehouseRefName = matchingKey;
+              genieInMemoryCacheWarehouseSource = 'configured';
+            } else {
+              genieInMemoryCacheWarehouseId = wh.warehouse_id || '';
+              genieInMemoryCacheWarehouseSource = 'select';
+            }
+          }
+        }
+
         setFormData(prev => ({
           ...prev,
           refName: key, // YAML key (reference name)
@@ -1867,6 +2040,24 @@ export default function ToolsSection() {
           genieSemanticCacheWarehouseSource,
           genieSemanticCacheWarehouseRefName,
           genieSemanticCacheWarehouseId,
+          // In-Memory Semantic Cache
+          genieInMemoryCacheEnabled,
+          genieInMemoryCacheTtl,
+          genieInMemoryCacheTtlNeverExpires,
+          genieInMemoryCacheCapacity,
+          genieInMemoryCacheCapacityUnlimited,
+          genieInMemoryCacheSimilarityThreshold,
+          genieInMemoryCacheContextSimilarityThreshold,
+          genieInMemoryCacheQuestionWeight,
+          genieInMemoryCacheContextWeight,
+          genieInMemoryCacheContextWindowSize,
+          genieInMemoryCacheMaxContextTokens,
+          genieInMemoryCacheEmbeddingModelSource,
+          genieInMemoryCacheEmbeddingModelRefName,
+          genieInMemoryCacheEmbeddingModelManual,
+          genieInMemoryCacheWarehouseSource,
+          genieInMemoryCacheWarehouseRefName,
+          genieInMemoryCacheWarehouseId,
           vectorSearchSourceType,
           retrieverSource,
           retrieverRefName,
@@ -1914,6 +2105,17 @@ export default function ToolsSection() {
           type: 'python',
           functionName: isKnownPython ? funcName : 'custom',
           customFunctionName: isKnownPython ? '' : funcName,
+        }));
+      } else if (funcType === 'inline') {
+        // Inline function type (new in dao-ai 0.1.21)
+        const inlineCode = 'code' in func ? (func.code as string) : '';
+        
+        setFormData(prev => ({
+          ...prev,
+          refName: key, // YAML key (reference name)
+          name: tool.name,
+          type: 'inline',
+          inlineCode,
         }));
       } else if (funcType === 'unity_catalog') {
         // Cast to proper type for unity_catalog
@@ -2225,6 +2427,7 @@ export default function ToolsSection() {
     const type = getToolType(tool);
     if (type === 'mcp') return Link2;
     if (type === 'unity_catalog') return Database;
+    if (type === 'inline') return Code;
     if (typeof tool.function === 'object' && tool.function.name) {
       if (tool.function.name.includes('genie')) return MessageSquare;
       if (tool.function.name.includes('vector') || tool.function.name.includes('search')) return Search;
@@ -2397,7 +2600,7 @@ export default function ToolsSection() {
               label="Tool Type"
               options={TOOL_TYPES}
               value={formData.type}
-              onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, type: e.target.value as 'factory' | 'python' | 'unity_catalog' | 'mcp' })}
+              onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, type: e.target.value as 'factory' | 'python' | 'inline' | 'unity_catalog' | 'mcp' })}
             />
           </div>
 
@@ -2746,6 +2949,178 @@ export default function ToolsSection() {
                               placeholder="Enter warehouse ID"
                               value={formData.genieSemanticCacheWarehouseId}
                               onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, genieSemanticCacheWarehouseId: e.target.value, genieSemanticCacheWarehouseRefName: '' })}
+                            />
+                          </ResourceSelector>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* In-Memory Semantic Cache Configuration (no database required) */}
+                    <div className="space-y-2 mt-4 pt-4 border-t border-slate-700/50">
+                      <label className="flex items-start gap-3 cursor-pointer group">
+                        <input
+                          type="checkbox"
+                          checked={formData.genieInMemoryCacheEnabled}
+                          onChange={(e) => setFormData({ ...formData, genieInMemoryCacheEnabled: e.target.checked })}
+                          className="mt-0.5 w-4 h-4 rounded border-slate-600 bg-slate-800 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-900"
+                        />
+                        <div>
+                          <span className="text-sm font-medium text-slate-300 group-hover:text-white">Enable In-Memory Semantic Cache</span>
+                          <p className="text-xs text-slate-500">Similarity-based caching stored in memory (no database required, single-instance only)</p>
+                        </div>
+                      </label>
+                      
+                      {formData.genieInMemoryCacheEnabled && (
+                        <div className="ml-7 space-y-3 p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
+                          <div className="grid grid-cols-2 gap-3">
+                            <Input
+                              label="Similarity Threshold"
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              max="1"
+                              value={formData.genieInMemoryCacheSimilarityThreshold.toString()}
+                              onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, genieInMemoryCacheSimilarityThreshold: parseFloat(e.target.value) || 0.85 })}
+                              hint="Min similarity for question matching (0-1)"
+                            />
+                            <Input
+                              label="Context Similarity Threshold"
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              max="1"
+                              value={formData.genieInMemoryCacheContextSimilarityThreshold.toString()}
+                              onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, genieInMemoryCacheContextSimilarityThreshold: parseFloat(e.target.value) || 0.80 })}
+                              hint="Min similarity for context matching (0-1)"
+                            />
+                          </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            <Input
+                              label="Question Weight"
+                              type="number"
+                              step="0.1"
+                              min="0"
+                              max="1"
+                              value={formData.genieInMemoryCacheQuestionWeight.toString()}
+                              onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                                const qw = parseFloat(e.target.value) || 0.6;
+                                setFormData({ ...formData, genieInMemoryCacheQuestionWeight: qw, genieInMemoryCacheContextWeight: 1 - qw });
+                              }}
+                              hint="Weight for question similarity (0-1)"
+                            />
+                            <Input
+                              label="Context Weight"
+                              type="number"
+                              step="0.1"
+                              min="0"
+                              max="1"
+                              value={formData.genieInMemoryCacheContextWeight.toString()}
+                              onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                                const cw = parseFloat(e.target.value) || 0.4;
+                                setFormData({ ...formData, genieInMemoryCacheContextWeight: cw, genieInMemoryCacheQuestionWeight: 1 - cw });
+                              }}
+                              hint="Weight for context similarity (0-1)"
+                            />
+                          </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            <Input
+                              label="Context Window Size"
+                              type="number"
+                              min="1"
+                              value={formData.genieInMemoryCacheContextWindowSize.toString()}
+                              onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, genieInMemoryCacheContextWindowSize: parseInt(e.target.value) || 3 })}
+                              hint="Number of previous turns to include"
+                            />
+                            <Input
+                              label="Max Context Tokens"
+                              type="number"
+                              min="100"
+                              value={formData.genieInMemoryCacheMaxContextTokens.toString()}
+                              onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, genieInMemoryCacheMaxContextTokens: parseInt(e.target.value) || 2000 })}
+                              hint="Maximum context length"
+                            />
+                          </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="space-y-2">
+                              <label className="block text-sm font-medium text-slate-300">Max Cache Entries</label>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="number"
+                                  min="100"
+                                  value={formData.genieInMemoryCacheCapacityUnlimited ? '' : formData.genieInMemoryCacheCapacity}
+                                  onChange={(e) => setFormData({ ...formData, genieInMemoryCacheCapacity: parseInt(e.target.value) || 10000 })}
+                                  disabled={formData.genieInMemoryCacheCapacityUnlimited}
+                                  className="flex-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500 disabled:opacity-50"
+                                />
+                                <label className="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer whitespace-nowrap">
+                                  <input
+                                    type="checkbox"
+                                    checked={formData.genieInMemoryCacheCapacityUnlimited}
+                                    onChange={(e) => setFormData({ ...formData, genieInMemoryCacheCapacityUnlimited: e.target.checked })}
+                                    className="w-3 h-3 rounded border-slate-600 bg-slate-800 text-violet-500"
+                                  />
+                                  Unlimited
+                                </label>
+                              </div>
+                              <p className="text-xs text-slate-500">LRU eviction when full (~200MB per 10k entries)</p>
+                            </div>
+                            <div className="space-y-2">
+                              <label className="block text-sm font-medium text-slate-300">TTL (seconds)</label>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="number"
+                                  min="1"
+                                  value={formData.genieInMemoryCacheTtlNeverExpires ? '' : formData.genieInMemoryCacheTtl}
+                                  onChange={(e) => setFormData({ ...formData, genieInMemoryCacheTtl: parseInt(e.target.value) || 604800 })}
+                                  disabled={formData.genieInMemoryCacheTtlNeverExpires}
+                                  className="flex-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500 disabled:opacity-50"
+                                />
+                                <label className="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer whitespace-nowrap">
+                                  <input
+                                    type="checkbox"
+                                    checked={formData.genieInMemoryCacheTtlNeverExpires}
+                                    onChange={(e) => setFormData({ ...formData, genieInMemoryCacheTtlNeverExpires: e.target.checked })}
+                                    className="w-3 h-3 rounded border-slate-600 bg-slate-800 text-violet-500"
+                                  />
+                                  Never
+                                </label>
+                              </div>
+                              <p className="text-xs text-slate-500">Default: 604800 (1 week)</p>
+                            </div>
+                          </div>
+                          <ResourceSelector
+                            label="Embedding Model"
+                            resourceType="LLM"
+                            configuredOptions={configuredLlmOptions}
+                            configuredValue={formData.genieInMemoryCacheEmbeddingModelRefName}
+                            onConfiguredChange={(value) => setFormData({ ...formData, genieInMemoryCacheEmbeddingModelRefName: value, genieInMemoryCacheEmbeddingModelManual: '' })}
+                            source={formData.genieInMemoryCacheEmbeddingModelSource}
+                            onSourceChange={(source) => setFormData({ ...formData, genieInMemoryCacheEmbeddingModelSource: source })}
+                            hint="Model for computing embeddings"
+                          >
+                            <Input
+                              label="Model Name"
+                              placeholder="databricks-gte-large-en"
+                              value={formData.genieInMemoryCacheEmbeddingModelManual}
+                              onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, genieInMemoryCacheEmbeddingModelManual: e.target.value, genieInMemoryCacheEmbeddingModelRefName: '' })}
+                              hint="Enter embedding model name manually"
+                            />
+                          </ResourceSelector>
+                          <ResourceSelector
+                            label="Warehouse"
+                            resourceType="Warehouse"
+                            configuredOptions={configuredWarehouseOptions}
+                            configuredValue={formData.genieInMemoryCacheWarehouseRefName}
+                            onConfiguredChange={(value) => setFormData({ ...formData, genieInMemoryCacheWarehouseRefName: value, genieInMemoryCacheWarehouseId: '' })}
+                            source={formData.genieInMemoryCacheWarehouseSource}
+                            onSourceChange={(source) => setFormData({ ...formData, genieInMemoryCacheWarehouseSource: source })}
+                            hint="SQL warehouse for re-executing cached SQL (required)"
+                          >
+                            <Input
+                              label="Warehouse ID"
+                              placeholder="Enter warehouse ID"
+                              value={formData.genieInMemoryCacheWarehouseId}
+                              onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, genieInMemoryCacheWarehouseId: e.target.value, genieInMemoryCacheWarehouseRefName: '' })}
                             />
                           </ResourceSelector>
                         </div>
@@ -3217,6 +3592,42 @@ export default function ToolsSection() {
               required
             />
               )}
+            </div>
+          )}
+
+          {/* Inline Function */}
+          {formData.type === 'inline' && (
+            <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+              <h4 className="text-sm font-medium text-slate-300">Inline Function Code</h4>
+              <p className="text-xs text-slate-500">
+                Define a Python tool function directly in the configuration. The code must import @tool from langchain.tools and define exactly one function decorated with @tool.
+              </p>
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-slate-300">Python Code</label>
+                <textarea
+                  value={formData.inlineCode}
+                  onChange={(e) => setFormData({ ...formData, inlineCode: e.target.value })}
+                  placeholder={`from langchain.tools import tool
+
+@tool
+def my_tool(param: str) -> str:
+    """Description of what this tool does.
+    
+    Args:
+        param: Description of the parameter
+        
+    Returns:
+        The result of the tool
+    """
+    # Your tool logic here
+    return f"Result: {param}"`}
+                  className="w-full h-64 px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500 font-mono text-sm"
+                  spellCheck={false}
+                />
+                <p className="text-xs text-slate-500">
+                  The function name defined in the code becomes the tool name used by the agent.
+                </p>
+              </div>
             </div>
           )}
 

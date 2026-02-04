@@ -1,0 +1,15 @@
+# Ignore minified JavaScript build artifacts
+# These contain false positives from React/library code that match secret patterns
+
+# Fingerprint-based ignore (most reliable)
+# False positive: React's getDerivedStateFromProps lifecycle method
+static/assets/index-DP7nmFN3.js:vault-service-token:40
+df61ee92c856ca187cfc4da8e3f271e7a9a47bfc:static/assets/index-DP7nmFN3.js:vault-service-token:40
+
+# File path ignores
+static/assets/index-DP7nmFN3.js
+static/assets/index-DP7nmFN3.js.map
+
+# Pattern-based ignores for future builds
+**/static/assets/*.js
+**/static/assets/*.js.map

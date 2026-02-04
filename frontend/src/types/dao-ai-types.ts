@@ -174,6 +174,27 @@ export interface GenieSemanticCacheParametersModel {
   database: DatabaseModel | string;  // Can be inline or reference
   warehouse: WarehouseModel | string;  // Can be inline or reference
   table_name?: string;  // Default: "genie_semantic_cache"
+  context_window_size?: number;  // Default: 2 - Number of previous turns to include for context
+  max_context_tokens?: number;  // Default: 2000 - Maximum context length to prevent extremely long embeddings
+  // Prompt history fields (new in dao-ai 0.1.21)
+  prompt_history_table?: string;  // Default: "genie_prompt_history"
+  max_prompt_history_length?: number;  // Default: 50
+  use_genie_api_for_history?: boolean;  // Default: false
+  prompt_history_ttl_seconds?: number | null;  // Optional TTL for prompt history
+}
+
+// In-Memory Semantic Cache for Genie (no database required)
+// New in dao-ai 0.1.21 - useful for single-instance deployments
+export interface GenieInMemorySemanticCacheParametersModel {
+  time_to_live_seconds?: number | null;  // Default: 604800 (1 week), null = never expires
+  similarity_threshold?: number;  // Default: 0.85 - Minimum similarity for question matching
+  context_similarity_threshold?: number;  // Default: 0.80 - Minimum similarity for context matching
+  question_weight?: number | null;  // Default: 0.6 - Weight for question similarity (0-1)
+  context_weight?: number | null;  // Default: computed as 1 - question_weight
+  embedding_model?: string | LLMModel;  // Default: "databricks-gte-large-en"
+  embedding_dims?: number | null;  // Auto-detected if null
+  warehouse: WarehouseModel | string;  // Can be inline or reference - required for re-executing cached SQL
+  capacity?: number | null;  // Default: 10000 - Max cache entries with LRU eviction, null = unlimited
   context_window_size?: number;  // Default: 3 - Number of previous turns to include for context
   max_context_tokens?: number;  // Default: 2000 - Maximum context length to prevent extremely long embeddings
 }
@@ -301,11 +322,19 @@ export interface InstructionAwareRerankModel {
   top_n?: number;
 }
 
-export type ToolFunctionType = "python" | "factory" | "unity_catalog" | "mcp";
+export type ToolFunctionType = "python" | "factory" | "unity_catalog" | "mcp" | "inline";
 
 export interface PythonFunctionModel {
   type: "python";
   name: string;
+  human_in_the_loop?: HumanInTheLoopModel;
+}
+
+// Inline function model for defining tool code directly in YAML configuration
+// New in dao-ai 0.1.21
+export interface InlineFunctionModel {
+  type: "inline";
+  code: string;  // Python code defining a tool function decorated with @tool
   human_in_the_loop?: HumanInTheLoopModel;
 }
 
@@ -351,6 +380,7 @@ export interface McpFunctionModel {
 export type ToolFunctionModel =
   | PythonFunctionModel
   | FactoryFunctionModel
+  | InlineFunctionModel
   | UnityCatalogFunctionModel
   | McpFunctionModel
   | string;

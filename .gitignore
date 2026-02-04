@@ -6,8 +6,7 @@ frontend/.DS_Store
 
 # Built static files (for deployment)
 # Note: 'static/' is generated during deployment from frontend/dist
-# Uncomment the next line if you don't want to commit built files
-# static/
+static/
 
 # Python
 __pycache__/

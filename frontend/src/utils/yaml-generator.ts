@@ -345,8 +345,12 @@ function addYamlAnchors(yamlString: string): string {
           // These must be present even for normally skipped sections
           const requiredMergeAnchors = getRequiredMergeAnchors();
           const requiredAliasAnchors = getRequiredAliasAnchors();
-          const isRequiredByMerge = requiredMergeAnchors.includes(keyName);
-          const isRequiredByAlias = requiredAliasAnchors.includes(keyName);
+          
+          // Check if the key name OR the original anchor name (if different) is required
+          const isRequiredByMerge = requiredMergeAnchors.includes(keyName) || 
+            (originalAnchor && requiredMergeAnchors.includes(originalAnchor));
+          const isRequiredByAlias = requiredAliasAnchors.includes(keyName) || 
+            (originalAnchor && requiredAliasAnchors.includes(originalAnchor));
           
           // Resource sections that rarely need anchors (they're source data, not references)
           // Only add anchor if it was in the original YAML OR required by a merge key OR required by an alias
@@ -1106,6 +1110,15 @@ function formatToolFunction(func: ToolFunctionModel, toolKey?: string, definedCo
       //     warehouse: *shared_endpoint_warehouse
       const basePath = toolKey ? `tools.${toolKey}.function.args` : 'function.args';
       result.args = processObjectWithReferences(func.args, basePath, {});
+    }
+  }
+
+  // Inline function type (new in dao-ai 0.1.21)
+  if (func.type === 'inline') {
+    // Remove name - it's not part of InlineFunctionModel (name is in parent ToolModel)
+    delete result.name;
+    if ('code' in func && func.code) {
+      result.code = func.code;
     }
   }
 
@@ -2241,22 +2254,38 @@ export function generateYAML(config: AppConfig): string {
       }
       
       // Format tools as references - tools should be referenced using *tool_key (YAML key, not name)
+      // When the original anchor name differs from the key name, use the anchor name
       let toolsValue: string[] | undefined;
       if (agent.tools && agent.tools.length > 0) {
         toolsValue = agent.tools.map((tool, idx) => {
           // First check if this was originally a reference in imported YAML
           const originalRef = findOriginalReference(`agents.${key}.tools.${idx}`, tool);
-          if (originalRef && definedTools[originalRef]) {
-            return createReference(originalRef);
-          }
           
           // Tools are stored as ToolModel objects - find the key by matching
           const toolObj = typeof tool === 'object' ? tool : null;
           const toolName = typeof tool === 'string' ? tool : tool.name;
           
+          // Helper to get the correct reference name for a tool key
+          // Uses the original anchor name if it differs from the key
+          const getRefNameForKey = (toolKey: string): string => {
+            const originalAnchor = getOriginalAnchorName(`tools.${toolKey}`);
+            return originalAnchor || toolKey;
+          };
+          
+          // If we found an original reference and it matches a defined tool's anchor, use it
+          if (originalRef) {
+            // Check if any defined tool has this as its original anchor name
+            for (const [defKey] of Object.entries(definedTools)) {
+              const anchorForKey = getOriginalAnchorName(`tools.${defKey}`);
+              if (anchorForKey === originalRef || defKey === originalRef) {
+                return createReference(originalRef);
+              }
+            }
+          }
+          
           // Strategy 1: Check if toolName is already a valid key in definedTools
           if (definedTools[toolName]) {
-            return createReference(toolName);
+            return createReference(getRefNameForKey(toolName));
           }
           
           // Strategy 2: Find by deep comparison of the full tool object (most accurate)
@@ -2265,7 +2294,7 @@ export function generateYAML(config: AppConfig): string {
               ([, t]) => JSON.stringify(t) === JSON.stringify(toolObj)
             );
             if (matchedByObject) {
-              return createReference(matchedByObject[0]);
+              return createReference(getRefNameForKey(matchedByObject[0]));
             }
           }
           
@@ -2274,7 +2303,7 @@ export function generateYAML(config: AppConfig): string {
             ([, t]) => t.name === toolName
           );
           if (matchedByName) {
-            return createReference(matchedByName[0]);
+            return createReference(getRefNameForKey(matchedByName[0]));
           }
           
           // Strategy 4: Partial object match - check if tool's function matches
@@ -2283,7 +2312,7 @@ export function generateYAML(config: AppConfig): string {
               ([, t]) => t.function && JSON.stringify(t.function) === JSON.stringify(toolObj.function)
             );
             if (matchedByFunction) {
-              return createReference(matchedByFunction[0]);
+              return createReference(getRefNameForKey(matchedByFunction[0]));
             }
           }
           
@@ -2295,22 +2324,36 @@ export function generateYAML(config: AppConfig): string {
       }
       
       // Format guardrails as references - guardrails should be referenced using *guardrail_key (YAML key)
+      // When the original anchor name differs from the key name, use the anchor name
       let guardrailsValue: string[] | undefined;
       if (agent.guardrails && agent.guardrails.length > 0) {
         guardrailsValue = agent.guardrails.map((guardrail, idx) => {
           // First check if this was originally a reference in imported YAML
           const originalRef = findOriginalReference(`agents.${key}.guardrails.${idx}`, guardrail);
-          if (originalRef && definedGuardrails[originalRef]) {
-            return createReference(originalRef);
-          }
           
           // Guardrails are stored as GuardrailModel objects - find the key by matching
           const guardrailObj = typeof guardrail === 'object' ? guardrail : null;
           const guardrailName = typeof guardrail === 'string' ? guardrail : guardrail.name;
           
+          // Helper to get the correct reference name for a guardrail key
+          const getRefNameForKey = (guardrailKey: string): string => {
+            const originalAnchor = getOriginalAnchorName(`guardrails.${guardrailKey}`);
+            return originalAnchor || guardrailKey;
+          };
+          
+          // If we found an original reference, try to use it
+          if (originalRef) {
+            for (const [defKey] of Object.entries(definedGuardrails)) {
+              const anchorForKey = getOriginalAnchorName(`guardrails.${defKey}`);
+              if (anchorForKey === originalRef || defKey === originalRef) {
+                return createReference(originalRef);
+              }
+            }
+          }
+          
           // Strategy 1: Check if guardrailName is already a valid key in definedGuardrails
           if (definedGuardrails[guardrailName]) {
-            return createReference(guardrailName);
+            return createReference(getRefNameForKey(guardrailName));
           }
           
           // Strategy 2: Find by deep comparison (most accurate)
@@ -2319,7 +2362,7 @@ export function generateYAML(config: AppConfig): string {
               ([, g]) => JSON.stringify(g) === JSON.stringify(guardrailObj)
             );
             if (matchedByObject) {
-              return createReference(matchedByObject[0]);
+              return createReference(getRefNameForKey(matchedByObject[0]));
             }
           }
           
@@ -2328,7 +2371,7 @@ export function generateYAML(config: AppConfig): string {
             ([, g]) => g.name === guardrailName
           );
           if (matchedByName) {
-            return createReference(matchedByName[0]);
+            return createReference(getRefNameForKey(matchedByName[0]));
           }
           
           // Fallback: The guardrail doesn't exist in definedGuardrails - skip this reference
@@ -2338,22 +2381,36 @@ export function generateYAML(config: AppConfig): string {
       }
       
       // Format middleware as references - middleware should be referenced using *middleware_key (YAML key)
+      // When the original anchor name differs from the key name, use the anchor name
       let middlewareValue: string[] | undefined;
       if (agent.middleware && agent.middleware.length > 0) {
         middlewareValue = agent.middleware.map((mw, idx) => {
           // First check if this was originally a reference in imported YAML
           const originalRef = findOriginalReference(`agents.${key}.middleware.${idx}`, mw);
-          if (originalRef && definedMiddleware[originalRef]) {
-            return createReference(originalRef);
-          }
           
           // Middleware are stored as MiddlewareModel objects - find the key by matching name
           const mwObj = typeof mw === 'object' ? mw : null;
           const mwName = typeof mw === 'string' ? mw : mw.name;
           
+          // Helper to get the correct reference name for a middleware key
+          const getRefNameForKey = (mwKey: string): string => {
+            const originalAnchor = getOriginalAnchorName(`middleware.${mwKey}`);
+            return originalAnchor || mwKey;
+          };
+          
+          // If we found an original reference, try to use it
+          if (originalRef) {
+            for (const [defKey] of Object.entries(definedMiddleware)) {
+              const anchorForKey = getOriginalAnchorName(`middleware.${defKey}`);
+              if (anchorForKey === originalRef || defKey === originalRef) {
+                return createReference(originalRef);
+              }
+            }
+          }
+          
           // Strategy 1: Check if mwName is already a valid key in definedMiddleware
           if (definedMiddleware[mwName]) {
-            return createReference(mwName);
+            return createReference(getRefNameForKey(mwName));
           }
           
           // Strategy 2: Find by deep comparison (most accurate)
@@ -2362,7 +2419,7 @@ export function generateYAML(config: AppConfig): string {
               ([, m]) => JSON.stringify(m) === JSON.stringify(mwObj)
             );
             if (matchedByObject) {
-              return createReference(matchedByObject[0]);
+              return createReference(getRefNameForKey(matchedByObject[0]));
             }
           }
           
@@ -2371,7 +2428,7 @@ export function generateYAML(config: AppConfig): string {
             ([, m]) => m.name === mwName
           );
           if (matchedByName) {
-            return createReference(matchedByName[0]);
+            return createReference(getRefNameForKey(matchedByName[0]));
           }
           
           // Fallback: The middleware doesn't exist in definedMiddleware - skip this reference
