@@ -1191,6 +1191,157 @@ export default function RetrieversSection() {
             </p>
           </div>
 
+          {/* ── Standard Reranking ── */}
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setShowRerankSection(!showRerankSection)}
+                className="flex items-center gap-2 text-sm font-medium text-slate-300 border-b border-slate-700 pb-2 flex-1 hover:text-slate-100 transition-colors"
+              >
+                {showRerankSection ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                <ArrowUpDown className="w-4 h-4 text-slate-400" />
+                Standard Reranking
+                {formData.enableRerank && (
+                  <Badge variant="success" className="ml-2">Enabled</Badge>
+                )}
+              </button>
+              <label className="flex items-center gap-2 text-sm border-b border-slate-700 pb-2 pl-3">
+                <input
+                  type="checkbox"
+                  name="enableRerank"
+                  checked={formData.enableRerank}
+                  onChange={handleChange}
+                  className="rounded border-slate-600 bg-slate-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-slate-800"
+                />
+                <span className="text-slate-400">Enable</span>
+              </label>
+            </div>
+            
+            {showRerankSection && formData.enableRerank && (
+              <div className="space-y-4 pl-4 border-l-2 border-slate-600">
+                {/* Mode selector */}
+                <div className="flex gap-4 mb-4">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="rerankMode"
+                      value="default"
+                      checked={formData.rerankMode === 'default'}
+                      onChange={() => setFormData(prev => ({ ...prev, rerankMode: 'default' }))}
+                      className="text-blue-500 focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-slate-300">Use defaults</span>
+                    <span className="text-xs text-slate-500">(rerank: true)</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="rerankMode"
+                      value="custom"
+                      checked={formData.rerankMode === 'custom'}
+                      onChange={() => setFormData(prev => ({ ...prev, rerankMode: 'custom' }))}
+                      className="text-blue-500 focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-slate-300">Custom configuration</span>
+                  </label>
+                </div>
+
+                {formData.rerankMode === 'default' ? (
+                  <div className="p-3 bg-slate-800/30 rounded-lg border border-slate-700/50 text-sm text-slate-400">
+                    Uses FlashRank with default settings (ms-marco-MiniLM-L-12-v2 model).
+                    Switch to custom configuration for advanced options.
+                  </div>
+                ) : (
+                  <>
+                <p className="text-xs text-slate-500 mb-3">
+                  Choose between FlashRank (local cross-encoder) and/or Databricks server-side column reranking.
+                </p>
+                <div className="grid grid-cols-2 gap-4">
+                  <Select
+                    label="FlashRank Model (Local)"
+                    value={formData.rerankModel}
+                    onChange={(e) => setFormData(prev => ({ ...prev, rerankModel: e.target.value }))}
+                    options={RERANK_MODELS}
+                    hint="Cross-encoder model for semantic reranking"
+                  />
+                  
+                  <Input
+                    label="Top N Results"
+                    name="rerankTopN"
+                    type="number"
+                    value={formData.rerankTopN}
+                    onChange={handleChange}
+                    placeholder="5"
+                    hint="Number of results after reranking (leave empty to use search num_results)"
+                  />
+                </div>
+                
+                {/* Rerank Columns - Databricks server-side reranking */}
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-slate-300">
+                    Databricks Columns (Server-side Reranking)
+                  </label>
+                  <p className="text-xs text-slate-500 mb-2">
+                    Select columns for Databricks server-side reranking. Can be used with or without FlashRank.
+                  </p>
+                  {availableColumns.length > 0 ? (
+                    <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto p-3 bg-slate-900/50 rounded-lg border border-slate-600">
+                      {availableColumns.map((col) => {
+                        const selectedCols = formData.rerankColumns.split(',').map(c => c.trim()).filter(c => c);
+                        const isSelected = selectedCols.includes(col);
+                        return (
+                          <label key={col} className="flex items-center space-x-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => {
+                                let newCols: string[];
+                                if (e.target.checked) {
+                                  newCols = [...selectedCols, col];
+                                } else {
+                                  newCols = selectedCols.filter(c => c !== col);
+                                }
+                                setFormData(prev => ({
+                                  ...prev,
+                                  rerankColumns: newCols.join(', ')
+                                }));
+                              }}
+                              className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
+                            />
+                            <span className="text-sm text-slate-300">{col}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="p-3 bg-slate-900/50 rounded-lg border border-slate-600 text-slate-500 text-sm">
+                      {formData.vectorStoreRef 
+                        ? "No columns found in selected vector store" 
+                        : "Select a vector store to see available columns"}
+                    </div>
+                  )}
+                  {formData.rerankColumns && (
+                    <p className="text-xs text-slate-400">
+                      Selected: {formData.rerankColumns}
+                    </p>
+                  )}
+                </div>
+                
+                <Input
+                  label="Cache Directory"
+                  name="rerankCacheDir"
+                  value={formData.rerankCacheDir}
+                  onChange={handleChange}
+                  placeholder="~/.dao_ai/cache/flashrank"
+                  hint="Directory to cache downloaded model weights"
+                />
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* ── Instructed Retrieval ── */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
@@ -1669,157 +1820,6 @@ export default function RetrieversSection() {
                     </div>
                   )}
                 </div>
-              </div>
-            )}
-          </div>
-
-          {/* ── Standard Reranking ── */}
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <button
-                type="button"
-                onClick={() => setShowRerankSection(!showRerankSection)}
-                className="flex items-center gap-2 text-sm font-medium text-slate-300 border-b border-slate-700 pb-2 flex-1 hover:text-slate-100 transition-colors"
-              >
-                {showRerankSection ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-                <ArrowUpDown className="w-4 h-4 text-slate-400" />
-                Standard Reranking
-                {formData.enableRerank && (
-                  <Badge variant="success" className="ml-2">Enabled</Badge>
-                )}
-              </button>
-              <label className="flex items-center gap-2 text-sm border-b border-slate-700 pb-2 pl-3">
-                <input
-                  type="checkbox"
-                  name="enableRerank"
-                  checked={formData.enableRerank}
-                  onChange={handleChange}
-                  className="rounded border-slate-600 bg-slate-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-slate-800"
-                />
-                <span className="text-slate-400">Enable</span>
-              </label>
-            </div>
-            
-            {showRerankSection && formData.enableRerank && (
-              <div className="space-y-4 pl-4 border-l-2 border-slate-600">
-                {/* Mode selector */}
-                <div className="flex gap-4 mb-4">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="rerankMode"
-                      value="default"
-                      checked={formData.rerankMode === 'default'}
-                      onChange={() => setFormData(prev => ({ ...prev, rerankMode: 'default' }))}
-                      className="text-blue-500 focus:ring-blue-500"
-                    />
-                    <span className="text-sm text-slate-300">Use defaults</span>
-                    <span className="text-xs text-slate-500">(rerank: true)</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="rerankMode"
-                      value="custom"
-                      checked={formData.rerankMode === 'custom'}
-                      onChange={() => setFormData(prev => ({ ...prev, rerankMode: 'custom' }))}
-                      className="text-blue-500 focus:ring-blue-500"
-                    />
-                    <span className="text-sm text-slate-300">Custom configuration</span>
-                  </label>
-                </div>
-
-                {formData.rerankMode === 'default' ? (
-                  <div className="p-3 bg-slate-800/30 rounded-lg border border-slate-700/50 text-sm text-slate-400">
-                    Uses FlashRank with default settings (ms-marco-MiniLM-L-12-v2 model).
-                    Switch to custom configuration for advanced options.
-                  </div>
-                ) : (
-                  <>
-                <p className="text-xs text-slate-500 mb-3">
-                  Choose between FlashRank (local cross-encoder) and/or Databricks server-side column reranking.
-                </p>
-                <div className="grid grid-cols-2 gap-4">
-                  <Select
-                    label="FlashRank Model (Local)"
-                    value={formData.rerankModel}
-                    onChange={(e) => setFormData(prev => ({ ...prev, rerankModel: e.target.value }))}
-                    options={RERANK_MODELS}
-                    hint="Cross-encoder model for semantic reranking"
-                  />
-                  
-                  <Input
-                    label="Top N Results"
-                    name="rerankTopN"
-                    type="number"
-                    value={formData.rerankTopN}
-                    onChange={handleChange}
-                    placeholder="5"
-                    hint="Number of results after reranking (leave empty to use search num_results)"
-                  />
-                </div>
-                
-                {/* Rerank Columns - Databricks server-side reranking */}
-                <div className="space-y-2">
-                  <label className="block text-sm font-medium text-slate-300">
-                    Databricks Columns (Server-side Reranking)
-                  </label>
-                  <p className="text-xs text-slate-500 mb-2">
-                    Select columns for Databricks server-side reranking. Can be used with or without FlashRank.
-                  </p>
-                  {availableColumns.length > 0 ? (
-                    <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto p-3 bg-slate-900/50 rounded-lg border border-slate-600">
-                      {availableColumns.map((col) => {
-                        const selectedCols = formData.rerankColumns.split(',').map(c => c.trim()).filter(c => c);
-                        const isSelected = selectedCols.includes(col);
-                        return (
-                          <label key={col} className="flex items-center space-x-2 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={(e) => {
-                                let newCols: string[];
-                                if (e.target.checked) {
-                                  newCols = [...selectedCols, col];
-                                } else {
-                                  newCols = selectedCols.filter(c => c !== col);
-                                }
-                                setFormData(prev => ({
-                                  ...prev,
-                                  rerankColumns: newCols.join(', ')
-                                }));
-                              }}
-                              className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
-                            />
-                            <span className="text-sm text-slate-300">{col}</span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="p-3 bg-slate-900/50 rounded-lg border border-slate-600 text-slate-500 text-sm">
-                      {formData.vectorStoreRef 
-                        ? "No columns found in selected vector store" 
-                        : "Select a vector store to see available columns"}
-                    </div>
-                  )}
-                  {formData.rerankColumns && (
-                    <p className="text-xs text-slate-400">
-                      Selected: {formData.rerankColumns}
-                    </p>
-                  )}
-                </div>
-                
-                <Input
-                  label="Cache Directory"
-                  name="rerankCacheDir"
-                  value={formData.rerankCacheDir}
-                  onChange={handleChange}
-                  placeholder="~/.dao_ai/cache/flashrank"
-                  hint="Directory to cache downloaded model weights"
-                />
-                  </>
-                )}
               </div>
             )}
           </div>
