@@ -155,6 +155,7 @@ export default function AppConfigSection() {
       workloadSize: app?.workload_size || 'Small',
       scaleToZero: app?.scale_to_zero ?? true,
       deploymentTarget: app?.deployment_target || 'model_serving',
+      pythonVersion: app?.python_version || '',
       servicePrincipalRef: spRef,
     };
   });
@@ -391,6 +392,7 @@ export default function AppConfigSection() {
     if (formData.workloadSize !== (app?.workload_size || 'Small')) return true;
     if (formData.scaleToZero !== (app?.scale_to_zero ?? true)) return true;
     if (formData.deploymentTarget !== (app?.deployment_target || 'model_serving')) return true;
+    if (formData.pythonVersion !== (app?.python_version || '')) return true;
     
     // Check model schema
     let savedModelSchemaKey = '';
@@ -670,6 +672,7 @@ export default function AppConfigSection() {
       workloadSize: app?.workload_size || 'Small',
       scaleToZero: app?.scale_to_zero ?? true,
       deploymentTarget: app?.deployment_target || 'model_serving',
+      pythonVersion: app?.python_version || '',
       servicePrincipalRef: spRef,
     });
     
@@ -1073,6 +1076,7 @@ export default function AppConfigSection() {
       workload_size: formData.workloadSize as 'Small' | 'Medium' | 'Large',
       scale_to_zero: formData.scaleToZero,
       deployment_target: formData.deploymentTarget as 'model_serving' | 'apps',
+      python_version: formData.pythonVersion || undefined,
       orchestration,
       agents: appAgents.length > 0 ? appAgents : undefined,
       tags: Object.keys(tags).length > 0 ? tags : undefined,
@@ -1203,6 +1207,15 @@ export default function AppConfigSection() {
             hint="The name of the model serving endpoint"
           />
         )}
+
+        {/* Python Version */}
+        <Input
+          label="Python Version (Optional)"
+          placeholder="e.g., 3.11"
+          value={formData.pythonVersion}
+          onChange={(e) => setFormData({ ...formData, pythonVersion: e.target.value })}
+          hint="Python version for the deployment environment"
+        />
 
         {/* Service Principal Selection */}
         <Select

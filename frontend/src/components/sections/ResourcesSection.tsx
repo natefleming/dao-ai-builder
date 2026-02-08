@@ -620,7 +620,7 @@ function LLMsPanel() {
       temperature: String(llm.temperature ?? 0.1),
       maxTokens: String(llm.max_tokens ?? 8192),
       onBehalfOfUser: llm.on_behalf_of_user ?? false,
-      useResponseApi: llm.use_response_api ?? false,
+      useResponseApi: llm.use_responses_api ?? false,
       fallbacks: convertedFallbacks,
       ...authData,
     });
@@ -635,7 +635,7 @@ function LLMsPanel() {
     }
     
     const hasAuth = authData.authMethod !== 'default';
-    setShowAdvanced(!!(llm.on_behalf_of_user || llm.use_response_api || (llm.fallbacks && llm.fallbacks.length > 0) || hasAuth));
+    setShowAdvanced(!!(llm.on_behalf_of_user || llm.use_responses_api || (llm.fallbacks && llm.fallbacks.length > 0) || hasAuth));
     setIsModalOpen(true);
   };
 
@@ -667,7 +667,7 @@ function LLMsPanel() {
       }
 
       if (formData.useResponseApi) {
-        llmConfig.use_response_api = true;
+        llmConfig.use_responses_api = true;
       }
 
       if (formData.fallbacks.length > 0) {

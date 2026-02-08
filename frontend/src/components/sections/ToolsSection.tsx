@@ -599,7 +599,7 @@ export default function ToolsSection() {
     genieSemanticCacheEmbeddingModelSource: 'configured' as ResourceSource,
     genieSemanticCacheEmbeddingModelRefName: '',
     genieSemanticCacheEmbeddingModelManual: 'databricks-gte-large-en',
-    genieSemanticCacheTableName: 'genie_semantic_cache',
+    genieSemanticCacheTableName: 'genie_context_aware_cache',
     genieSemanticCacheDatabaseSource: 'configured' as ResourceSource,
     genieSemanticCacheDatabaseRefName: '',
     genieSemanticCacheWarehouseSource: 'configured' as ResourceSource,
@@ -1092,7 +1092,7 @@ export default function ToolsSection() {
               warehouse_id: formData.genieSemanticCacheWarehouseId,
             };
           }
-          genieArgs.semantic_cache_parameters = semanticCacheParams;
+          genieArgs.context_aware_cache_parameters = semanticCacheParams;
         }
 
         // Add in-memory semantic cache parameters if enabled (new in dao-ai 0.1.21)
@@ -1122,7 +1122,7 @@ export default function ToolsSection() {
               warehouse_id: formData.genieInMemoryCacheWarehouseId,
             };
           }
-          genieArgs.in_memory_semantic_cache_parameters = inMemoryCacheParams;
+          genieArgs.in_memory_context_aware_cache_parameters = inMemoryCacheParams;
         }
 
         parsedArgs = genieArgs;
@@ -1400,13 +1400,13 @@ export default function ToolsSection() {
       genieSemanticCacheEmbeddingModelSource: 'configured',
       genieSemanticCacheEmbeddingModelRefName: '',
       genieSemanticCacheEmbeddingModelManual: 'databricks-gte-large-en',
-      genieSemanticCacheTableName: 'genie_semantic_cache',
+      genieSemanticCacheTableName: 'genie_context_aware_cache',
       genieSemanticCacheDatabaseSource: 'configured',
       genieSemanticCacheDatabaseRefName: '',
       genieSemanticCacheWarehouseSource: 'configured',
       genieSemanticCacheWarehouseRefName: '',
       genieSemanticCacheWarehouseId: '',
-      // Genie In-Memory Semantic Cache
+      // Genie In-Memory Context-Aware Cache
       genieInMemoryCacheEnabled: false,
       genieInMemoryCacheTtl: 604800,
       genieInMemoryCacheTtlNeverExpires: false,
@@ -1802,16 +1802,16 @@ export default function ToolsSection() {
         let genieSemanticCacheEmbeddingModelSource: ResourceSource = 'configured';
         let genieSemanticCacheEmbeddingModelRefName = '';
         let genieSemanticCacheEmbeddingModelManual = 'databricks-gte-large-en';
-        let genieSemanticCacheTableName = 'genie_semantic_cache';
+        let genieSemanticCacheTableName = 'genie_context_aware_cache';
         let genieSemanticCacheDatabaseSource: ResourceSource = 'configured';
         let genieSemanticCacheDatabaseRefName = '';
         let genieSemanticCacheWarehouseSource: ResourceSource = 'configured';
         let genieSemanticCacheWarehouseRefName = '';
         let genieSemanticCacheWarehouseId = '';
 
-        if (args.semantic_cache_parameters) {
+        if (args.context_aware_cache_parameters || args.semantic_cache_parameters) {
           genieSemanticCacheEnabled = true;
-          const semParams = args.semantic_cache_parameters as Record<string, unknown>;
+          const semParams = (args.context_aware_cache_parameters || args.semantic_cache_parameters) as Record<string, unknown>;
           if (semParams.time_to_live_seconds === null) {
             genieSemanticCacheTtlNeverExpires = true;
           } else {
@@ -1823,10 +1823,10 @@ export default function ToolsSection() {
           genieSemanticCacheContextWeight = (semParams.context_weight as number) ?? 0.4;
           genieSemanticCacheContextWindowSize = (semParams.context_window_size as number) ?? 3;
           genieSemanticCacheMaxContextTokens = (semParams.max_context_tokens as number) ?? 2000;
-          genieSemanticCacheTableName = (semParams.table_name as string) ?? 'genie_semantic_cache';
+          genieSemanticCacheTableName = (semParams.table_name as string) ?? 'genie_context_aware_cache';
           
           // Extract embedding model - first check YAML references, then __REF__ marker, then match against configured LLMs
-          const embeddingModelRefPath = `tools.${key}.function.args.semantic_cache_parameters.embedding_model`;
+          const embeddingModelRefPath = `tools.${key}.function.args.context_aware_cache_parameters.embedding_model`;
           const embeddingModelOriginalRef = findOriginalReferenceForPath(embeddingModelRefPath);
           
           if (embeddingModelOriginalRef && configuredLlms[embeddingModelOriginalRef]) {
@@ -1863,7 +1863,7 @@ export default function ToolsSection() {
           }
           
           // Extract database reference - first check YAML references, then __REF__ marker, then match
-          const databaseRefPath = `tools.${key}.function.args.semantic_cache_parameters.database`;
+          const databaseRefPath = `tools.${key}.function.args.context_aware_cache_parameters.database`;
           const databaseOriginalRef = findOriginalReferenceForPath(databaseRefPath);
           
           if (databaseOriginalRef && configuredDatabases[databaseOriginalRef]) {
@@ -1883,7 +1883,7 @@ export default function ToolsSection() {
           }
           
           // Extract warehouse reference - first check YAML references, then __REF__ marker, then match
-          const semWarehouseRefPath = `tools.${key}.function.args.semantic_cache_parameters.warehouse`;
+          const semWarehouseRefPath = `tools.${key}.function.args.context_aware_cache_parameters.warehouse`;
           const semWarehouseOriginalRef = findOriginalReferenceForPath(semWarehouseRefPath);
           
           if (semWarehouseOriginalRef && configuredWarehouses[semWarehouseOriginalRef]) {
@@ -1925,9 +1925,9 @@ export default function ToolsSection() {
         let genieInMemoryCacheWarehouseRefName = '';
         let genieInMemoryCacheWarehouseId = '';
 
-        if (args.in_memory_semantic_cache_parameters) {
+        if (args.in_memory_context_aware_cache_parameters || args.in_memory_semantic_cache_parameters) {
           genieInMemoryCacheEnabled = true;
-          const inMemParams = args.in_memory_semantic_cache_parameters as Record<string, unknown>;
+          const inMemParams = (args.in_memory_context_aware_cache_parameters || args.in_memory_semantic_cache_parameters) as Record<string, unknown>;
           if (inMemParams.time_to_live_seconds === null) {
             genieInMemoryCacheTtlNeverExpires = true;
           } else {
@@ -1946,7 +1946,7 @@ export default function ToolsSection() {
           genieInMemoryCacheMaxContextTokens = (inMemParams.max_context_tokens as number) ?? 2000;
           
           // Extract embedding model
-          const inMemEmbeddingModelRefPath = `tools.${key}.function.args.in_memory_semantic_cache_parameters.embedding_model`;
+          const inMemEmbeddingModelRefPath = `tools.${key}.function.args.in_memory_context_aware_cache_parameters.embedding_model`;
           const inMemEmbeddingModelOriginalRef = findOriginalReferenceForPath(inMemEmbeddingModelRefPath);
           
           if (inMemEmbeddingModelOriginalRef && configuredLlms[inMemEmbeddingModelOriginalRef]) {
@@ -1979,7 +1979,7 @@ export default function ToolsSection() {
           }
           
           // Extract warehouse reference
-          const inMemWarehouseRefPath = `tools.${key}.function.args.in_memory_semantic_cache_parameters.warehouse`;
+          const inMemWarehouseRefPath = `tools.${key}.function.args.in_memory_context_aware_cache_parameters.warehouse`;
           const inMemWarehouseOriginalRef = findOriginalReferenceForPath(inMemWarehouseRefPath);
           
           if (inMemWarehouseOriginalRef && configuredWarehouses[inMemWarehouseOriginalRef]) {

@@ -50,10 +50,11 @@ export interface SchemaModel {
 
 export interface LLMModel {
   name: string;
+  description?: string;
   temperature?: number;
   max_tokens?: number;
   on_behalf_of_user?: boolean;
-  use_response_api?: boolean;
+  use_responses_api?: boolean;  // Use Responses API for ResponsesAgent endpoints
   fallbacks?: (string | LLMModel)[];
   // Authentication fields
   service_principal?: ServicePrincipalModel | string;
@@ -128,7 +129,7 @@ export interface GenieRoomModel {
   name?: string;  // Optional - auto-populated from GenieSpace.title if not provided
   description?: string;
   space_id: VariableValue;  // Can be string or variable reference (env, secret, etc.)
-  warehouse?: WarehouseModel | string;  // Optional warehouse reference
+  warehouse?: WarehouseModel | string;  // NOTE: computed @property in Python, not serialized to YAML
   // Authentication fields
   service_principal?: ServicePrincipalModel | string;
   client_id?: VariableValue;
@@ -163,7 +164,7 @@ export interface GenieLRUCacheParametersModel {
   warehouse: WarehouseModel | string;  // Can be inline or reference
 }
 
-export interface GenieSemanticCacheParametersModel {
+export interface GenieContextAwareCacheParametersModel {
   time_to_live_seconds?: number | null;  // Default: 86400 (1 day), null = never expires
   similarity_threshold?: number;  // Default: 0.85 - Minimum similarity for question matching
   context_similarity_threshold?: number;  // Default: 0.80 - Minimum similarity for context matching
@@ -173,7 +174,7 @@ export interface GenieSemanticCacheParametersModel {
   embedding_dims?: number | null;  // Auto-detected if null
   database: DatabaseModel | string;  // Can be inline or reference
   warehouse: WarehouseModel | string;  // Can be inline or reference
-  table_name?: string;  // Default: "genie_semantic_cache"
+  table_name?: string;  // Default: "genie_context_aware_cache"
   context_window_size?: number;  // Default: 2 - Number of previous turns to include for context
   max_context_tokens?: number;  // Default: 2000 - Maximum context length to prevent extremely long embeddings
   // Prompt history fields (new in dao-ai 0.1.21)
@@ -185,7 +186,7 @@ export interface GenieSemanticCacheParametersModel {
 
 // In-Memory Semantic Cache for Genie (no database required)
 // New in dao-ai 0.1.21 - useful for single-instance deployments
-export interface GenieInMemorySemanticCacheParametersModel {
+export interface GenieInMemoryContextAwareCacheParametersModel {
   time_to_live_seconds?: number | null;  // Default: 604800 (1 week), null = never expires
   similarity_threshold?: number;  // Default: 0.85 - Minimum similarity for question matching
   context_similarity_threshold?: number;  // Default: 0.80 - Minimum similarity for context matching
@@ -256,10 +257,8 @@ export interface RetrieverModel {
   vector_store: VectorStoreModel;
   columns?: string[];
   search_parameters?: SearchParametersModel;
-  router?: RouterModel;
-  rerank?: RerankParametersModel | boolean;
+  rerank?: RerankParametersModel | boolean;  // FlashRank/Databricks reranking only
   instructed?: InstructedRetrieverModel;
-  verifier?: VerifierModel;
 }
 
 // Router for selecting standard vs instructed execution mode
@@ -269,16 +268,24 @@ export interface RouterModel {
   auto_bypass?: boolean;  // Skip Instruction Reranker and Verifier for standard mode
 }
 
-// Instructed retrieval with query decomposition and RRF merging
-export interface InstructedRetrieverModel {
-  decomposition_model?: LLMModel | string;  // Reference to LLM resource
-  schema_description: string;  // Required - column names, types, and filter syntax
-  columns?: ColumnInfo[];
-  constraints?: string[];
+// Query decomposition settings for instructed retrieval
+export interface DecompositionModel {
+  model?: LLMModel | string;  // Reference to LLM resource (fast model recommended)
   max_subqueries?: number;  // Default: 3
   rrf_k?: number;  // Default: 60
   examples?: InstructedRetrieverExample[];
   normalize_filter_case?: "uppercase" | "lowercase";
+}
+
+// Instructed retrieval with query decomposition, reranking, routing, and verification
+export interface InstructedRetrieverModel {
+  schema_description: string;  // Required - column names, types, and filter syntax
+  columns?: ColumnInfo[];
+  constraints?: string[];
+  decomposition?: DecompositionModel;  // Query decomposition and RRF merging
+  rerank?: InstructionAwareRerankModel;  // LLM-based instruction-aware reranking
+  router?: RouterModel;  // Query routing between standard/instructed modes
+  verifier?: VerifierModel;  // Result validation with retry support
 }
 
 // Column metadata for dynamic schema generation in instructed retrieval
@@ -312,7 +319,6 @@ export interface RerankParametersModel {
   top_n?: number;
   cache_dir?: string;
   columns?: string[];
-  instruction_aware?: InstructionAwareRerankModel;
 }
 
 // LLM-based instruction-aware reranking (runs after FlashRank)
@@ -422,9 +428,6 @@ export interface AgentModel {
   guardrails?: GuardrailModel[];
   prompt?: string | PromptModel;
   handoff_prompt?: string;
-  create_agent_hook?: string | PythonFunctionModel | FactoryFunctionModel;
-  pre_agent_hook?: string | PythonFunctionModel | FactoryFunctionModel;
-  post_agent_hook?: string | PythonFunctionModel | FactoryFunctionModel;
   middleware?: MiddlewareModel[];
   response_format?: ResponseFormatModel | string;
 }
@@ -437,6 +440,7 @@ export interface PromptModel {
   alias?: string;
   version?: number;
   tags?: Record<string, any>;
+  auto_register?: boolean;  // Whether to automatically register the prompt in MLflow
 }
 
 export interface PermissionModel {
@@ -507,6 +511,7 @@ export interface AppModel {
   scale_to_zero?: boolean;
   environment_vars?: Record<string, any>;
   budget_policy_id?: string;
+  python_version?: string;  // Python version for the deployment environment
   workload_size?: "Small" | "Medium" | "Large";
   deployment_target?: "model_serving" | "apps";
   permissions?: AppPermissionModel[];
@@ -586,7 +591,6 @@ export interface ResourcesModel {
   databases?: Record<string, DatabaseModel>;
   connections?: Record<string, ConnectionModel>;
   apps?: Record<string, DatabricksAppModel>;
-  service_principals?: Record<string, ServicePrincipalModel>;
 }
 
 export interface AppConfig {

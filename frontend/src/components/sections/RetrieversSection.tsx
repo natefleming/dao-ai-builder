@@ -1,7 +1,7 @@
 import { useState, ChangeEvent } from 'react';
-import { Plus, Trash2, Edit2, Search, Layers, Filter, X, ChevronDown, ChevronRight, Zap, CheckCircle, Route } from 'lucide-react';
+import { Plus, Trash2, Edit2, Search, Layers, Filter, X, ChevronDown, ChevronRight, Zap, CheckCircle, Route, ArrowUpDown, Sparkles } from 'lucide-react';
 import { useConfigStore } from '@/stores/configStore';
-import { RetrieverModel, SearchParametersModel, RerankParametersModel, RouterModel, InstructedRetrieverModel, VerifierModel, ColumnInfo, InstructionAwareRerankModel } from '@/types/dao-ai-types';
+import { RetrieverModel, SearchParametersModel, RerankParametersModel, RouterModel, InstructedRetrieverModel, DecompositionModel, VerifierModel, ColumnInfo, InstructionAwareRerankModel } from '@/types/dao-ai-types';
 import Textarea from '../ui/Textarea';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
@@ -129,8 +129,10 @@ export default function RetrieversSection() {
   const [editingKey, setEditingKey] = useState<string | null>(null);
   // Collapsible section states
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [showRouterSection, setShowRouterSection] = useState(false);
   const [showInstructedSection, setShowInstructedSection] = useState(false);
+  const [showRerankSection, setShowRerankSection] = useState(false);
+  const [showInstructionAwareSection, setShowInstructionAwareSection] = useState(false);
+  const [showRouterSection, setShowRouterSection] = useState(false);
   const [showVerifierSection, setShowVerifierSection] = useState(false);
   const [formData, setFormData] = useState<FormData>({
     refName: '',
@@ -235,8 +237,10 @@ export default function RetrieversSection() {
     setEditingKey(null);
     // Reset section visibility
     setShowAdvanced(false);
-    setShowRouterSection(false);
     setShowInstructedSection(false);
+    setShowRerankSection(false);
+    setShowInstructionAwareSection(false);
+    setShowRouterSection(false);
     setShowVerifierSection(false);
   };
 
@@ -293,20 +297,20 @@ export default function RetrieversSection() {
       }
     }
     
-    // Handle router settings
+    // Handle router settings (nested under instructed)
     let enableRouter = false;
     let routerModelRef = '';
     let routerDefaultMode: "standard" | "instructed" = 'standard';
     let routerAutoBypass = true;
     
-    if (retriever.router) {
+    if (retriever.instructed?.router) {
       enableRouter = true;
-      routerModelRef = findLLMKeyByModel(retriever.router.model);
-      routerDefaultMode = retriever.router.default_mode || 'standard';
-      routerAutoBypass = retriever.router.auto_bypass !== false;
+      routerModelRef = findLLMKeyByModel(retriever.instructed.router.model);
+      routerDefaultMode = retriever.instructed.router.default_mode || 'standard';
+      routerAutoBypass = retriever.instructed.router.auto_bypass !== false;
     }
     
-    // Handle instructed retrieval settings
+    // Handle instructed retrieval settings (decomposition is nested)
     let enableInstructed = false;
     let instructedModelRef = '';
     let instructedSchemaDescription = '';
@@ -319,7 +323,6 @@ export default function RetrieversSection() {
     
     if (retriever.instructed) {
       enableInstructed = true;
-      instructedModelRef = findLLMKeyByModel(retriever.instructed.decomposition_model);
       instructedSchemaDescription = retriever.instructed.schema_description || '';
       instructedColumns = (retriever.instructed.columns || []).map(col => ({
         id: generateColumnInfoId(),
@@ -328,27 +331,30 @@ export default function RetrieversSection() {
         operators: col.operators?.join(', ') || '',
       }));
       instructedConstraints = (retriever.instructed.constraints || []).join('\n');
-      instructedMaxSubqueries = retriever.instructed.max_subqueries?.toString() || '3';
-      instructedRrfK = retriever.instructed.rrf_k?.toString() || '60';
-      instructedExamples = (retriever.instructed.examples || []).map(ex => ({
+      // Decomposition fields are nested under instructed.decomposition
+      const decomp = retriever.instructed.decomposition;
+      instructedModelRef = findLLMKeyByModel(decomp?.model);
+      instructedMaxSubqueries = decomp?.max_subqueries?.toString() || '3';
+      instructedRrfK = decomp?.rrf_k?.toString() || '60';
+      instructedExamples = (decomp?.examples || []).map(ex => ({
         id: generateExampleId(),
         query: ex.query,
         filters: JSON.stringify(ex.filters || {}),
       }));
-      instructedNormalizeFilterCase = retriever.instructed.normalize_filter_case || '';
+      instructedNormalizeFilterCase = decomp?.normalize_filter_case || '';
     }
     
-    // Handle verifier settings
+    // Handle verifier settings (nested under instructed)
     let enableVerifier = false;
     let verifierModelRef = '';
     let verifierOnFailure: "warn" | "retry" | "warn_and_retry" = 'warn';
     let verifierMaxRetries = '1';
     
-    if (retriever.verifier) {
+    if (retriever.instructed?.verifier) {
       enableVerifier = true;
-      verifierModelRef = findLLMKeyByModel(retriever.verifier.model);
-      verifierOnFailure = retriever.verifier.on_failure || 'warn';
-      verifierMaxRetries = retriever.verifier.max_retries?.toString() || '1';
+      verifierModelRef = findLLMKeyByModel(retriever.instructed.verifier.model);
+      verifierOnFailure = retriever.instructed.verifier.on_failure || 'warn';
+      verifierMaxRetries = retriever.instructed.verifier.max_retries?.toString() || '1';
     }
     
     // Handle rerank settings
@@ -375,15 +381,15 @@ export default function RetrieversSection() {
         rerankTopN = retriever.rerank.top_n?.toString() || '';
         rerankCacheDir = retriever.rerank.cache_dir || rerankCacheDir;
         rerankColumns = retriever.rerank.columns?.join(', ') || '';
-        
-        // Handle instruction-aware reranking
-        if (retriever.rerank.instruction_aware) {
-          enableInstructionAwareRerank = true;
-          instructionAwareModelRef = findLLMKeyByModel(retriever.rerank.instruction_aware.model);
-          instructionAwareInstructions = retriever.rerank.instruction_aware.instructions || '';
-          instructionAwareTopN = retriever.rerank.instruction_aware.top_n?.toString() || '';
-        }
       }
+    }
+    
+    // Instruction-aware reranking is nested under instructed.rerank
+    if (retriever.instructed?.rerank) {
+      enableInstructionAwareRerank = true;
+      instructionAwareModelRef = findLLMKeyByModel(retriever.instructed.rerank.model);
+      instructionAwareInstructions = retriever.instructed.rerank.instructions || '';
+      instructionAwareTopN = retriever.instructed.rerank.top_n?.toString() || '';
     }
     
     // Parse existing filters from search_parameters
@@ -471,6 +477,12 @@ export default function RetrieversSection() {
       instructionAwareTopN,
     });
     setEditingKey(key);
+    // Auto-expand sections for enabled features
+    setShowAdvanced(enableInstructed);
+    setShowRerankSection(enableRerank);
+    setShowInstructionAwareSection(enableInstructionAwareRerank);
+    setShowRouterSection(enableRouter);
+    setShowVerifierSection(enableVerifier);
     setIsModalOpen(true);
   };
 
@@ -515,17 +527,29 @@ export default function RetrieversSection() {
       query_type: formData.queryType,
     };
 
-    // Build router config
-    let router: RouterModel | undefined;
-    if (formData.enableRouter) {
-      router = {
-        model: formData.routerModelRef || undefined,
-        default_mode: formData.routerDefaultMode,
-        auto_bypass: formData.routerAutoBypass,
-      };
+    // Build rerank config (FlashRank/Databricks only - no instruction_aware here)
+    let rerank: RerankParametersModel | boolean | undefined;
+    if (formData.enableRerank) {
+      if (formData.rerankMode === 'default') {
+        // Simple mode: just enable with defaults
+        rerank = true;
+      } else {
+        // Custom mode: full configuration
+        const rerankColumns = formData.rerankColumns
+          .split(',')
+          .map(c => c.trim())
+          .filter(c => c.length > 0);
+        
+        rerank = {
+          model: formData.rerankModel || undefined,
+          top_n: formData.rerankTopN ? parseInt(formData.rerankTopN) : undefined,
+          cache_dir: formData.rerankCacheDir || undefined,
+          columns: rerankColumns.length > 0 ? rerankColumns : undefined,
+        };
+      }
     }
 
-    // Build instructed config
+    // Build instructed config with nested decomposition, rerank, router, verifier
     let instructed: InstructedRetrieverModel | undefined;
     if (formData.enableInstructed && formData.instructedSchemaDescription) {
       const instructedColumnsArr: ColumnInfo[] = formData.instructedColumns
@@ -555,69 +579,68 @@ export default function RetrieversSection() {
           return { query: ex.query.trim(), filters };
         });
       
-      instructed = {
-        decomposition_model: formData.instructedModelRef || undefined,
-        schema_description: formData.instructedSchemaDescription,
-        columns: instructedColumnsArr.length > 0 ? instructedColumnsArr : undefined,
-        constraints: constraintsArr.length > 0 ? constraintsArr : undefined,
+      // Build nested decomposition config
+      const hasDecompositionFields = formData.instructedModelRef || 
+        examplesArr.length > 0 || 
+        formData.instructedNormalizeFilterCase ||
+        parseInt(formData.instructedMaxSubqueries) !== 3 ||
+        parseInt(formData.instructedRrfK) !== 60;
+      
+      const decomposition: DecompositionModel | undefined = hasDecompositionFields ? {
+        model: formData.instructedModelRef || undefined,
         max_subqueries: parseInt(formData.instructedMaxSubqueries) || 3,
         rrf_k: parseInt(formData.instructedRrfK) || 60,
         examples: examplesArr.length > 0 ? examplesArr : undefined,
         normalize_filter_case: formData.instructedNormalizeFilterCase || undefined,
-      };
-    }
+      } : undefined;
 
-    // Build verifier config
-    let verifier: VerifierModel | undefined;
-    if (formData.enableVerifier) {
-      verifier = {
-        model: formData.verifierModelRef || undefined,
-        on_failure: formData.verifierOnFailure,
-        max_retries: parseInt(formData.verifierMaxRetries) || 1,
-      };
-    }
-
-    // Build rerank config
-    let rerank: RerankParametersModel | boolean | undefined;
-    if (formData.enableRerank) {
-      if (formData.rerankMode === 'default') {
-        // Simple mode: just enable with defaults
-        rerank = true;
-      } else {
-        // Custom mode: full configuration
-        const rerankColumns = formData.rerankColumns
-          .split(',')
-          .map(c => c.trim())
-          .filter(c => c.length > 0);
-        
-        // Build instruction-aware rerank config
-        let instruction_aware: InstructionAwareRerankModel | undefined;
-        if (formData.enableInstructionAwareRerank) {
-          instruction_aware = {
-            model: formData.instructionAwareModelRef || undefined,
-            instructions: formData.instructionAwareInstructions || undefined,
-            top_n: formData.instructionAwareTopN ? parseInt(formData.instructionAwareTopN) : undefined,
-          };
-        }
-        
-        rerank = {
-          model: formData.rerankModel || undefined,
-          top_n: formData.rerankTopN ? parseInt(formData.rerankTopN) : undefined,
-          cache_dir: formData.rerankCacheDir || undefined,
-          columns: rerankColumns.length > 0 ? rerankColumns : undefined,
-          instruction_aware,
+      // Build instruction-aware rerank config (nested under instructed)
+      let instructedRerank: InstructionAwareRerankModel | undefined;
+      if (formData.enableInstructionAwareRerank) {
+        instructedRerank = {
+          model: formData.instructionAwareModelRef || undefined,
+          instructions: formData.instructionAwareInstructions || undefined,
+          top_n: formData.instructionAwareTopN ? parseInt(formData.instructionAwareTopN) : undefined,
         };
       }
+
+      // Build router config (nested under instructed)
+      let router: RouterModel | undefined;
+      if (formData.enableRouter) {
+        router = {
+          model: formData.routerModelRef || undefined,
+          default_mode: formData.routerDefaultMode,
+          auto_bypass: formData.routerAutoBypass,
+        };
+      }
+
+      // Build verifier config (nested under instructed)
+      let verifier: VerifierModel | undefined;
+      if (formData.enableVerifier) {
+        verifier = {
+          model: formData.verifierModelRef || undefined,
+          on_failure: formData.verifierOnFailure,
+          max_retries: parseInt(formData.verifierMaxRetries) || 1,
+        };
+      }
+
+      instructed = {
+        schema_description: formData.instructedSchemaDescription,
+        columns: instructedColumnsArr.length > 0 ? instructedColumnsArr : undefined,
+        constraints: constraintsArr.length > 0 ? constraintsArr : undefined,
+        decomposition,
+        rerank: instructedRerank,
+        router,
+        verifier,
+      };
     }
 
     const retriever: RetrieverModel = {
       vector_store: vectorStore,
       columns: columns.length > 0 ? columns : undefined,
       search_parameters: searchParameters,
-      router,
       rerank,
       instructed,
-      verifier,
     };
 
     if (editingKey && editingKey !== formData.refName) {
@@ -638,7 +661,17 @@ export default function RetrieversSection() {
     const { name, value, type } = e.target;
     
     if (type === 'checkbox') {
-      setFormData(prev => ({ ...prev, [name]: (e.target as HTMLInputElement).checked }));
+      const checked = (e.target as HTMLInputElement).checked;
+      setFormData(prev => {
+        const updated = { ...prev, [name]: checked };
+        // Auto-enable Instructed Retrieval when enabling dependent features
+        if (checked && (name === 'enableInstructionAwareRerank' || name === 'enableRouter' || name === 'enableVerifier')) {
+          updated.enableInstructed = true;
+          // Auto-expand the Instructed Retrieval section so user can fill in schema
+          setShowAdvanced(true);
+        }
+        return updated;
+      });
     } else {
       setFormData(prev => ({ ...prev, [name]: value }));
     }
@@ -804,6 +837,26 @@ export default function RetrieversSection() {
                     {retriever.rerank && (
                       <Badge variant="success">
                         Rerank
+                      </Badge>
+                    )}
+                    {retriever.instructed && (
+                      <Badge variant="info">
+                        Instructed
+                      </Badge>
+                    )}
+                    {retriever.instructed?.rerank && (
+                      <Badge variant="info">
+                        LLM Rerank
+                      </Badge>
+                    )}
+                    {retriever.instructed?.router && (
+                      <Badge variant="info">
+                        Router
+                      </Badge>
+                    )}
+                    {retriever.instructed?.verifier && (
+                      <Badge variant="info">
+                        Verifier
                       </Badge>
                     )}
                   </div>
@@ -1138,116 +1191,163 @@ export default function RetrieversSection() {
             </p>
           </div>
 
-          {/* Advanced Retrieval Options */}
+          {/* ── Instructed Retrieval ── */}
           <div className="space-y-4">
-            <button
-              type="button"
-              onClick={() => setShowAdvanced(!showAdvanced)}
-              className="flex items-center gap-2 text-sm font-medium text-slate-300 border-b border-slate-700 pb-2 w-full hover:text-slate-100 transition-colors"
-            >
-              {showAdvanced ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-              <Zap className="w-4 h-4 text-amber-400" />
-              Advanced Retrieval Options
-              {(formData.enableRouter || formData.enableInstructed || formData.enableVerifier) && (
-                <Badge variant="info" className="ml-2">
-                  {[formData.enableRouter && 'Router', formData.enableInstructed && 'Instructed', formData.enableVerifier && 'Verifier'].filter(Boolean).join(', ')}
-                </Badge>
-              )}
-            </button>
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                className="flex items-center gap-2 text-sm font-medium text-slate-300 border-b border-slate-700 pb-2 flex-1 hover:text-slate-100 transition-colors"
+              >
+                {showAdvanced ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                <Zap className="w-4 h-4 text-amber-400" />
+                Instructed Retrieval
+                {formData.enableInstructed && (
+                  <Badge variant="info" className="ml-2">
+                    {[
+                      'Enabled',
+                      formData.enableInstructionAwareRerank && 'Rerank',
+                      formData.enableRouter && 'Router',
+                      formData.enableVerifier && 'Verifier',
+                    ].filter(Boolean).join(', ')}
+                  </Badge>
+                )}
+              </button>
+              <label className="flex items-center gap-2 text-sm border-b border-slate-700 pb-2 pl-3">
+                <input
+                  type="checkbox"
+                  name="enableInstructed"
+                  checked={formData.enableInstructed}
+                  onChange={handleChange}
+                  className="rounded border-slate-600 bg-slate-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-slate-800"
+                />
+                <span className="text-slate-400">Enable</span>
+              </label>
+            </div>
 
-            {showAdvanced && (
+            {showAdvanced && formData.enableInstructed && (
               <div className="space-y-4 pl-4 border-l-2 border-amber-500/30">
-                {/* Router Section */}
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <button
-                      type="button"
-                      onClick={() => setShowRouterSection(!showRouterSection)}
-                      className="flex items-center gap-2 text-sm font-medium text-slate-300 hover:text-slate-100"
-                    >
-                      {showRouterSection ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                      <Route className="w-4 h-4 text-blue-400" />
-                      Query Router
-                    </button>
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        name="enableRouter"
-                        checked={formData.enableRouter}
-                        onChange={handleChange}
-                        className="rounded border-slate-600 bg-slate-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-slate-800"
-                      />
-                      <span className="text-slate-400">Enable</span>
-                    </label>
-                  </div>
+                <p className="text-xs text-slate-500">
+                  Schema-aware, LLM-driven features: query decomposition, instruction-aware reranking, query routing, and result verification.
+                </p>
 
-                  {showRouterSection && formData.enableRouter && (
-                    <div className="space-y-3 p-3 bg-slate-800/30 rounded-lg border border-slate-700/50">
-                      <p className="text-xs text-slate-500 mb-3">
-                        Routes queries to standard or instructed execution mode based on query characteristics.
-                      </p>
-                      <div className="grid grid-cols-2 gap-3">
-                        <Select
-                          label="Router Model"
-                          value={formData.routerModelRef}
-                          onChange={(e) => setFormData(prev => ({ ...prev, routerModelRef: e.target.value }))}
-                          options={[
-                            { value: '', label: 'Select LLM...' },
-                            ...llmOptions,
-                          ]}
-                          hint="Fast model recommended"
-                        />
-                        <Select
-                          label="Default Mode"
-                          value={formData.routerDefaultMode}
-                          onChange={(e) => setFormData(prev => ({ ...prev, routerDefaultMode: e.target.value as "standard" | "instructed" }))}
-                          options={[
-                            { value: 'standard', label: 'Standard' },
-                            { value: 'instructed', label: 'Instructed' },
-                          ]}
-                          hint="Fallback if routing fails"
-                        />
-                      </div>
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          name="routerAutoBypass"
-                          checked={formData.routerAutoBypass}
-                          onChange={handleChange}
-                          className="rounded border-slate-600 bg-slate-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-slate-800"
-                        />
-                        <span className="text-slate-400">Auto-bypass instruction reranker and verifier for standard mode</span>
-                      </label>
+                {/* Schema Description (required) */}
+                <Textarea
+                  label="Schema Description"
+                  name="instructedSchemaDescription"
+                  value={formData.instructedSchemaDescription}
+                  onChange={handleChange}
+                  placeholder="Products table: product_id, brand_name, category, price&#10;Filter operators: {&quot;col&quot;: val}, {&quot;col >&quot;: val}, {&quot;col NOT&quot;: val}"
+                  rows={4}
+                  hint="Column names, types, and valid filter syntax for the LLM (required)"
+                  required
+                />
+
+                <Textarea
+                  label="Default Constraints"
+                  name="instructedConstraints"
+                  value={formData.instructedConstraints}
+                  onChange={handleChange}
+                  placeholder="Prefer recent products&#10;Prioritize exact brand matches"
+                  rows={3}
+                  hint="One constraint per line"
+                />
+
+                {/* Column Info Editor */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-medium text-slate-300">Schema Columns (Optional)</label>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setFormData(prev => ({
+                        ...prev,
+                        instructedColumns: [...prev.instructedColumns, {
+                          id: generateColumnInfoId(),
+                          name: '',
+                          type: 'string',
+                          operators: '',
+                        }],
+                      }))}
+                    >
+                      <Plus className="w-3 h-3 mr-1" />
+                      Add Column
+                    </Button>
+                  </div>
+                  {formData.instructedColumns.length > 0 && (
+                    <div className="space-y-2">
+                      {formData.instructedColumns.map((col, idx) => (
+                        <div key={col.id} className="flex items-center gap-2 p-2 bg-slate-900/50 rounded border border-slate-700/50">
+                          <input
+                            type="text"
+                            value={col.name}
+                            onChange={(e) => {
+                              const updated = [...formData.instructedColumns];
+                              updated[idx] = { ...col, name: e.target.value };
+                              setFormData(prev => ({ ...prev, instructedColumns: updated }));
+                            }}
+                            placeholder="Column name"
+                            className="flex-1 px-2 py-1 bg-slate-800 border border-slate-700 rounded text-sm text-slate-100 placeholder-slate-500"
+                          />
+                          <select
+                            value={col.type}
+                            onChange={(e) => {
+                              const updated = [...formData.instructedColumns];
+                              updated[idx] = { ...col, type: e.target.value as any };
+                              setFormData(prev => ({ ...prev, instructedColumns: updated }));
+                            }}
+                            className="px-2 py-1 bg-slate-800 border border-slate-700 rounded text-sm text-slate-100"
+                          >
+                            <option value="string">string</option>
+                            <option value="number">number</option>
+                            <option value="boolean">boolean</option>
+                            <option value="datetime">datetime</option>
+                          </select>
+                          <input
+                            type="text"
+                            value={col.operators}
+                            onChange={(e) => {
+                              const updated = [...formData.instructedColumns];
+                              updated[idx] = { ...col, operators: e.target.value };
+                              setFormData(prev => ({ ...prev, instructedColumns: updated }));
+                            }}
+                            placeholder="Operators (comma-sep)"
+                            className="w-32 px-2 py-1 bg-slate-800 border border-slate-700 rounded text-sm text-slate-100 placeholder-slate-500"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setFormData(prev => ({
+                              ...prev,
+                              instructedColumns: prev.instructedColumns.filter(c => c.id !== col.id),
+                            }))}
+                            className="p-1 text-slate-400 hover:text-red-400"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
                     </div>
                   )}
+                  <p className="text-xs text-slate-500">
+                    Structured column info improves LLM filter accuracy. Operators: empty for equality, NOT, &lt;, &lt;=, &gt;, &gt;=, LIKE
+                  </p>
                 </div>
 
-                {/* Instructed Retrieval Section */}
+                {/* ── Query Decomposition (nested under instructed) ── */}
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <button
-                      type="button"
-                      onClick={() => setShowInstructedSection(!showInstructedSection)}
-                      className="flex items-center gap-2 text-sm font-medium text-slate-300 hover:text-slate-100"
-                    >
-                      {showInstructedSection ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                      <Zap className="w-4 h-4 text-amber-400" />
-                      Instructed Retrieval
-                    </button>
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        name="enableInstructed"
-                        checked={formData.enableInstructed}
-                        onChange={handleChange}
-                        className="rounded border-slate-600 bg-slate-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-slate-800"
-                      />
-                      <span className="text-slate-400">Enable</span>
-                    </label>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowInstructedSection(!showInstructedSection)}
+                    className="flex items-center gap-2 text-sm font-medium text-slate-300 hover:text-slate-100 transition-colors"
+                  >
+                    {showInstructedSection ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                    <Layers className="w-4 h-4 text-amber-400" />
+                    Query Decomposition
+                  </button>
 
-                  {showInstructedSection && formData.enableInstructed && (
-                    <div className="space-y-4 p-3 bg-slate-800/30 rounded-lg border border-slate-700/50">
+                  {showInstructedSection && (
+                    <div className="space-y-4 pl-4 border-l-2 border-amber-500/20">
                       <p className="text-xs text-slate-500">
                         Decomposes user queries into multiple subqueries with metadata filters and merges results using RRF.
                       </p>
@@ -1276,17 +1376,6 @@ export default function RetrieversSection() {
                         />
                       </div>
 
-                      <Textarea
-                        label="Schema Description"
-                        name="instructedSchemaDescription"
-                        value={formData.instructedSchemaDescription}
-                        onChange={handleChange}
-                        placeholder="Products table: product_id, brand_name, category, price&#10;Filter operators: {&quot;col&quot;: val}, {&quot;col >&quot;: val}, {&quot;col NOT&quot;: val}"
-                        rows={4}
-                        hint="Column names, types, and valid filter syntax for the LLM (required)"
-                        required
-                      />
-
                       <div className="grid grid-cols-2 gap-3">
                         <Input
                           label="Max Subqueries"
@@ -1306,97 +1395,6 @@ export default function RetrieversSection() {
                           placeholder="60"
                           hint="Lower values weight top ranks more"
                         />
-                      </div>
-
-                      <Textarea
-                        label="Default Constraints"
-                        name="instructedConstraints"
-                        value={formData.instructedConstraints}
-                        onChange={handleChange}
-                        placeholder="Prefer recent products&#10;Prioritize exact brand matches"
-                        rows={3}
-                        hint="One constraint per line"
-                      />
-
-                      {/* Column Info Editor */}
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <label className="text-sm font-medium text-slate-300">Schema Columns (Optional)</label>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setFormData(prev => ({
-                              ...prev,
-                              instructedColumns: [...prev.instructedColumns, {
-                                id: generateColumnInfoId(),
-                                name: '',
-                                type: 'string',
-                                operators: '',
-                              }],
-                            }))}
-                          >
-                            <Plus className="w-3 h-3 mr-1" />
-                            Add Column
-                          </Button>
-                        </div>
-                        {formData.instructedColumns.length > 0 && (
-                          <div className="space-y-2">
-                            {formData.instructedColumns.map((col, idx) => (
-                              <div key={col.id} className="flex items-center gap-2 p-2 bg-slate-900/50 rounded border border-slate-700/50">
-                                <input
-                                  type="text"
-                                  value={col.name}
-                                  onChange={(e) => {
-                                    const updated = [...formData.instructedColumns];
-                                    updated[idx] = { ...col, name: e.target.value };
-                                    setFormData(prev => ({ ...prev, instructedColumns: updated }));
-                                  }}
-                                  placeholder="Column name"
-                                  className="flex-1 px-2 py-1 bg-slate-800 border border-slate-700 rounded text-sm text-slate-100 placeholder-slate-500"
-                                />
-                                <select
-                                  value={col.type}
-                                  onChange={(e) => {
-                                    const updated = [...formData.instructedColumns];
-                                    updated[idx] = { ...col, type: e.target.value as any };
-                                    setFormData(prev => ({ ...prev, instructedColumns: updated }));
-                                  }}
-                                  className="px-2 py-1 bg-slate-800 border border-slate-700 rounded text-sm text-slate-100"
-                                >
-                                  <option value="string">string</option>
-                                  <option value="number">number</option>
-                                  <option value="boolean">boolean</option>
-                                  <option value="datetime">datetime</option>
-                                </select>
-                                <input
-                                  type="text"
-                                  value={col.operators}
-                                  onChange={(e) => {
-                                    const updated = [...formData.instructedColumns];
-                                    updated[idx] = { ...col, operators: e.target.value };
-                                    setFormData(prev => ({ ...prev, instructedColumns: updated }));
-                                  }}
-                                  placeholder="Operators (comma-sep)"
-                                  className="w-32 px-2 py-1 bg-slate-800 border border-slate-700 rounded text-sm text-slate-100 placeholder-slate-500"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => setFormData(prev => ({
-                                    ...prev,
-                                    instructedColumns: prev.instructedColumns.filter(c => c.id !== col.id),
-                                  }))}
-                                  className="p-1 text-slate-400 hover:text-red-400"
-                                >
-                                  <X className="w-3 h-3" />
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        <p className="text-xs text-slate-500">
-                          Structured column info improves LLM filter accuracy. Operators: empty for equality, NOT, &lt;, &lt;=, &gt;, &gt;=, LIKE
-                        </p>
                       </div>
 
                       {/* Examples Editor */}
@@ -1470,17 +1468,154 @@ export default function RetrieversSection() {
                   )}
                 </div>
 
-                {/* Verifier Section */}
+                {/* ── Instruction-Aware Reranking (nested under instructed) ── */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={() => setShowInstructionAwareSection(!showInstructionAwareSection)}
+                      className="flex items-center gap-2 text-sm font-medium text-slate-300 hover:text-slate-100 transition-colors"
+                    >
+                      {showInstructionAwareSection ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                      <Sparkles className="w-4 h-4 text-violet-400" />
+                      Instruction-Aware Reranking
+                      {formData.enableInstructionAwareRerank && (
+                        <Badge variant="info" className="ml-1">Enabled</Badge>
+                      )}
+                    </button>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        name="enableInstructionAwareRerank"
+                        checked={formData.enableInstructionAwareRerank}
+                        onChange={handleChange}
+                        className="rounded border-slate-600 bg-slate-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-slate-800"
+                      />
+                      <span className="text-slate-400">Enable</span>
+                    </label>
+                  </div>
+
+                  {showInstructionAwareSection && formData.enableInstructionAwareRerank && (
+                    <div className="space-y-3 pl-4 border-l-2 border-violet-500/30">
+                      <p className="text-xs text-slate-500">
+                        LLM-based reranking that considers user instructions and constraints. Runs after standard reranking.
+                      </p>
+                      <div className="grid grid-cols-2 gap-3">
+                        <Select
+                          label="Reranking Model"
+                          value={formData.instructionAwareModelRef}
+                          onChange={(e) => setFormData(prev => ({ ...prev, instructionAwareModelRef: e.target.value }))}
+                          options={[
+                            { value: '', label: 'Select LLM...' },
+                            ...llmOptions,
+                          ]}
+                          hint="Fast model recommended"
+                        />
+                        <Input
+                          label="Top N Results"
+                          name="instructionAwareTopN"
+                          type="number"
+                          value={formData.instructionAwareTopN}
+                          onChange={handleChange}
+                          placeholder="10"
+                          hint="Number of results after instruction reranking"
+                        />
+                      </div>
+                      <Textarea
+                        label="Reranking Instructions"
+                        name="instructionAwareInstructions"
+                        value={formData.instructionAwareInstructions}
+                        onChange={handleChange}
+                        placeholder="Prioritize results matching price and brand constraints."
+                        rows={3}
+                        hint="Custom instructions for constraint prioritization"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* ── Query Router (nested under instructed) ── */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={() => setShowRouterSection(!showRouterSection)}
+                      className="flex items-center gap-2 text-sm font-medium text-slate-300 hover:text-slate-100 transition-colors"
+                    >
+                      {showRouterSection ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                      <Route className="w-4 h-4 text-blue-400" />
+                      Query Router
+                      {formData.enableRouter && (
+                        <Badge variant="info" className="ml-1">Enabled</Badge>
+                      )}
+                    </button>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        name="enableRouter"
+                        checked={formData.enableRouter}
+                        onChange={handleChange}
+                        className="rounded border-slate-600 bg-slate-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-slate-800"
+                      />
+                      <span className="text-slate-400">Enable</span>
+                    </label>
+                  </div>
+
+                  {showRouterSection && formData.enableRouter && (
+                    <div className="space-y-3 pl-4 border-l-2 border-blue-500/30">
+                      <p className="text-xs text-slate-500">
+                        Routes queries to standard or instructed execution mode based on query characteristics.
+                      </p>
+                      <div className="grid grid-cols-2 gap-3">
+                        <Select
+                          label="Router Model"
+                          value={formData.routerModelRef}
+                          onChange={(e) => setFormData(prev => ({ ...prev, routerModelRef: e.target.value }))}
+                          options={[
+                            { value: '', label: 'Select LLM...' },
+                            ...llmOptions,
+                          ]}
+                          hint="Fast model recommended"
+                        />
+                        <Select
+                          label="Default Mode"
+                          value={formData.routerDefaultMode}
+                          onChange={(e) => setFormData(prev => ({ ...prev, routerDefaultMode: e.target.value as "standard" | "instructed" }))}
+                          options={[
+                            { value: 'standard', label: 'Standard' },
+                            { value: 'instructed', label: 'Instructed' },
+                          ]}
+                          hint="Fallback if routing fails"
+                        />
+                      </div>
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          name="routerAutoBypass"
+                          checked={formData.routerAutoBypass}
+                          onChange={handleChange}
+                          className="rounded border-slate-600 bg-slate-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-slate-800"
+                        />
+                        <span className="text-slate-400">Auto-bypass instruction reranker and verifier for standard mode</span>
+                      </label>
+                    </div>
+                  )}
+                </div>
+
+                {/* ── Result Verifier (nested under instructed) ── */}
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <button
                       type="button"
                       onClick={() => setShowVerifierSection(!showVerifierSection)}
-                      className="flex items-center gap-2 text-sm font-medium text-slate-300 hover:text-slate-100"
+                      className="flex items-center gap-2 text-sm font-medium text-slate-300 hover:text-slate-100 transition-colors"
                     >
                       {showVerifierSection ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                       <CheckCircle className="w-4 h-4 text-green-400" />
                       Result Verifier
+                      {formData.enableVerifier && (
+                        <Badge variant="info" className="ml-1">Enabled</Badge>
+                      )}
                     </button>
                     <label className="flex items-center gap-2 text-sm">
                       <input
@@ -1495,8 +1630,8 @@ export default function RetrieversSection() {
                   </div>
 
                   {showVerifierSection && formData.enableVerifier && (
-                    <div className="space-y-3 p-3 bg-slate-800/30 rounded-lg border border-slate-700/50">
-                      <p className="text-xs text-slate-500 mb-3">
+                    <div className="space-y-3 pl-4 border-l-2 border-green-500/30">
+                      <p className="text-xs text-slate-500">
                         Validates search results against user constraints with structured feedback for retry.
                       </p>
                       <div className="grid grid-cols-3 gap-3">
@@ -1538,13 +1673,22 @@ export default function RetrieversSection() {
             )}
           </div>
 
-          {/* Reranking */}
+          {/* ── Standard Reranking ── */}
           <div className="space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-700 pb-2">
-              <h3 className="text-sm font-medium text-slate-300">
-                Reranking (Optional)
-              </h3>
-              <label className="flex items-center gap-2 text-sm">
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setShowRerankSection(!showRerankSection)}
+                className="flex items-center gap-2 text-sm font-medium text-slate-300 border-b border-slate-700 pb-2 flex-1 hover:text-slate-100 transition-colors"
+              >
+                {showRerankSection ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                <ArrowUpDown className="w-4 h-4 text-slate-400" />
+                Standard Reranking
+                {formData.enableRerank && (
+                  <Badge variant="success" className="ml-2">Enabled</Badge>
+                )}
+              </button>
+              <label className="flex items-center gap-2 text-sm border-b border-slate-700 pb-2 pl-3">
                 <input
                   type="checkbox"
                   name="enableRerank"
@@ -1552,12 +1696,12 @@ export default function RetrieversSection() {
                   onChange={handleChange}
                   className="rounded border-slate-600 bg-slate-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-slate-800"
                 />
-                <span className="text-slate-400">Enable reranking</span>
+                <span className="text-slate-400">Enable</span>
               </label>
             </div>
             
-            {formData.enableRerank && (
-              <div className="space-y-4 pl-4 border-l-2 border-slate-700">
+            {showRerankSection && formData.enableRerank && (
+              <div className="space-y-4 pl-4 border-l-2 border-slate-600">
                 {/* Mode selector */}
                 <div className="flex gap-4 mb-4">
                   <label className="flex items-center gap-2 cursor-pointer">
@@ -1674,64 +1818,6 @@ export default function RetrieversSection() {
                   placeholder="~/.dao_ai/cache/flashrank"
                   hint="Directory to cache downloaded model weights"
                 />
-
-                {/* Instruction-Aware Reranking */}
-                <div className="mt-4 pt-4 border-t border-slate-700/50 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-sm font-medium text-slate-300 flex items-center gap-2">
-                      <Zap className="w-4 h-4 text-amber-400" />
-                      Instruction-Aware Reranking
-                    </h4>
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        name="enableInstructionAwareRerank"
-                        checked={formData.enableInstructionAwareRerank}
-                        onChange={handleChange}
-                        className="rounded border-slate-600 bg-slate-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-slate-800"
-                      />
-                      <span className="text-slate-400">Enable</span>
-                    </label>
-                  </div>
-
-                  {formData.enableInstructionAwareRerank && (
-                    <div className="space-y-3 p-3 bg-slate-800/30 rounded-lg border border-slate-700/50">
-                      <p className="text-xs text-slate-500">
-                        LLM-based reranking that considers user instructions and constraints. Runs after FlashRank.
-                      </p>
-                      <div className="grid grid-cols-2 gap-3">
-                        <Select
-                          label="Reranking Model"
-                          value={formData.instructionAwareModelRef}
-                          onChange={(e) => setFormData(prev => ({ ...prev, instructionAwareModelRef: e.target.value }))}
-                          options={[
-                            { value: '', label: 'Select LLM...' },
-                            ...llmOptions,
-                          ]}
-                          hint="Fast model recommended"
-                        />
-                        <Input
-                          label="Top N Results"
-                          name="instructionAwareTopN"
-                          type="number"
-                          value={formData.instructionAwareTopN}
-                          onChange={handleChange}
-                          placeholder="10"
-                          hint="Number of results after instruction reranking"
-                        />
-                      </div>
-                      <Textarea
-                        label="Reranking Instructions"
-                        name="instructionAwareInstructions"
-                        value={formData.instructionAwareInstructions}
-                        onChange={handleChange}
-                        placeholder="Prioritize results matching price and brand constraints."
-                        rows={3}
-                        hint="Custom instructions for constraint prioritization"
-                      />
-                    </div>
-                  )}
-                </div>
                   </>
                 )}
               </div>

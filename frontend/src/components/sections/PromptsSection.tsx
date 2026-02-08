@@ -115,6 +115,7 @@ export default function PromptsSection() {
     schema_name: '',
     tags: {} as Record<string, string>,
     existingPromptFullName: '', // Full name of selected existing prompt
+    autoRegister: false,
   });
   const [newTagKey, setNewTagKey] = useState('');
   const [newTagValue, setNewTagValue] = useState('');
@@ -406,6 +407,7 @@ export default function PromptsSection() {
       schema_name: '',
       tags: {},
       existingPromptFullName: '',
+      autoRegister: false,
     });
     setPromptSource('new');
     setSchemaSource('reference');
@@ -501,6 +503,7 @@ export default function PromptsSection() {
       schema_name,
       tags: prompt.tags || {},
       existingPromptFullName: '',
+      autoRegister: prompt.auto_register ?? false,
     });
     setEditingKey(key);
     setIsModalOpen(true);
@@ -591,6 +594,7 @@ export default function PromptsSection() {
         version: registeredVersion ?? (formData.version ? parseInt(formData.version) : undefined),
       }),
       tags: Object.keys(formData.tags).length > 0 ? formData.tags : undefined,
+      auto_register: formData.autoRegister || undefined,
       // Note: service_principal is used for authentication when fetching prompts,
       // but should not be saved as part of the prompt configuration
     };
@@ -1165,6 +1169,25 @@ export default function PromptsSection() {
               </div>
             </div>
           )}
+
+          {/* Auto Register Toggle */}
+          <div className="flex items-center space-x-3 p-3 bg-slate-800/50 rounded-lg">
+            <input
+              type="checkbox"
+              id="autoRegister"
+              checked={formData.autoRegister}
+              onChange={(e) => setFormData({ ...formData, autoRegister: e.target.checked })}
+              className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-violet-500 focus:ring-violet-500 focus:ring-offset-0"
+            />
+            <div>
+              <label htmlFor="autoRegister" className="text-sm font-medium text-slate-300 cursor-pointer">
+                Auto Register
+              </label>
+              <p className="text-xs text-slate-500">
+                Automatically register this prompt in MLflow when the application starts
+              </p>
+            </div>
+          </div>
 
           {/* Schema Selection - Only show for new prompts */}
           {promptSource === 'new' && (

@@ -647,9 +647,11 @@ function formatModelReference(model: any, definedLLMs: Record<string, any>, base
     // Not a reference, return the full model object
     return {
       name: model.name,
+      ...(model.description && { description: model.description }),
       ...(model.temperature !== undefined && { temperature: model.temperature }),
       ...(model.max_tokens !== undefined && { max_tokens: model.max_tokens }),
       ...(model.on_behalf_of_user !== undefined && { on_behalf_of_user: model.on_behalf_of_user }),
+      ...(model.use_responses_api !== undefined && { use_responses_api: model.use_responses_api }),
       ...(model.fallbacks && model.fallbacks.length > 0 && { fallbacks: model.fallbacks }),
     };
   }
@@ -1686,9 +1688,11 @@ export function generateYAML(config: AppConfig): string {
         
         yamlConfig.resources.llms[key] = {
           name: llm.name,
+          ...(llm.description && { description: llm.description }),
           ...(llm.temperature !== undefined && { temperature: llm.temperature }),
           ...(llm.max_tokens !== undefined && { max_tokens: llm.max_tokens }),
           ...(llm.on_behalf_of_user !== undefined && { on_behalf_of_user: llm.on_behalf_of_user }),
+          ...(llm.use_responses_api !== undefined && { use_responses_api: llm.use_responses_api }),
           ...(formattedFallbacks && formattedFallbacks.length > 0 && { fallbacks: formattedFallbacks }),
           ...formatResourceAuth(llm, `resources.llms.${key}`),
         };
@@ -1916,31 +1920,7 @@ export function generateYAML(config: AppConfig): string {
         retrieverConfig.search_parameters = searchParams;
       }
       
-      // Handle router configuration
-      if (retriever.router) {
-        const routerConfig: Record<string, any> = {};
-        if (retriever.router.model) {
-          // Check for LLM reference
-          const modelRef = typeof retriever.router.model === 'string' 
-            ? retriever.router.model 
-            : retriever.router.model?.name;
-          if (modelRef) {
-            const llmRef = findOriginalReference(`retrievers.${key}.router.model`, retriever.router.model);
-            routerConfig.model = llmRef ? createReference(llmRef) : createReference(modelRef);
-          }
-        }
-        if (retriever.router.default_mode) {
-          routerConfig.default_mode = retriever.router.default_mode;
-        }
-        if (retriever.router.auto_bypass !== undefined) {
-          routerConfig.auto_bypass = retriever.router.auto_bypass;
-        }
-        if (Object.keys(routerConfig).length > 0) {
-          retrieverConfig.router = routerConfig;
-        }
-      }
-
-      // Handle rerank configuration
+      // Handle rerank configuration (FlashRank/Databricks only - no instruction_aware)
       if (retriever.rerank) {
         if (typeof retriever.rerank === 'boolean') {
           retrieverConfig.rerank = retriever.rerank;
@@ -1952,48 +1932,15 @@ export function generateYAML(config: AppConfig): string {
             ...(retriever.rerank.columns && retriever.rerank.columns.length > 0 && { columns: retriever.rerank.columns }),
           };
           
-          // Handle instruction_aware configuration
-          if (retriever.rerank.instruction_aware) {
-            const iaConfig: Record<string, any> = {};
-            if (retriever.rerank.instruction_aware.model) {
-              const modelRef = typeof retriever.rerank.instruction_aware.model === 'string'
-                ? retriever.rerank.instruction_aware.model
-                : retriever.rerank.instruction_aware.model?.name;
-              if (modelRef) {
-                const llmRef = findOriginalReference(`retrievers.${key}.rerank.instruction_aware.model`, retriever.rerank.instruction_aware.model);
-                iaConfig.model = llmRef ? createReference(llmRef) : createReference(modelRef);
-              }
-            }
-            if (retriever.rerank.instruction_aware.instructions) {
-              iaConfig.instructions = retriever.rerank.instruction_aware.instructions;
-            }
-            if (retriever.rerank.instruction_aware.top_n !== undefined) {
-              iaConfig.top_n = retriever.rerank.instruction_aware.top_n;
-            }
-            if (Object.keys(iaConfig).length > 0) {
-              rerankConfig.instruction_aware = iaConfig;
-            }
-          }
-          
           retrieverConfig.rerank = rerankConfig;
         }
       }
 
-      // Handle instructed retrieval configuration
+      // Handle instructed retrieval configuration (nested decomposition, rerank, router, verifier)
       if (retriever.instructed) {
         const instructedConfig: Record<string, any> = {
           schema_description: retriever.instructed.schema_description,
         };
-        
-        if (retriever.instructed.decomposition_model) {
-          const modelRef = typeof retriever.instructed.decomposition_model === 'string'
-            ? retriever.instructed.decomposition_model
-            : retriever.instructed.decomposition_model?.name;
-          if (modelRef) {
-            const llmRef = findOriginalReference(`retrievers.${key}.instructed.decomposition_model`, retriever.instructed.decomposition_model);
-            instructedConfig.decomposition_model = llmRef ? createReference(llmRef) : createReference(modelRef);
-          }
-        }
         
         if (retriever.instructed.columns && retriever.instructed.columns.length > 0) {
           instructedConfig.columns = retriever.instructed.columns.map(col => ({
@@ -2007,50 +1954,115 @@ export function generateYAML(config: AppConfig): string {
           instructedConfig.constraints = retriever.instructed.constraints;
         }
         
-        if (retriever.instructed.max_subqueries !== undefined && retriever.instructed.max_subqueries !== 3) {
-          instructedConfig.max_subqueries = retriever.instructed.max_subqueries;
-        }
-        
-        if (retriever.instructed.rrf_k !== undefined && retriever.instructed.rrf_k !== 60) {
-          instructedConfig.rrf_k = retriever.instructed.rrf_k;
-        }
-        
-        if (retriever.instructed.examples && retriever.instructed.examples.length > 0) {
-          instructedConfig.examples = retriever.instructed.examples;
-        }
-        
-        if (retriever.instructed.normalize_filter_case) {
-          instructedConfig.normalize_filter_case = retriever.instructed.normalize_filter_case;
-        }
-        
-        retrieverConfig.instructed = instructedConfig;
-      }
-
-      // Handle verifier configuration
-      if (retriever.verifier) {
-        const verifierConfig: Record<string, any> = {};
-        
-        if (retriever.verifier.model) {
-          const modelRef = typeof retriever.verifier.model === 'string'
-            ? retriever.verifier.model
-            : retriever.verifier.model?.name;
-          if (modelRef) {
-            const llmRef = findOriginalReference(`retrievers.${key}.verifier.model`, retriever.verifier.model);
-            verifierConfig.model = llmRef ? createReference(llmRef) : createReference(modelRef);
+        // Handle nested decomposition configuration
+        if (retriever.instructed.decomposition) {
+          const decompositionConfig: Record<string, any> = {};
+          
+          if (retriever.instructed.decomposition.model) {
+            const modelRef = typeof retriever.instructed.decomposition.model === 'string'
+              ? retriever.instructed.decomposition.model
+              : retriever.instructed.decomposition.model?.name;
+            if (modelRef) {
+              const llmRef = findOriginalReference(`retrievers.${key}.instructed.decomposition.model`, retriever.instructed.decomposition.model);
+              decompositionConfig.model = llmRef ? createReference(llmRef) : createReference(modelRef);
+            }
+          }
+          
+          if (retriever.instructed.decomposition.normalize_filter_case) {
+            decompositionConfig.normalize_filter_case = retriever.instructed.decomposition.normalize_filter_case;
+          }
+          
+          if (retriever.instructed.decomposition.max_subqueries !== undefined && retriever.instructed.decomposition.max_subqueries !== 3) {
+            decompositionConfig.max_subqueries = retriever.instructed.decomposition.max_subqueries;
+          }
+          
+          if (retriever.instructed.decomposition.rrf_k !== undefined && retriever.instructed.decomposition.rrf_k !== 60) {
+            decompositionConfig.rrf_k = retriever.instructed.decomposition.rrf_k;
+          }
+          
+          if (retriever.instructed.decomposition.examples && retriever.instructed.decomposition.examples.length > 0) {
+            decompositionConfig.examples = retriever.instructed.decomposition.examples;
+          }
+          
+          if (Object.keys(decompositionConfig).length > 0) {
+            instructedConfig.decomposition = decompositionConfig;
           }
         }
         
-        if (retriever.verifier.on_failure) {
-          verifierConfig.on_failure = retriever.verifier.on_failure;
+        // Handle instruction-aware reranking (nested under instructed.rerank)
+        if (retriever.instructed.rerank) {
+          const iaConfig: Record<string, any> = {};
+          if (retriever.instructed.rerank.model) {
+            const modelRef = typeof retriever.instructed.rerank.model === 'string'
+              ? retriever.instructed.rerank.model
+              : retriever.instructed.rerank.model?.name;
+            if (modelRef) {
+              const llmRef = findOriginalReference(`retrievers.${key}.instructed.rerank.model`, retriever.instructed.rerank.model);
+              iaConfig.model = llmRef ? createReference(llmRef) : createReference(modelRef);
+            }
+          }
+          if (retriever.instructed.rerank.instructions) {
+            iaConfig.instructions = retriever.instructed.rerank.instructions;
+          }
+          if (retriever.instructed.rerank.top_n !== undefined) {
+            iaConfig.top_n = retriever.instructed.rerank.top_n;
+          }
+          if (Object.keys(iaConfig).length > 0) {
+            instructedConfig.rerank = iaConfig;
+          }
         }
         
-        if (retriever.verifier.max_retries !== undefined) {
-          verifierConfig.max_retries = retriever.verifier.max_retries;
+        // Handle router configuration (nested under instructed.router)
+        if (retriever.instructed.router) {
+          const routerConfig: Record<string, any> = {};
+          if (retriever.instructed.router.model) {
+            const modelRef = typeof retriever.instructed.router.model === 'string' 
+              ? retriever.instructed.router.model 
+              : retriever.instructed.router.model?.name;
+            if (modelRef) {
+              const llmRef = findOriginalReference(`retrievers.${key}.instructed.router.model`, retriever.instructed.router.model);
+              routerConfig.model = llmRef ? createReference(llmRef) : createReference(modelRef);
+            }
+          }
+          if (retriever.instructed.router.default_mode) {
+            routerConfig.default_mode = retriever.instructed.router.default_mode;
+          }
+          if (retriever.instructed.router.auto_bypass !== undefined) {
+            routerConfig.auto_bypass = retriever.instructed.router.auto_bypass;
+          }
+          if (Object.keys(routerConfig).length > 0) {
+            instructedConfig.router = routerConfig;
+          }
         }
         
-        if (Object.keys(verifierConfig).length > 0) {
-          retrieverConfig.verifier = verifierConfig;
+        // Handle verifier configuration (nested under instructed.verifier)
+        if (retriever.instructed.verifier) {
+          const verifierConfig: Record<string, any> = {};
+          
+          if (retriever.instructed.verifier.model) {
+            const modelRef = typeof retriever.instructed.verifier.model === 'string'
+              ? retriever.instructed.verifier.model
+              : retriever.instructed.verifier.model?.name;
+            if (modelRef) {
+              const llmRef = findOriginalReference(`retrievers.${key}.instructed.verifier.model`, retriever.instructed.verifier.model);
+              verifierConfig.model = llmRef ? createReference(llmRef) : createReference(modelRef);
+            }
+          }
+          
+          if (retriever.instructed.verifier.on_failure) {
+            verifierConfig.on_failure = retriever.instructed.verifier.on_failure;
+          }
+          
+          if (retriever.instructed.verifier.max_retries !== undefined) {
+            verifierConfig.max_retries = retriever.instructed.verifier.max_retries;
+          }
+          
+          if (Object.keys(verifierConfig).length > 0) {
+            instructedConfig.verifier = verifierConfig;
+          }
         }
+        
+        retrieverConfig.instructed = instructedConfig;
       }
       
       yamlConfig.retrievers[key] = retrieverConfig;
@@ -2187,6 +2199,7 @@ export function generateYAML(config: AppConfig): string {
         ...(hasAlias && { alias: prompt.alias }),
         ...(!hasAlias && prompt.version !== undefined && { version: prompt.version }),
         ...(prompt.tags && Object.keys(prompt.tags).length > 0 && { tags: prompt.tags }),
+        ...(prompt.auto_register !== undefined && { auto_register: prompt.auto_register }),
       };
     });
   }
@@ -2556,6 +2569,7 @@ export function generateYAML(config: AppConfig): string {
     
     yamlConfig.app = {
       name: config.app.name,
+      ...(config.app.alias && { alias: config.app.alias }),
       registered_model: registeredModel,
       ...(config.app.description && { description: config.app.description }),
       ...(config.app.log_level && { log_level: config.app.log_level }),
@@ -2565,11 +2579,18 @@ export function generateYAML(config: AppConfig): string {
       ...((config.app.deployment_target === 'model_serving' || !config.app.deployment_target) && config.app.endpoint_name && { endpoint_name: config.app.endpoint_name }),
       ...((config.app.deployment_target === 'model_serving' || !config.app.deployment_target) && config.app.workload_size && { workload_size: config.app.workload_size }),
       ...((config.app.deployment_target === 'model_serving' || !config.app.deployment_target) && config.app.scale_to_zero !== undefined && { scale_to_zero: config.app.scale_to_zero }),
+      ...(config.app.python_version && { python_version: config.app.python_version }),
+      ...(config.app.budget_policy_id && { budget_policy_id: config.app.budget_policy_id }),
       ...(config.app.environment_vars && Object.keys(config.app.environment_vars).length > 0 && { 
         environment_vars: formatEnvironmentVars(config.app.environment_vars, config.variables || {}) 
       }),
       ...(config.app.tags && Object.keys(config.app.tags).length > 0 && { tags: config.app.tags }),
       ...(config.app.permissions && config.app.permissions.length > 0 && { permissions: config.app.permissions }),
+      ...(config.app.initialization_hooks && config.app.initialization_hooks.length > 0 && { initialization_hooks: config.app.initialization_hooks }),
+      ...(config.app.shutdown_hooks && config.app.shutdown_hooks.length > 0 && { shutdown_hooks: config.app.shutdown_hooks }),
+      ...(config.app.input_example && { input_example: config.app.input_example }),
+      ...(config.app.code_paths && config.app.code_paths.length > 0 && { code_paths: config.app.code_paths }),
+      ...(config.app.pip_requirements && config.app.pip_requirements.length > 0 && { pip_requirements: config.app.pip_requirements }),
       ...(appAgentsValue && appAgentsValue.length > 0 && { agents: appAgentsValue }),
     };
     
