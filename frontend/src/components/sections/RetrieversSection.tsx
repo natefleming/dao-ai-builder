@@ -65,6 +65,7 @@ interface ColumnInfoEntry {
   name: string;
   type: "string" | "number" | "boolean" | "datetime";
   operators: string;  // Comma-separated
+  description: string;  // Human-readable description for LLM context
 }
 
 // Example entry for instructed retrieval
@@ -89,7 +90,6 @@ interface FormData {
   // Instructed retrieval settings
   enableInstructed: boolean;
   instructedModelRef: string;
-  instructedSchemaDescription: string;
   instructedColumns: ColumnInfoEntry[];
   instructedConstraints: string;  // Newline-separated
   instructedMaxSubqueries: string;
@@ -149,7 +149,6 @@ export default function RetrieversSection() {
     // Instructed
     enableInstructed: false,
     instructedModelRef: '',
-    instructedSchemaDescription: '',
     instructedColumns: [],
     instructedConstraints: '',
     instructedMaxSubqueries: '3',
@@ -209,7 +208,6 @@ export default function RetrieversSection() {
       // Instructed
       enableInstructed: false,
       instructedModelRef: '',
-      instructedSchemaDescription: '',
       instructedColumns: [],
       instructedConstraints: '',
       instructedMaxSubqueries: '3',
@@ -313,7 +311,6 @@ export default function RetrieversSection() {
     // Handle instructed retrieval settings (decomposition is nested)
     let enableInstructed = false;
     let instructedModelRef = '';
-    let instructedSchemaDescription = '';
     let instructedColumns: ColumnInfoEntry[] = [];
     let instructedConstraints = '';
     let instructedMaxSubqueries = '3';
@@ -323,12 +320,12 @@ export default function RetrieversSection() {
     
     if (retriever.instructed) {
       enableInstructed = true;
-      instructedSchemaDescription = retriever.instructed.schema_description || '';
       instructedColumns = (retriever.instructed.columns || []).map(col => ({
         id: generateColumnInfoId(),
         name: col.name,
         type: col.type || 'string',
         operators: col.operators?.join(', ') || '',
+        description: col.description || '',
       }));
       instructedConstraints = (retriever.instructed.constraints || []).join('\n');
       // Decomposition fields are nested under instructed.decomposition
@@ -451,7 +448,6 @@ export default function RetrieversSection() {
       // Instructed
       enableInstructed,
       instructedModelRef,
-      instructedSchemaDescription,
       instructedColumns,
       instructedConstraints,
       instructedMaxSubqueries,
@@ -550,8 +546,9 @@ export default function RetrieversSection() {
     }
 
     // Build instructed config with nested decomposition, rerank, router, verifier
+    // In dao-ai 0.1.24+, columns is required and is the single source of truth for schema context
     let instructed: InstructedRetrieverModel | undefined;
-    if (formData.enableInstructed && formData.instructedSchemaDescription) {
+    if (formData.enableInstructed && formData.instructedColumns.some(col => col.name.trim())) {
       const instructedColumnsArr: ColumnInfo[] = formData.instructedColumns
         .filter(col => col.name.trim())
         .map(col => ({
@@ -560,6 +557,7 @@ export default function RetrieversSection() {
           operators: col.operators
             ? col.operators.split(',').map(o => o.trim()).filter(o => o)
             : undefined,
+          ...(col.description?.trim() && { description: col.description.trim() }),
         }));
       
       const constraintsArr = formData.instructedConstraints
@@ -625,8 +623,7 @@ export default function RetrieversSection() {
       }
 
       instructed = {
-        schema_description: formData.instructedSchemaDescription,
-        columns: instructedColumnsArr.length > 0 ? instructedColumnsArr : undefined,
+        columns: instructedColumnsArr,
         constraints: constraintsArr.length > 0 ? constraintsArr : undefined,
         decomposition,
         rerank: instructedRerank,
@@ -1379,35 +1376,13 @@ export default function RetrieversSection() {
             {showAdvanced && formData.enableInstructed && (
               <div className="space-y-4 pl-4 border-l-2 border-amber-500/30">
                 <p className="text-xs text-slate-500">
-                  Schema-aware, LLM-driven features: query decomposition, instruction-aware reranking, query routing, and result verification.
+                  Column metadata is the single source of truth for schema context. Each pipeline component (decomposition, routing, verification, reranking) generates the specific context it needs from the structured column data.
                 </p>
 
-                {/* Schema Description (required) */}
-                <Textarea
-                  label="Schema Description"
-                  name="instructedSchemaDescription"
-                  value={formData.instructedSchemaDescription}
-                  onChange={handleChange}
-                  placeholder="Products table: product_id, brand_name, category, price&#10;Filter operators: {&quot;col&quot;: val}, {&quot;col >&quot;: val}, {&quot;col NOT&quot;: val}"
-                  rows={4}
-                  hint="Column names, types, and valid filter syntax for the LLM (required)"
-                  required
-                />
-
-                <Textarea
-                  label="Default Constraints"
-                  name="instructedConstraints"
-                  value={formData.instructedConstraints}
-                  onChange={handleChange}
-                  placeholder="Prefer recent products&#10;Prioritize exact brand matches"
-                  rows={3}
-                  hint="One constraint per line"
-                />
-
-                {/* Column Info Editor */}
+                {/* Column Info Editor (required) */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <label className="text-sm font-medium text-slate-300">Schema Columns (Optional)</label>
+                    <label className="text-sm font-medium text-slate-300">Schema Columns <span className="text-red-400">*</span></label>
                     <Button
                       type="button"
                       variant="ghost"
@@ -1419,6 +1394,7 @@ export default function RetrieversSection() {
                           name: '',
                           type: 'string',
                           operators: '',
+                          description: '',
                         }],
                       }))}
                     >
@@ -1429,61 +1405,84 @@ export default function RetrieversSection() {
                   {formData.instructedColumns.length > 0 && (
                     <div className="space-y-2">
                       {formData.instructedColumns.map((col, idx) => (
-                        <div key={col.id} className="flex items-center gap-2 p-2 bg-slate-900/50 rounded border border-slate-700/50">
+                        <div key={col.id} className="space-y-1 p-2 bg-slate-900/50 rounded border border-slate-700/50">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              value={col.name}
+                              onChange={(e) => {
+                                const updated = [...formData.instructedColumns];
+                                updated[idx] = { ...col, name: e.target.value };
+                                setFormData(prev => ({ ...prev, instructedColumns: updated }));
+                              }}
+                              placeholder="Column name"
+                              className="flex-1 px-2 py-1 bg-slate-800 border border-slate-700 rounded text-sm text-slate-100 placeholder-slate-500"
+                            />
+                            <select
+                              value={col.type}
+                              onChange={(e) => {
+                                const updated = [...formData.instructedColumns];
+                                updated[idx] = { ...col, type: e.target.value as any };
+                                setFormData(prev => ({ ...prev, instructedColumns: updated }));
+                              }}
+                              className="px-2 py-1 bg-slate-800 border border-slate-700 rounded text-sm text-slate-100"
+                            >
+                              <option value="string">string</option>
+                              <option value="number">number</option>
+                              <option value="boolean">boolean</option>
+                              <option value="datetime">datetime</option>
+                            </select>
+                            <input
+                              type="text"
+                              value={col.operators}
+                              onChange={(e) => {
+                                const updated = [...formData.instructedColumns];
+                                updated[idx] = { ...col, operators: e.target.value };
+                                setFormData(prev => ({ ...prev, instructedColumns: updated }));
+                              }}
+                              placeholder="Operators (comma-sep)"
+                              className="w-32 px-2 py-1 bg-slate-800 border border-slate-700 rounded text-sm text-slate-100 placeholder-slate-500"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setFormData(prev => ({
+                                ...prev,
+                                instructedColumns: prev.instructedColumns.filter(c => c.id !== col.id),
+                              }))}
+                              className="p-1 text-slate-400 hover:text-red-400"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
                           <input
                             type="text"
-                            value={col.name}
+                            value={col.description}
                             onChange={(e) => {
                               const updated = [...formData.instructedColumns];
-                              updated[idx] = { ...col, name: e.target.value };
+                              updated[idx] = { ...col, description: e.target.value };
                               setFormData(prev => ({ ...prev, instructedColumns: updated }));
                             }}
-                            placeholder="Column name"
-                            className="flex-1 px-2 py-1 bg-slate-800 border border-slate-700 rounded text-sm text-slate-100 placeholder-slate-500"
+                            placeholder="Description (e.g. Brand/manufacturer - MILWAUKEE, DEWALT, etc.)"
+                            className="w-full px-2 py-1 bg-slate-800 border border-slate-700 rounded text-sm text-slate-100 placeholder-slate-500"
                           />
-                          <select
-                            value={col.type}
-                            onChange={(e) => {
-                              const updated = [...formData.instructedColumns];
-                              updated[idx] = { ...col, type: e.target.value as any };
-                              setFormData(prev => ({ ...prev, instructedColumns: updated }));
-                            }}
-                            className="px-2 py-1 bg-slate-800 border border-slate-700 rounded text-sm text-slate-100"
-                          >
-                            <option value="string">string</option>
-                            <option value="number">number</option>
-                            <option value="boolean">boolean</option>
-                            <option value="datetime">datetime</option>
-                          </select>
-                          <input
-                            type="text"
-                            value={col.operators}
-                            onChange={(e) => {
-                              const updated = [...formData.instructedColumns];
-                              updated[idx] = { ...col, operators: e.target.value };
-                              setFormData(prev => ({ ...prev, instructedColumns: updated }));
-                            }}
-                            placeholder="Operators (comma-sep)"
-                            className="w-32 px-2 py-1 bg-slate-800 border border-slate-700 rounded text-sm text-slate-100 placeholder-slate-500"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setFormData(prev => ({
-                              ...prev,
-                              instructedColumns: prev.instructedColumns.filter(c => c.id !== col.id),
-                            }))}
-                            className="p-1 text-slate-400 hover:text-red-400"
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
                         </div>
                       ))}
                     </div>
                   )}
                   <p className="text-xs text-slate-500">
-                    Structured column info improves LLM filter accuracy. Operators: empty for equality, NOT, &lt;, &lt;=, &gt;, &gt;=, LIKE
+                    At least one column is required. Column names, types, operators, and descriptions are embedded into JSON schemas and prompts for each pipeline component automatically. Operators: empty for equality, NOT, &lt;, &lt;=, &gt;, &gt;=, LIKE
                   </p>
                 </div>
+
+                <Textarea
+                  label="Default Constraints"
+                  name="instructedConstraints"
+                  value={formData.instructedConstraints}
+                  onChange={handleChange}
+                  placeholder="Prefer recent products&#10;Prioritize exact brand matches"
+                  rows={3}
+                  hint="One constraint per line"
+                />
 
                 {/* ── Query Decomposition (nested under instructed) ── */}
                 <div className="space-y-3">

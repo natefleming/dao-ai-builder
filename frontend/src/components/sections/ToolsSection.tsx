@@ -586,7 +586,7 @@ export default function ToolsSection() {
     genieLruCacheWarehouseSource: 'configured' as ResourceSource,
     genieLruCacheWarehouseRefName: '',
     genieLruCacheWarehouseId: '',
-    // Genie Semantic Cache
+    // Genie Semantic Cache (PostgreSQL-backed context-aware cache)
     genieSemanticCacheEnabled: false,
     genieSemanticCacheTtl: 86400, // 1 day in seconds
     genieSemanticCacheTtlNeverExpires: false,
@@ -594,7 +594,7 @@ export default function ToolsSection() {
     genieSemanticCacheContextSimilarityThreshold: 0.80, // Conversation-aware: context similarity
     genieSemanticCacheQuestionWeight: 0.6, // Conversation-aware: question weight
     genieSemanticCacheContextWeight: 0.4, // Conversation-aware: context weight (computed as 1 - question_weight)
-    genieSemanticCacheContextWindowSize: 3, // Conversation-aware: number of previous turns
+    genieSemanticCacheContextWindowSize: 4, // Conversation-aware: number of previous turns (default: 4)
     genieSemanticCacheMaxContextTokens: 2000, // Conversation-aware: max context length
     genieSemanticCacheEmbeddingModelSource: 'configured' as ResourceSource,
     genieSemanticCacheEmbeddingModelRefName: '',
@@ -605,6 +605,18 @@ export default function ToolsSection() {
     genieSemanticCacheWarehouseSource: 'configured' as ResourceSource,
     genieSemanticCacheWarehouseRefName: '',
     genieSemanticCacheWarehouseId: '',
+    // Prompt history settings (PostgreSQL-backed cache)
+    genieSemanticCachePromptHistoryTable: 'genie_prompt_history',
+    genieSemanticCacheMaxPromptHistoryLength: 50,
+    genieSemanticCacheUseGenieApiForHistory: false,
+    genieSemanticCachePromptHistoryTtlEnabled: false, // false = use cache TTL (null)
+    genieSemanticCachePromptHistoryTtl: 86400,
+    // IVFFlat index tuning (PostgreSQL-backed cache)
+    genieSemanticCacheIvfflatListsAuto: true, // true = null (auto-computed)
+    genieSemanticCacheIvfflatLists: 100,
+    genieSemanticCacheIvfflatProbesAuto: true, // true = null (auto-computed)
+    genieSemanticCacheIvfflatProbes: 10,
+    genieSemanticCacheIvfflatCandidates: 20,
     // Genie In-Memory Semantic Cache (new in dao-ai 0.1.21 - no database required)
     genieInMemoryCacheEnabled: false,
     genieInMemoryCacheTtl: 604800, // 1 week in seconds (default)
@@ -1073,6 +1085,29 @@ export default function ToolsSection() {
             max_context_tokens: formData.genieSemanticCacheMaxContextTokens,
             table_name: formData.genieSemanticCacheTableName,
           };
+          // Prompt history settings
+          if (formData.genieSemanticCachePromptHistoryTable !== 'genie_prompt_history') {
+            semanticCacheParams.prompt_history_table = formData.genieSemanticCachePromptHistoryTable;
+          }
+          if (formData.genieSemanticCacheMaxPromptHistoryLength !== 50) {
+            semanticCacheParams.max_prompt_history_length = formData.genieSemanticCacheMaxPromptHistoryLength;
+          }
+          if (formData.genieSemanticCacheUseGenieApiForHistory) {
+            semanticCacheParams.use_genie_api_for_history = true;
+          }
+          if (formData.genieSemanticCachePromptHistoryTtlEnabled) {
+            semanticCacheParams.prompt_history_ttl_seconds = formData.genieSemanticCachePromptHistoryTtl;
+          }
+          // IVFFlat index tuning settings (only include non-default values)
+          if (!formData.genieSemanticCacheIvfflatListsAuto) {
+            semanticCacheParams.ivfflat_lists = formData.genieSemanticCacheIvfflatLists;
+          }
+          if (!formData.genieSemanticCacheIvfflatProbesAuto) {
+            semanticCacheParams.ivfflat_probes = formData.genieSemanticCacheIvfflatProbes;
+          }
+          if (formData.genieSemanticCacheIvfflatCandidates !== 20) {
+            semanticCacheParams.ivfflat_candidates = formData.genieSemanticCacheIvfflatCandidates;
+          }
           // Add embedding model - configured LLM reference or manual string
           if (formData.genieSemanticCacheEmbeddingModelSource === 'configured' && formData.genieSemanticCacheEmbeddingModelRefName) {
             semanticCacheParams.embedding_model = `__REF__${formData.genieSemanticCacheEmbeddingModelRefName}`;
@@ -1387,7 +1422,7 @@ export default function ToolsSection() {
       genieLruCacheWarehouseSource: 'configured',
       genieLruCacheWarehouseRefName: '',
       genieLruCacheWarehouseId: '',
-      // Genie Semantic Cache
+      // Genie Semantic Cache (PostgreSQL-backed context-aware cache)
       genieSemanticCacheEnabled: false,
       genieSemanticCacheTtl: 86400,
       genieSemanticCacheTtlNeverExpires: false,
@@ -1395,7 +1430,7 @@ export default function ToolsSection() {
       genieSemanticCacheContextSimilarityThreshold: 0.80,
       genieSemanticCacheQuestionWeight: 0.6,
       genieSemanticCacheContextWeight: 0.4,
-      genieSemanticCacheContextWindowSize: 3,
+      genieSemanticCacheContextWindowSize: 4,
       genieSemanticCacheMaxContextTokens: 2000,
       genieSemanticCacheEmbeddingModelSource: 'configured',
       genieSemanticCacheEmbeddingModelRefName: '',
@@ -1406,6 +1441,18 @@ export default function ToolsSection() {
       genieSemanticCacheWarehouseSource: 'configured',
       genieSemanticCacheWarehouseRefName: '',
       genieSemanticCacheWarehouseId: '',
+      // Prompt history settings
+      genieSemanticCachePromptHistoryTable: 'genie_prompt_history',
+      genieSemanticCacheMaxPromptHistoryLength: 50,
+      genieSemanticCacheUseGenieApiForHistory: false,
+      genieSemanticCachePromptHistoryTtlEnabled: false,
+      genieSemanticCachePromptHistoryTtl: 86400,
+      // IVFFlat index tuning
+      genieSemanticCacheIvfflatListsAuto: true,
+      genieSemanticCacheIvfflatLists: 100,
+      genieSemanticCacheIvfflatProbesAuto: true,
+      genieSemanticCacheIvfflatProbes: 10,
+      genieSemanticCacheIvfflatCandidates: 20,
       // Genie In-Memory Context-Aware Cache
       genieInMemoryCacheEnabled: false,
       genieInMemoryCacheTtl: 604800,
@@ -1797,7 +1844,7 @@ export default function ToolsSection() {
         let genieSemanticCacheContextSimilarityThreshold = 0.80;
         let genieSemanticCacheQuestionWeight = 0.6;
         let genieSemanticCacheContextWeight = 0.4;
-        let genieSemanticCacheContextWindowSize = 3;
+        let genieSemanticCacheContextWindowSize = 4;
         let genieSemanticCacheMaxContextTokens = 2000;
         let genieSemanticCacheEmbeddingModelSource: ResourceSource = 'configured';
         let genieSemanticCacheEmbeddingModelRefName = '';
@@ -1808,6 +1855,18 @@ export default function ToolsSection() {
         let genieSemanticCacheWarehouseSource: ResourceSource = 'configured';
         let genieSemanticCacheWarehouseRefName = '';
         let genieSemanticCacheWarehouseId = '';
+        // Prompt history settings
+        let genieSemanticCachePromptHistoryTable = 'genie_prompt_history';
+        let genieSemanticCacheMaxPromptHistoryLength = 50;
+        let genieSemanticCacheUseGenieApiForHistory = false;
+        let genieSemanticCachePromptHistoryTtlEnabled = false;
+        let genieSemanticCachePromptHistoryTtl = 86400;
+        // IVFFlat index tuning settings
+        let genieSemanticCacheIvfflatListsAuto = true;
+        let genieSemanticCacheIvfflatLists = 100;
+        let genieSemanticCacheIvfflatProbesAuto = true;
+        let genieSemanticCacheIvfflatProbes = 10;
+        let genieSemanticCacheIvfflatCandidates = 20;
 
         if (args.context_aware_cache_parameters || args.semantic_cache_parameters) {
           genieSemanticCacheEnabled = true;
@@ -1821,9 +1880,27 @@ export default function ToolsSection() {
           genieSemanticCacheContextSimilarityThreshold = (semParams.context_similarity_threshold as number) ?? 0.80;
           genieSemanticCacheQuestionWeight = (semParams.question_weight as number) ?? 0.6;
           genieSemanticCacheContextWeight = (semParams.context_weight as number) ?? 0.4;
-          genieSemanticCacheContextWindowSize = (semParams.context_window_size as number) ?? 3;
+          genieSemanticCacheContextWindowSize = (semParams.context_window_size as number) ?? 4;
           genieSemanticCacheMaxContextTokens = (semParams.max_context_tokens as number) ?? 2000;
           genieSemanticCacheTableName = (semParams.table_name as string) ?? 'genie_context_aware_cache';
+          // Parse prompt history settings
+          genieSemanticCachePromptHistoryTable = (semParams.prompt_history_table as string) ?? 'genie_prompt_history';
+          genieSemanticCacheMaxPromptHistoryLength = (semParams.max_prompt_history_length as number) ?? 50;
+          genieSemanticCacheUseGenieApiForHistory = (semParams.use_genie_api_for_history as boolean) ?? false;
+          if (semParams.prompt_history_ttl_seconds != null) {
+            genieSemanticCachePromptHistoryTtlEnabled = true;
+            genieSemanticCachePromptHistoryTtl = semParams.prompt_history_ttl_seconds as number;
+          }
+          // Parse IVFFlat index tuning settings
+          if (semParams.ivfflat_lists != null) {
+            genieSemanticCacheIvfflatListsAuto = false;
+            genieSemanticCacheIvfflatLists = semParams.ivfflat_lists as number;
+          }
+          if (semParams.ivfflat_probes != null) {
+            genieSemanticCacheIvfflatProbesAuto = false;
+            genieSemanticCacheIvfflatProbes = semParams.ivfflat_probes as number;
+          }
+          genieSemanticCacheIvfflatCandidates = (semParams.ivfflat_candidates as number) ?? 20;
           
           // Extract embedding model - first check YAML references, then __REF__ marker, then match against configured LLMs
           const embeddingModelRefPath = `tools.${key}.function.args.context_aware_cache_parameters.embedding_model`;
@@ -2040,6 +2117,18 @@ export default function ToolsSection() {
           genieSemanticCacheWarehouseSource,
           genieSemanticCacheWarehouseRefName,
           genieSemanticCacheWarehouseId,
+          // Prompt history settings
+          genieSemanticCachePromptHistoryTable,
+          genieSemanticCacheMaxPromptHistoryLength,
+          genieSemanticCacheUseGenieApiForHistory,
+          genieSemanticCachePromptHistoryTtlEnabled,
+          genieSemanticCachePromptHistoryTtl,
+          // IVFFlat index tuning settings
+          genieSemanticCacheIvfflatListsAuto,
+          genieSemanticCacheIvfflatLists,
+          genieSemanticCacheIvfflatProbesAuto,
+          genieSemanticCacheIvfflatProbes,
+          genieSemanticCacheIvfflatCandidates,
           // In-Memory Semantic Cache
           genieInMemoryCacheEnabled,
           genieInMemoryCacheTtl,
@@ -2795,7 +2884,7 @@ export default function ToolsSection() {
                       )}
                     </div>
 
-                    {/* Semantic Cache */}
+                    {/* Context-Aware Cache (PostgreSQL/Lakebase-backed) */}
                     <div className="space-y-3">
                       <label className="flex items-start gap-3 cursor-pointer group">
                         <input
@@ -2805,8 +2894,8 @@ export default function ToolsSection() {
                           className="mt-0.5 w-4 h-4 rounded border-slate-600 bg-slate-800 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-900"
                         />
                         <div>
-                          <span className="text-sm text-slate-200 group-hover:text-white">Enable Semantic Cache</span>
-                          <p className="text-xs text-slate-500">Cache results using vector similarity matching (requires Lakebase database)</p>
+                          <span className="text-sm text-slate-200 group-hover:text-white">Enable Persistent Context-Aware Cache</span>
+                          <p className="text-xs text-slate-500">Context-aware similarity matching with database-backed storage (requires Lakebase database)</p>
                         </div>
                       </label>
                       
@@ -2885,7 +2974,7 @@ export default function ToolsSection() {
                                 min="1"
                                 max="10"
                                 value={formData.genieSemanticCacheContextWindowSize.toString()}
-                                onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, genieSemanticCacheContextWindowSize: parseInt(e.target.value) || 3 })}
+                                onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, genieSemanticCacheContextWindowSize: parseInt(e.target.value) || 4 })}
                                 hint="Number of previous turns to include"
                               />
                               <Input
@@ -2930,7 +3019,7 @@ export default function ToolsSection() {
                             label="Database (Lakebase)"
                             value={formData.genieSemanticCacheDatabaseRefName}
                             onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, genieSemanticCacheDatabaseRefName: e.target.value, genieSemanticCacheDatabaseSource: 'configured' })}
-                            hint="Lakebase database for semantic cache storage"
+                            hint="Lakebase database for context-aware cache storage"
                             options={configuredDatabaseOptions}
                             placeholder="Select configured database..."
                           />
@@ -2951,11 +3040,125 @@ export default function ToolsSection() {
                               onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, genieSemanticCacheWarehouseId: e.target.value, genieSemanticCacheWarehouseRefName: '' })}
                             />
                           </ResourceSelector>
+
+                          {/* Prompt History Settings */}
+                          <div className="space-y-3 p-3 bg-slate-800/30 rounded-lg border border-slate-700/30">
+                            <h5 className="text-xs font-semibold text-slate-300 uppercase tracking-wide">Prompt History</h5>
+                            <p className="text-xs text-slate-500">Stores user prompts to maintain conversation context for accurate context-aware matching</p>
+                            
+                            <div className="grid grid-cols-2 gap-3">
+                              <Input
+                                label="History Table Name"
+                                placeholder="genie_prompt_history"
+                                value={formData.genieSemanticCachePromptHistoryTable}
+                                onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, genieSemanticCachePromptHistoryTable: e.target.value || 'genie_prompt_history' })}
+                                hint="Table for storing prompt history"
+                              />
+                              <Input
+                                label="Max History Length"
+                                type="number"
+                                min="1"
+                                max="1000"
+                                value={formData.genieSemanticCacheMaxPromptHistoryLength.toString()}
+                                onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, genieSemanticCacheMaxPromptHistoryLength: parseInt(e.target.value) || 50 })}
+                                hint="Max prompts per conversation"
+                              />
+                            </div>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={formData.genieSemanticCacheUseGenieApiForHistory}
+                                onChange={(e) => setFormData({ ...formData, genieSemanticCacheUseGenieApiForHistory: e.target.checked })}
+                                className="w-3 h-3 rounded border-slate-600 bg-slate-800 text-violet-500"
+                              />
+                              <span className="text-xs text-slate-400">Use Genie API for history (fallback when local history is empty)</span>
+                            </label>
+                            <div className="space-y-1">
+                              <label className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={formData.genieSemanticCachePromptHistoryTtlEnabled}
+                                  onChange={(e) => setFormData({ ...formData, genieSemanticCachePromptHistoryTtlEnabled: e.target.checked })}
+                                  className="w-3 h-3 rounded border-slate-600 bg-slate-800 text-violet-500"
+                                />
+                                <span className="text-xs text-slate-400">Custom prompt history TTL (default: use cache TTL)</span>
+                              </label>
+                              {formData.genieSemanticCachePromptHistoryTtlEnabled && (
+                                <Input
+                                  label="Prompt History TTL (seconds)"
+                                  type="number"
+                                  min="1"
+                                  value={formData.genieSemanticCachePromptHistoryTtl.toString()}
+                                  onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, genieSemanticCachePromptHistoryTtl: parseInt(e.target.value) || 86400 })}
+                                  hint="TTL for prompt history entries"
+                                />
+                              )}
+                            </div>
+                          </div>
+
+                          {/* IVFFlat Index Tuning */}
+                          <div className="space-y-3 p-3 bg-slate-800/30 rounded-lg border border-slate-700/30">
+                            <h5 className="text-xs font-semibold text-slate-300 uppercase tracking-wide">IVFFlat Index Tuning</h5>
+                            <p className="text-xs text-slate-500">Controls recall vs speed trade-offs for pg_vector similarity search at scale</p>
+                            
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="space-y-1">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={formData.genieSemanticCacheIvfflatListsAuto}
+                                    onChange={(e) => setFormData({ ...formData, genieSemanticCacheIvfflatListsAuto: e.target.checked })}
+                                    className="w-3 h-3 rounded border-slate-600 bg-slate-800 text-violet-500"
+                                  />
+                                  <span className="text-xs text-slate-400">Auto-compute IVF lists</span>
+                                </label>
+                                {!formData.genieSemanticCacheIvfflatListsAuto && (
+                                  <Input
+                                    label="IVFFlat Lists"
+                                    type="number"
+                                    min="1"
+                                    value={formData.genieSemanticCacheIvfflatLists.toString()}
+                                    onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, genieSemanticCacheIvfflatLists: parseInt(e.target.value) || 100 })}
+                                    hint="Number of IVF lists (auto: max(100, sqrt(rows)))"
+                                  />
+                                )}
+                              </div>
+                              <div className="space-y-1">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={formData.genieSemanticCacheIvfflatProbesAuto}
+                                    onChange={(e) => setFormData({ ...formData, genieSemanticCacheIvfflatProbesAuto: e.target.checked })}
+                                    className="w-3 h-3 rounded border-slate-600 bg-slate-800 text-violet-500"
+                                  />
+                                  <span className="text-xs text-slate-400">Auto-compute probes</span>
+                                </label>
+                                {!formData.genieSemanticCacheIvfflatProbesAuto && (
+                                  <Input
+                                    label="IVFFlat Probes"
+                                    type="number"
+                                    min="1"
+                                    value={formData.genieSemanticCacheIvfflatProbes.toString()}
+                                    onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, genieSemanticCacheIvfflatProbes: parseInt(e.target.value) || 10 })}
+                                    hint="Lists to probe per query (auto: max(10, sqrt(lists)))"
+                                  />
+                                )}
+                              </div>
+                            </div>
+                            <Input
+                              label="IVFFlat Candidates"
+                              type="number"
+                              min="1"
+                              value={formData.genieSemanticCacheIvfflatCandidates.toString()}
+                              onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, genieSemanticCacheIvfflatCandidates: parseInt(e.target.value) || 20 })}
+                              hint="Top-K candidates before Python-side reranking (default: 20)"
+                            />
+                          </div>
                         </div>
                       )}
                     </div>
 
-                    {/* In-Memory Semantic Cache Configuration (no database required) */}
+                    {/* In-Memory Context-Aware Cache (no database required) */}
                     <div className="space-y-2 mt-4 pt-4 border-t border-slate-700/50">
                       <label className="flex items-start gap-3 cursor-pointer group">
                         <input
@@ -2965,8 +3168,8 @@ export default function ToolsSection() {
                           className="mt-0.5 w-4 h-4 rounded border-slate-600 bg-slate-800 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-900"
                         />
                         <div>
-                          <span className="text-sm font-medium text-slate-300 group-hover:text-white">Enable In-Memory Semantic Cache</span>
-                          <p className="text-xs text-slate-500">Similarity-based caching stored in memory (no database required, single-instance only)</p>
+                          <span className="text-sm font-medium text-slate-300 group-hover:text-white">Enable In-Memory Context-Aware Cache</span>
+                          <p className="text-xs text-slate-500">Context-aware similarity matching stored in memory (no database required, single-instance only)</p>
                         </div>
                       </label>
                       

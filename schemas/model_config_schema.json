@@ -608,6 +608,19 @@
           },
           "title": "Operators",
           "type": "array"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable description of the column for LLM context. Include example values or business meaning to improve filter accuracy (e.g. 'Brand/manufacturer (MILWAUKEE, DEWALT, etc.)').",
+          "title": "Description"
         }
       },
       "required": [
@@ -2814,39 +2827,14 @@
     },
     "InstructedRetrieverModel": {
       "additionalProperties": false,
-      "description": "Configuration for instructed retrieval with query decomposition and RRF merging.\n\nInstructed retrieval decomposes user queries into multiple subqueries with\nmetadata filters, executes them in parallel, and merges results using\nReciprocal Rank Fusion (RRF) before reranking.\n\nExample:\n    ```yaml\n    retriever:\n      vector_store: *products_vector_store\n      instructed:\n        decomposition_model: *fast_llm\n        schema_description: |\n          Products table: product_id, brand_name, category, price, updated_at\n          Filter operators: {\"col\": val}, {\"col >\": val}, {\"col NOT\": val}\n        columns:\n          - name: brand_name\n            type: string\n          - name: price\n            type: number\n            operators: [\"\", \"<\", \"<=\", \">\", \">=\"]\n        constraints:\n          - \"Prefer recent products\"\n        max_subqueries: 3\n        examples:\n          - query: \"cheap drills\"\n            filters: {\"price <\": 100}\n    ```",
+      "description": "Configuration for instructed retrieval with query decomposition and RRF merging.\n\nGroups all schema-aware, LLM-driven features: query decomposition, instruction-aware\nreranking, query routing, and result verification. Column metadata is the single source\nof truth for schema context.\n\nExample:\n    ```yaml\n    retriever:\n      vector_store: *products_vector_store\n      instructed:\n        columns:\n          - name: brand_name\n            type: string\n            description: \"Brand/manufacturer (MILWAUKEE, DEWALT, etc.)\"\n          - name: price\n            type: number\n            operators: [\"\", \"<\", \"<=\", \">\", \">=\"]\n            description: \"Product price in USD\"\n        constraints:\n          - \"Prefer recent products\"\n        decomposition:\n          model: *fast_llm\n          max_subqueries: 3\n    ```",
       "properties": {
-        "decomposition_model": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/LLMModel"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "LLM for query decomposition (smaller/faster model recommended)"
-        },
-        "schema_description": {
-          "description": "Column names, types, and valid filter syntax for the LLM",
-          "title": "Schema Description",
-          "type": "string"
-        },
         "columns": {
-          "anyOf": [
-            {
-              "items": {
-                "$ref": "#/$defs/ColumnInfo"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Structured column info for dynamic schema generation. When provided, column names are embedded in the JSON schema for better LLM accuracy.",
+          "items": {
+            "$ref": "#/$defs/ColumnInfo"
+          },
+          "type": "array",
+          "description": "Structured column info used by all pipeline components. Column names, types, operators, and descriptions are embedded into JSON schemas and prompts for each component automatically.",
           "title": "Columns"
         },
         "constraints": {
@@ -2913,7 +2901,7 @@
         }
       },
       "required": [
-        "schema_description"
+        "columns"
       ],
       "title": "InstructedRetrieverModel",
       "type": "object"

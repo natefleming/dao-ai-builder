@@ -395,6 +395,18 @@
           "default": "3.12",
           "description": "Python version for Model Serving deployment. Defaults to 3.12 which is supported by Databricks Model Serving. This allows deploying from environments with different Python versions (e.g., Databricks Apps with 3.11).",
           "title": "Python Version"
+        },
+        "deployment_target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeploymentTarget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Default deployment target. If not specified, defaults to MODEL_SERVING. Can be overridden via CLI --target flag. Options: 'model_serving' or 'apps'."
         }
       },
       "required": [
@@ -540,17 +552,6 @@
           "title": "Name",
           "type": "string"
         },
-        "type": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/StorageType"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": "memory"
-        },
         "database": {
           "anyOf": [
             {
@@ -567,6 +568,65 @@
         "name"
       ],
       "title": "CheckpointerModel",
+      "type": "object"
+    },
+    "ColumnInfo": {
+      "additionalProperties": false,
+      "description": "Column metadata for dynamic schema generation in structured output.\n\nWhen provided, column information is embedded directly into the JSON schema\nthat with_structured_output sends to the LLM, improving filter accuracy.\n\nThe optional ``description`` field lets users annotate a column with semantic\ncontext (e.g. example values, business meaning).  Descriptions are embedded\ninto JSON schemas and prompt context that pipeline components (decomposition,\nrouting, verification, reranking) generate from the column metadata.",
+      "properties": {
+        "name": {
+          "description": "Column name as it appears in the database",
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "default": "string",
+          "description": "Column data type for value validation",
+          "enum": [
+            "string",
+            "number",
+            "boolean",
+            "datetime"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "operators": {
+          "default": [
+            "",
+            "NOT",
+            "<",
+            "<=",
+            ">",
+            ">=",
+            "LIKE",
+            "NOT LIKE"
+          ],
+          "description": "Valid filter operators for this column",
+          "items": {
+            "type": "string"
+          },
+          "title": "Operators",
+          "type": "array"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable description of the column for LLM context. Include example values or business meaning to improve filter accuracy (e.g. 'Brand/manufacturer (MILWAUKEE, DEWALT, etc.)').",
+          "title": "Description"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "ColumnInfo",
       "type": "object"
     },
     "CompositeVariableModel": {
@@ -782,9 +842,186 @@
       "title": "ConnectionModel",
       "type": "object"
     },
+    "ContextAwareCacheEvalDatasetModel": {
+      "additionalProperties": false,
+      "description": "Dataset for context-aware cache threshold optimization.\n\nContains pairs of questions/contexts to evaluate whether thresholds\ncorrectly identify semantic matches.\n\nExample:\n    dataset:\n      name: my_cache_eval_dataset\n      description: \"Evaluation data for cache tuning\"\n      entries:\n        - question: \"What are total sales?\"\n          # ... entry fields",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/ContextAwareCacheEvalEntryModel"
+          },
+          "title": "Entries",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "ContextAwareCacheEvalDatasetModel",
+      "type": "object"
+    },
+    "ContextAwareCacheEvalEntryModel": {
+      "additionalProperties": false,
+      "description": "Single evaluation entry for context-aware cache threshold optimization.\n\nRepresents a pair of question/context combinations to evaluate\nwhether the cache should return a hit or miss.\n\nExample:\n    entry:\n      question: \"What are total sales?\"\n      question_embedding: [0.1, 0.2, ...]  # Pre-computed\n      context: \"Previous: Show me revenue\"\n      context_embedding: [0.1, 0.2, ...]\n      cached_question: \"Show total sales\"\n      cached_question_embedding: [0.1, 0.2, ...]\n      cached_context: \"Previous: Show me revenue\"\n      cached_context_embedding: [0.1, 0.2, ...]\n      expected_match: true",
+      "properties": {
+        "question": {
+          "title": "Question",
+          "type": "string"
+        },
+        "question_embedding": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Question Embedding",
+          "type": "array"
+        },
+        "context": {
+          "default": "",
+          "title": "Context",
+          "type": "string"
+        },
+        "context_embedding": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Context Embedding",
+          "type": "array"
+        },
+        "cached_question": {
+          "title": "Cached Question",
+          "type": "string"
+        },
+        "cached_question_embedding": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Cached Question Embedding",
+          "type": "array"
+        },
+        "cached_context": {
+          "default": "",
+          "title": "Cached Context",
+          "type": "string"
+        },
+        "cached_context_embedding": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Cached Context Embedding",
+          "type": "array"
+        },
+        "expected_match": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Match"
+        }
+      },
+      "required": [
+        "question",
+        "question_embedding",
+        "cached_question",
+        "cached_question_embedding"
+      ],
+      "title": "ContextAwareCacheEvalEntryModel",
+      "type": "object"
+    },
+    "ContextAwareCacheOptimizationModel": {
+      "additionalProperties": false,
+      "description": "Configuration for context-aware cache threshold optimization.\n\nUses Optuna Bayesian optimization to find optimal threshold values\nthat maximize cache hit accuracy (F1 score by default).\n\nExample:\n    optimizations:\n      cache_threshold_optimizations:\n        my_optimization:\n          name: optimize_cache_thresholds\n          cache_parameters: *my_cache_params\n          dataset: *my_eval_dataset\n          judge_model: databricks-meta-llama-3-3-70b-instruct\n          n_trials: 50\n          metric: f1",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "cache_parameters": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GenieContextAwareCacheParametersModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "dataset": {
+          "$ref": "#/$defs/ContextAwareCacheEvalDatasetModel"
+        },
+        "judge_model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LLMModel"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "databricks-meta-llama-3-3-70b-instruct",
+          "title": "Judge Model"
+        },
+        "n_trials": {
+          "default": 50,
+          "title": "N Trials",
+          "type": "integer"
+        },
+        "metric": {
+          "default": "f1",
+          "enum": [
+            "f1",
+            "precision",
+            "recall",
+            "fbeta"
+          ],
+          "title": "Metric",
+          "type": "string"
+        },
+        "beta": {
+          "default": 1.0,
+          "title": "Beta",
+          "type": "number"
+        },
+        "seed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seed"
+        }
+      },
+      "required": [
+        "name",
+        "dataset"
+      ],
+      "title": "ContextAwareCacheOptimizationModel",
+      "type": "object"
+    },
     "DatabaseModel": {
       "additionalProperties": false,
-      "description": "Configuration for a Databricks Lakebase (PostgreSQL) database instance.\n\nAuthentication is inherited from IsDatabricksResource. Additionally supports:\n- user/password: For user-based database authentication\n\nDatabase Type:\n- lakebase: Databricks-managed Lakebase instance (authentication optional, supports ambient auth)\n- postgres: Standard PostgreSQL database (authentication required)\n\nExample Service Principal Configuration:\n```yaml\ndatabases:\n  my_lakebase:\n    name: my-database\n    type: lakebase\n    service_principal:\n      client_id:\n        env: SERVICE_PRINCIPAL_CLIENT_ID\n      client_secret:\n        scope: my-scope\n        secret: sp-client-secret\n    workspace_host:\n      env: DATABRICKS_HOST\n```\n\nExample User Configuration:\n```yaml\ndatabases:\n  my_lakebase:\n    name: my-database\n    type: lakebase\n    user: my-user@databricks.com\n```\n\nExample Ambient Authentication (Lakebase only):\n```yaml\ndatabases:\n  my_lakebase:\n    name: my-database\n    type: lakebase\n    on_behalf_of_user: true\n```",
+      "description": "Configuration for database connections supporting both Databricks Lakebase and standard PostgreSQL.\n\nAuthentication is inherited from IsDatabricksResource. Additionally supports:\n- user/password: For user-based database authentication\n\nConnection Types (determined by fields provided):\n- Databricks Lakebase: Provide `instance_name` (authentication optional, supports ambient auth)\n- Standard PostgreSQL: Provide `host` (authentication required via user/password)\n\nNote: For Lakebase connections, `name` is optional and defaults to `instance_name`.\nFor PostgreSQL connections, `name` is required.\n\nExample Databricks Lakebase (minimal):\n```yaml\ndatabases:\n  my_lakebase:\n    instance_name: my-lakebase-instance  # name defaults to instance_name\n```\n\nExample Databricks Lakebase with Service Principal:\n```yaml\ndatabases:\n  my_lakebase:\n    instance_name: my-lakebase-instance\n    service_principal:\n      client_id:\n        env: SERVICE_PRINCIPAL_CLIENT_ID\n      client_secret:\n        scope: my-scope\n        secret: sp-client-secret\n    workspace_host:\n      env: DATABRICKS_HOST\n```\n\nExample Databricks Lakebase with Ambient Authentication:\n```yaml\ndatabases:\n  my_lakebase:\n    instance_name: my-lakebase-instance\n    on_behalf_of_user: true\n```\n\nExample Standard PostgreSQL:\n```yaml\ndatabases:\n  my_postgres:\n    name: my-database\n    host: my-postgres-host.example.com\n    port: 5432\n    database: my_db\n    user: my_user\n    password:\n      env: PGPASSWORD\n```",
       "properties": {
         "on_behalf_of_user": {
           "anyOf": [
@@ -942,19 +1179,16 @@
           "title": "Pat"
         },
         "name": {
-          "title": "Name",
-          "type": "string"
-        },
-        "type": {
           "anyOf": [
             {
-              "$ref": "#/$defs/DatabaseType"
+              "type": "string"
             },
             {
               "type": "null"
             }
           ],
-          "default": "lakebase"
+          "default": null,
+          "title": "Name"
         },
         "instance_name": {
           "anyOf": [
@@ -1210,22 +1444,12 @@
           "title": "Password"
         }
       },
-      "required": [
-        "name"
-      ],
       "title": "DatabaseModel",
       "type": "object"
     },
-    "DatabaseType": {
-      "enum": [
-        "postgres",
-        "lakebase"
-      ],
-      "title": "DatabaseType",
-      "type": "string"
-    },
     "DatabricksAppModel": {
       "additionalProperties": false,
+      "description": "Configuration for a Databricks App resource.\n\nThe `name` is the unique instance name of the Databricks App within the workspace.\nThe `url` is dynamically retrieved from the workspace client by calling\n`apps.get(name)` and returning the app's URL.\n\nExample:\n    ```yaml\n    resources:\n      apps:\n        my_app:\n          name: my-databricks-app\n    ```",
       "properties": {
         "on_behalf_of_user": {
           "anyOf": [
@@ -1385,15 +1609,10 @@
         "name": {
           "title": "Name",
           "type": "string"
-        },
-        "url": {
-          "title": "Url",
-          "type": "string"
         }
       },
       "required": [
-        "name",
-        "url"
+        "name"
       ],
       "title": "DatabricksAppModel",
       "type": "object"
@@ -1505,6 +1724,81 @@
       },
       "title": "DatasetModel",
       "type": "object"
+    },
+    "DecompositionModel": {
+      "additionalProperties": false,
+      "description": "Query decomposition settings for instructed retrieval.\n\nDecomposes complex user queries into multiple focused subqueries with\nmetadata filters, executed in parallel and merged using Reciprocal Rank Fusion (RRF).\n\nExample:\n    ```yaml\n    instructed:\n      decomposition:\n        model: *fast_llm\n        max_subqueries: 3\n        rrf_k: 60\n        normalize_filter_case: uppercase\n        examples:\n          - query: \"cheap drills\"\n            filters: {\"price <\": 100}\n    ```",
+      "properties": {
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LLMModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "LLM for query decomposition (smaller/faster model recommended)"
+        },
+        "max_subqueries": {
+          "default": 3,
+          "description": "Maximum number of parallel subqueries",
+          "title": "Max Subqueries",
+          "type": "integer"
+        },
+        "rrf_k": {
+          "default": 60,
+          "description": "RRF constant (lower values weight top ranks more heavily)",
+          "title": "Rrf K",
+          "type": "integer"
+        },
+        "examples": {
+          "anyOf": [
+            {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Few-shot examples for domain-specific filter translation",
+          "title": "Examples"
+        },
+        "normalize_filter_case": {
+          "anyOf": [
+            {
+              "enum": [
+                "uppercase",
+                "lowercase"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Auto-normalize filter string values to uppercase or lowercase",
+          "title": "Normalize Filter Case"
+        }
+      },
+      "title": "DecompositionModel",
+      "type": "object"
+    },
+    "DeploymentTarget": {
+      "description": "Target platform for agent deployment.",
+      "enum": [
+        "model_serving",
+        "apps"
+      ],
+      "title": "DeploymentTarget",
+      "type": "string"
     },
     "Entitlement": {
       "enum": [
@@ -1644,9 +1938,11 @@
     },
     "EvaluationModel": {
       "additionalProperties": false,
+      "description": "Configuration for MLflow GenAI evaluation.\n\nAttributes:\n    model: LLM model used as the judge for LLM-based scorers (e.g., Guidelines, Safety).\n           This model evaluates agent responses during evaluation.\n    table: Table to store evaluation results.\n    num_evals: Number of evaluation samples to generate.\n    agent_description: Description of the agent for evaluation data generation.\n    question_guidelines: Guidelines for generating evaluation questions.\n    custom_inputs: Custom inputs to pass to the agent during evaluation.\n    guidelines: List of guideline configurations for Guidelines scorers.",
       "properties": {
         "model": {
-          "$ref": "#/$defs/LLMModel"
+          "$ref": "#/$defs/LLMModel",
+          "description": "LLM model used as the judge for LLM-based evaluation scorers"
         },
         "table": {
           "$ref": "#/$defs/TableModel"
@@ -1709,10 +2005,6 @@
           "title": "Type",
           "type": "string"
         },
-        "name": {
-          "title": "Name",
-          "type": "string"
-        },
         "human_in_the_loop": {
           "anyOf": [
             {
@@ -1723,6 +2015,10 @@
             }
           ],
           "default": null
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
         },
         "args": {
           "anyOf": [
@@ -1744,6 +2040,7 @@
       "type": "object"
     },
     "FunctionModel": {
+      "additionalProperties": false,
       "properties": {
         "on_behalf_of_user": {
           "anyOf": [
@@ -1927,6 +2224,165 @@
       "title": "FunctionModel",
       "type": "object"
     },
+    "GenieContextAwareCacheParametersModel": {
+      "additionalProperties": false,
+      "description": "Configuration for PostgreSQL-backed context-aware cache.\n\nExtends the base context-aware cache configuration with database-specific\nfields for table management and prompt history tracking.",
+      "properties": {
+        "time_to_live_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": 86400,
+          "title": "Time To Live Seconds"
+        },
+        "similarity_threshold": {
+          "default": 0.85,
+          "title": "Similarity Threshold",
+          "type": "number"
+        },
+        "context_similarity_threshold": {
+          "default": 0.8,
+          "title": "Context Similarity Threshold",
+          "type": "number"
+        },
+        "question_weight": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": 0.6,
+          "title": "Question Weight"
+        },
+        "context_weight": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Weight"
+        },
+        "embedding_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/LLMModel"
+            }
+          ],
+          "default": "databricks-gte-large-en",
+          "title": "Embedding Model"
+        },
+        "embedding_dims": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Embedding Dims"
+        },
+        "warehouse": {
+          "$ref": "#/$defs/WarehouseModel"
+        },
+        "context_window_size": {
+          "default": 4,
+          "title": "Context Window Size",
+          "type": "integer"
+        },
+        "max_context_tokens": {
+          "default": 2000,
+          "title": "Max Context Tokens",
+          "type": "integer"
+        },
+        "database": {
+          "$ref": "#/$defs/DatabaseModel"
+        },
+        "table_name": {
+          "default": "genie_context_aware_cache",
+          "title": "Table Name",
+          "type": "string"
+        },
+        "prompt_history_table": {
+          "default": "genie_prompt_history",
+          "title": "Prompt History Table",
+          "type": "string"
+        },
+        "max_prompt_history_length": {
+          "default": 50,
+          "title": "Max Prompt History Length",
+          "type": "integer"
+        },
+        "use_genie_api_for_history": {
+          "default": false,
+          "title": "Use Genie Api For History",
+          "type": "boolean"
+        },
+        "prompt_history_ttl_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt History Ttl Seconds"
+        },
+        "ivfflat_lists": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ivfflat Lists"
+        },
+        "ivfflat_probes": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ivfflat Probes"
+        },
+        "ivfflat_candidates": {
+          "default": 20,
+          "title": "Ivfflat Candidates",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "warehouse",
+        "database"
+      ],
+      "title": "GenieContextAwareCacheParametersModel",
+      "type": "object"
+    },
     "GenieRoomModel": {
       "additionalProperties": false,
       "properties": {
@@ -2086,8 +2542,16 @@
           "title": "Pat"
         },
         "name": {
-          "title": "Name",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
         },
         "description": {
           "anyOf": [
@@ -2132,7 +2596,6 @@
         }
       },
       "required": [
-        "name",
         "space_id"
       ],
       "title": "GenieRoomModel",
@@ -2246,6 +2709,7 @@
     },
     "IndexModel": {
       "additionalProperties": false,
+      "description": "Model representing a Databricks Vector Search index.",
       "properties": {
         "on_behalf_of_user": {
           "anyOf": [
@@ -2424,6 +2888,168 @@
       "title": "IndexModel",
       "type": "object"
     },
+    "InlineFunctionModel": {
+      "additionalProperties": false,
+      "description": "Inline function model for defining tool code directly in YAML configuration.\n\nThis allows you to define simple tools without creating separate Python files.\nThe code should define a function decorated with @tool from langchain.tools.\n\nSECURITY WARNING: This model uses exec() to execute arbitrary Python code\nfrom the YAML configuration. Only load configurations from trusted sources.\nA malicious configuration could execute arbitrary code on the host system.\n\nExample YAML:\n    tools:\n      calculator:\n        name: calculator\n        function:\n          type: inline\n          code: |\n            from langchain.tools import tool\n\n            @tool\n            def calculator(expression: str) -> str:\n                '''Evaluate a mathematical expression.'''\n                return str(eval(expression))\n\nThe code block must:\n- Import @tool from langchain.tools\n- Define exactly one function decorated with @tool\n- The function name becomes the tool name",
+      "properties": {
+        "type": {
+          "const": "inline",
+          "default": "inline",
+          "title": "Type",
+          "type": "string"
+        },
+        "human_in_the_loop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HumanInTheLoopModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "code": {
+          "description": "Python code defining a tool function decorated with @tool",
+          "title": "Code",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code"
+      ],
+      "title": "InlineFunctionModel",
+      "type": "object"
+    },
+    "InstructedRetrieverModel": {
+      "additionalProperties": false,
+      "description": "Configuration for instructed retrieval with query decomposition and RRF merging.\n\nGroups all schema-aware, LLM-driven features: query decomposition, instruction-aware\nreranking, query routing, and result verification. These features share schema context\n(columns, constraints) and are co-located here to enforce that dependency at the type\nlevel.\n\nColumn metadata is the single source of truth for schema context. Each pipeline\ncomponent (decomposition, routing, verification, reranking) generates the specific\ncontext it needs from the structured ``columns`` data:\n- Decomposition embeds column info into the JSON schema for ``with_structured_output``\n- Routing generates a compact column summary\n- Verification generates a context with column descriptions (no operator syntax)\n- Reranking uses column names and types for instruction generation\n\nExample:\n    ```yaml\n    retriever:\n      vector_store: *products_vector_store\n      instructed:\n        columns:\n          - name: brand_name\n            type: string\n            description: \"Brand/manufacturer (MILWAUKEE, DEWALT, etc.)\"\n          - name: price\n            type: number\n            operators: [\"\", \"<\", \"<=\", \">\", \">=\"]\n            description: \"Product price in USD\"\n        constraints:\n          - \"Prefer recent products\"\n        decomposition:\n          model: *fast_llm\n          max_subqueries: 3\n          examples:\n            - query: \"cheap drills\"\n              filters: {\"price <\": 100}\n        rerank:\n          model: *fast_llm\n          instructions: \"Prioritize by brand preferences\"\n          top_n: 10\n        router:\n          model: *fast_llm\n          default_mode: standard\n        verifier:\n          model: *fast_llm\n          on_failure: warn_and_retry\n    ```",
+      "properties": {
+        "columns": {
+          "description": "Structured column info used by all pipeline components. Column names, types, operators, and descriptions are embedded into JSON schemas and prompts for each component automatically.",
+          "items": {
+            "$ref": "#/$defs/ColumnInfo"
+          },
+          "title": "Columns",
+          "type": "array"
+        },
+        "constraints": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Default constraints to always apply",
+          "title": "Constraints"
+        },
+        "decomposition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DecompositionModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Query decomposition settings for breaking complex queries into subqueries."
+        },
+        "rerank": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InstructionAwareRerankModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional LLM-based instruction-aware reranking stage."
+        },
+        "router": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouterModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional query router for selecting execution mode (standard vs instructed)."
+        },
+        "verifier": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VerifierModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional result verification with structured feedback for retry."
+        }
+      },
+      "required": [
+        "columns"
+      ],
+      "title": "InstructedRetrieverModel",
+      "type": "object"
+    },
+    "InstructionAwareRerankModel": {
+      "additionalProperties": false,
+      "description": "LLM-based reranking considering user instructions and constraints.\n\nUse fast models (GPT-3.5, Haiku, Llama 3 8B) to minimize latency (~100ms).\nRuns AFTER FlashRank as an additional constraint-aware reranking stage.\nSkipped for 'standard' mode when auto_bypass=true in router config.\n\nExample:\n    ```yaml\n    instructed:\n      columns:\n        - name: brand_name\n          type: string\n      rerank:\n        model: *fast_llm\n        instructions: |\n          Prioritize results matching price and brand constraints.\n        top_n: 10\n    ```",
+      "properties": {
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LLMModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "LLM for instruction reranking (fast model recommended)"
+        },
+        "instructions": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Custom reranking instructions for constraint prioritization",
+          "title": "Instructions"
+        },
+        "top_n": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Number of documents to return after instruction reranking",
+          "title": "Top N"
+        }
+      },
+      "title": "InstructionAwareRerankModel",
+      "type": "object"
+    },
     "LLMModel": {
       "additionalProperties": false,
       "properties": {
@@ -2585,6 +3211,18 @@
         "name": {
           "title": "Name",
           "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
         },
         "temperature": {
           "anyOf": [
@@ -2827,10 +3465,6 @@
           "title": "Type",
           "type": "string"
         },
-        "name": {
-          "title": "Name",
-          "type": "string"
-        },
         "human_in_the_loop": {
           "anyOf": [
             {
@@ -2930,6 +3564,17 @@
           "title": "Args",
           "type": "array"
         },
+        "app": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DatabricksAppModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "connection": {
           "anyOf": [
             {
@@ -2985,11 +3630,40 @@
             }
           ],
           "default": null
+        },
+        "include_tools": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional list of tool names or glob patterns to include from the MCP server. If specified, only tools matching these patterns will be loaded. Supports glob patterns: * (any chars), ? (single char), [abc] (char set). Examples: ['execute_query', 'list_*', 'get_?_data']",
+          "title": "Include Tools"
+        },
+        "exclude_tools": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional list of tool names or glob patterns to exclude from the MCP server. Tools matching these patterns will not be loaded. Takes precedence over include_tools. Supports glob patterns: * (any chars), ? (single char), [abc] (char set). Examples: ['drop_*', 'delete_*', 'execute_ddl']",
+          "title": "Exclude Tools"
         }
       },
-      "required": [
-        "name"
-      ],
       "title": "McpFunctionModel",
       "type": "object"
     },
@@ -3087,6 +3761,13 @@
           },
           "title": "Prompt Optimizations",
           "type": "object"
+        },
+        "cache_threshold_optimizations": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ContextAwareCacheOptimizationModel"
+          },
+          "title": "Cache Threshold Optimizations",
+          "type": "object"
         }
       },
       "title": "OptimizationsModel",
@@ -3112,10 +3793,15 @@
               "$ref": "#/$defs/SwarmModel"
             },
             {
+              "const": true,
+              "type": "boolean"
+            },
+            {
               "type": "null"
             }
           ],
-          "default": null
+          "default": null,
+          "title": "Swarm"
         },
         "memory": {
           "anyOf": [
@@ -3293,6 +3979,12 @@
             }
           ],
           "title": "Tags"
+        },
+        "auto_register": {
+          "default": false,
+          "description": "Whether to automatically register the default_template to the prompt registry. If False, the prompt will only be loaded from the registry (never created/updated). Defaults to True for backward compatibility.",
+          "title": "Auto Register",
+          "type": "boolean"
         }
       },
       "required": [
@@ -3371,10 +4063,6 @@
           "title": "Type",
           "type": "string"
         },
-        "name": {
-          "title": "Name",
-          "type": "string"
-        },
         "human_in_the_loop": {
           "anyOf": [
             {
@@ -3385,6 +4073,10 @@
             }
           ],
           "default": null
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
         }
       },
       "required": [
@@ -3420,13 +4112,20 @@
     },
     "RerankParametersModel": {
       "additionalProperties": false,
-      "description": "Configuration for reranking retrieved documents using FlashRank.\n\nFlashRank provides fast, local reranking without API calls using lightweight\ncross-encoder models. Reranking improves retrieval quality by reordering results\nbased on semantic relevance to the query.\n\nTypical workflow:\n1. Retrieve more documents than needed (e.g., 50 via num_results)\n2. Rerank all retrieved documents\n3. Return top_n best matches (e.g., 5)\n\nExample:\n    ```yaml\n    retriever:\n      search_parameters:\n        num_results: 50  # Retrieve more candidates\n      rerank:\n        model: ms-marco-MiniLM-L-12-v2\n        top_n: 5  # Return top 5 after reranking\n    ```\n\nAvailable models (from fastest to most accurate):\n- \"ms-marco-TinyBERT-L-2-v2\" (fastest, smallest)\n- \"ms-marco-MiniLM-L-6-v2\"\n- \"ms-marco-MiniLM-L-12-v2\" (default, good balance)\n- \"rank-T5-flan\" (most accurate, slower)",
+      "description": "Configuration for reranking retrieved documents.\n\nSupports two reranking options that can be combined:\n1. FlashRank (local cross-encoder) - set `model`\n2. Databricks server-side reranking - set `columns`\n\nFor LLM instruction-aware reranking, use `instructed.rerank` instead.\n\nExample with FlashRank:\n    ```yaml\n    rerank:\n      model: ms-marco-MiniLM-L-12-v2  # FlashRank model\n      top_n: 10\n    ```\n\nExample with Databricks columns:\n    ```yaml\n    rerank:\n      columns:\n        - product_name\n        - brand_name\n    ```\n\nAvailable FlashRank models (see https://github.com/PrithivirajDamodaran/FlashRank):\n- \"ms-marco-TinyBERT-L-2-v2\" (~4MB, fastest)\n- \"ms-marco-MiniLM-L-12-v2\" (~34MB, best cross-encoder)\n- \"rank-T5-flan\" (~110MB, best non cross-encoder)\n- \"ms-marco-MultiBERT-L-12\" (~150MB, multilingual 100+ languages)",
       "properties": {
         "model": {
-          "default": "ms-marco-MiniLM-L-12-v2",
-          "description": "FlashRank model name. Default provides good balance of speed and accuracy.",
-          "title": "Model",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "FlashRank model name. If None, FlashRank is not used (use columns for Databricks reranking).",
+          "title": "Model"
         },
         "top_n": {
           "anyOf": [
@@ -3450,8 +4149,8 @@
               "type": "null"
             }
           ],
-          "default": "/tmp/flashrank_cache",
-          "description": "Directory to cache downloaded model weights.",
+          "default": "~/.dao_ai/cache/flashrank",
+          "description": "Directory to cache downloaded model weights. Supports tilde expansion (e.g., ~/.dao_ai).",
           "title": "Cache Dir"
         },
         "columns": {
@@ -3620,8 +4319,20 @@
             }
           ],
           "default": null,
-          "description": "Optional reranking configuration. Set to true for defaults, or provide ReRankParametersModel for custom settings.",
+          "description": "Optional reranking configuration. Set to true for defaults, or provide RerankParametersModel for custom settings.",
           "title": "Rerank"
+        },
+        "instructed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InstructedRetrieverModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional instructed retrieval with query decomposition, instruction-aware reranking, routing, and verification."
         }
       },
       "required": [
@@ -3630,16 +4341,102 @@
       "title": "RetrieverModel",
       "type": "object"
     },
+    "RouterModel": {
+      "additionalProperties": false,
+      "description": "Select internal execution mode based on query characteristics.\n\nUse fast models (GPT-3.5, Haiku, Llama 3 8B) to minimize latency (~50-100ms).\nRoutes to internal modes within the same retriever, not external retrievers.\nCross-index routing belongs at the agent/tool-selection level.\n\nExecution Modes:\n- \"standard\": Single similarity_search() for simple keyword/product searches\n- \"instructed\": Decompose -> Parallel Search -> RRF for constrained queries\n\nExample:\n    ```yaml\n    retriever:\n      instructed:\n        columns:\n          - name: brand_name\n            type: string\n        router:\n          model: *fast_llm\n          default_mode: standard\n          auto_bypass: true\n    ```",
+      "properties": {
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LLMModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "LLM for routing decision (fast model recommended)"
+        },
+        "default_mode": {
+          "default": "standard",
+          "description": "Fallback mode if routing fails",
+          "enum": [
+            "standard",
+            "instructed"
+          ],
+          "title": "Default Mode",
+          "type": "string"
+        },
+        "auto_bypass": {
+          "default": true,
+          "description": "Skip Instruction Reranker and Verifier for standard mode",
+          "title": "Auto Bypass",
+          "type": "boolean"
+        }
+      },
+      "title": "RouterModel",
+      "type": "object"
+    },
     "SchemaModel": {
       "additionalProperties": false,
       "properties": {
         "catalog_name": {
-          "title": "Catalog Name",
-          "type": "string"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompositeVariableModel"
+            },
+            {
+              "$ref": "#/$defs/EnvironmentVariableModel"
+            },
+            {
+              "$ref": "#/$defs/SecretVariableModel"
+            },
+            {
+              "$ref": "#/$defs/PrimitiveVariableModel"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ],
+          "title": "Catalog Name"
         },
         "schema_name": {
-          "title": "Schema Name",
-          "type": "string"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompositeVariableModel"
+            },
+            {
+              "$ref": "#/$defs/EnvironmentVariableModel"
+            },
+            {
+              "$ref": "#/$defs/SecretVariableModel"
+            },
+            {
+              "$ref": "#/$defs/PrimitiveVariableModel"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ],
+          "title": "Schema Name"
         },
         "permissions": {
           "anyOf": [
@@ -3802,15 +4599,6 @@
       "title": "ServicePrincipalModel",
       "type": "object"
     },
-    "StorageType": {
-      "enum": [
-        "postgres",
-        "memory",
-        "lakebase"
-      ],
-      "title": "StorageType",
-      "type": "string"
-    },
     "StoreModel": {
       "additionalProperties": false,
       "properties": {
@@ -3828,17 +4616,6 @@
             }
           ],
           "default": null
-        },
-        "type": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/StorageType"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": "memory"
         },
         "dims": {
           "anyOf": [
@@ -3925,9 +4702,6 @@
     "SwarmModel": {
       "additionalProperties": false,
       "properties": {
-        "model": {
-          "$ref": "#/$defs/LLMModel"
-        },
         "default_agent": {
           "anyOf": [
             {
@@ -3942,6 +4716,14 @@
           ],
           "default": null,
           "title": "Default Agent"
+        },
+        "middleware": {
+          "description": "List of middleware to apply to all agents in the swarm",
+          "items": {
+            "$ref": "#/$defs/MiddlewareModel"
+          },
+          "title": "Middleware",
+          "type": "array"
         },
         "handoffs": {
           "anyOf": [
@@ -3975,9 +4757,6 @@
           "title": "Handoffs"
         }
       },
-      "required": [
-        "model"
-      ],
       "title": "SwarmModel",
       "type": "object"
     },
@@ -4182,6 +4961,9 @@
               "$ref": "#/$defs/FactoryFunctionModel"
             },
             {
+              "$ref": "#/$defs/InlineFunctionModel"
+            },
+            {
               "$ref": "#/$defs/UnityCatalogFunctionModel"
             },
             {
@@ -4218,10 +5000,6 @@
           "title": "Type",
           "type": "string"
         },
-        "name": {
-          "title": "Name",
-          "type": "string"
-        },
         "human_in_the_loop": {
           "anyOf": [
             {
@@ -4233,16 +5011,8 @@
           ],
           "default": null
         },
-        "schema": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SchemaModel"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+        "resource": {
+          "$ref": "#/$defs/FunctionModel"
         },
         "partial_args": {
           "anyOf": [
@@ -4285,7 +5055,7 @@
         }
       },
       "required": [
-        "name"
+        "resource"
       ],
       "title": "UnityCatalogFunctionModel",
       "type": "object"
@@ -4294,7 +5064,7 @@
       "additionalProperties": false,
       "properties": {
         "function": {
-          "$ref": "#/$defs/UnityCatalogFunctionModel"
+          "$ref": "#/$defs/FunctionModel"
         },
         "ddl": {
           "title": "Ddl",
@@ -4378,6 +5148,7 @@
     },
     "VectorStoreModel": {
       "additionalProperties": false,
+      "description": "Configuration model for a Databricks Vector Search store.\n\nSupports two modes:\n1. **Use Existing Index**: Provide only `index` (fully qualified name).\n   Used for querying an existing vector search index at runtime.\n2. **Provisioning Mode**: Provide `source_table` + `embedding_source_column`.\n   Used for creating a new vector search index.\n\nExamples:\n    Minimal configuration (use existing index):\n    ```yaml\n    vector_stores:\n      products_search:\n        index:\n          name: catalog.schema.my_index\n    ```\n\n    Full provisioning configuration:\n    ```yaml\n    vector_stores:\n      products_search:\n        source_table:\n          schema: *my_schema\n          name: products\n        embedding_source_column: description\n        endpoint:\n          name: my_endpoint\n    ```",
       "properties": {
         "on_behalf_of_user": {
           "anyOf": [
@@ -4534,10 +5305,10 @@
           "default": null,
           "title": "Pat"
         },
-        "embedding_model": {
+        "index": {
           "anyOf": [
             {
-              "$ref": "#/$defs/LLMModel"
+              "$ref": "#/$defs/IndexModel"
             },
             {
               "type": "null"
@@ -4545,10 +5316,33 @@
           ],
           "default": null
         },
-        "index": {
+        "source_table": {
           "anyOf": [
             {
-              "$ref": "#/$defs/IndexModel"
+              "$ref": "#/$defs/TableModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "embedding_source_column": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Embedding Source Column"
+        },
+        "embedding_model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LLMModel"
             },
             {
               "type": "null"
@@ -4566,9 +5360,6 @@
             }
           ],
           "default": null
-        },
-        "source_table": {
-          "$ref": "#/$defs/TableModel"
         },
         "source_path": {
           "anyOf": [
@@ -4629,17 +5420,46 @@
           ],
           "default": null,
           "title": "Doc Uri"
-        },
-        "embedding_source_column": {
-          "title": "Embedding Source Column",
-          "type": "string"
         }
       },
-      "required": [
-        "source_table",
-        "embedding_source_column"
-      ],
       "title": "VectorStoreModel",
+      "type": "object"
+    },
+    "VerifierModel": {
+      "additionalProperties": false,
+      "description": "Validate results against user constraints with structured feedback.\n\nUse fast models (GPT-3.5, Haiku, Llama 3 8B) to minimize latency (~50-100ms).\nSkipped for 'standard' mode when auto_bypass=true in router config.\nReturns structured feedback for intelligent retry, not blind retry.\n\nExample:\n    ```yaml\n    retriever:\n      instructed:\n        columns:\n          - name: brand_name\n            type: string\n        verifier:\n          model: *fast_llm\n          on_failure: warn_and_retry\n          max_retries: 1\n    ```",
+      "properties": {
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LLMModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "LLM for verification (fast model recommended)"
+        },
+        "on_failure": {
+          "default": "warn",
+          "description": "Behavior when verification fails",
+          "enum": [
+            "warn",
+            "retry",
+            "warn_and_retry"
+          ],
+          "title": "On Failure",
+          "type": "string"
+        },
+        "max_retries": {
+          "default": 1,
+          "description": "Maximum retry attempts before returning with warning",
+          "title": "Max Retries",
+          "type": "integer"
+        }
+      },
+      "title": "VerifierModel",
       "type": "object"
     },
     "VolumeModel": {
@@ -4853,6 +5673,7 @@
       "type": "object"
     },
     "WarehouseModel": {
+      "additionalProperties": false,
       "properties": {
         "on_behalf_of_user": {
           "anyOf": [
@@ -5010,8 +5831,16 @@
           "title": "Pat"
         },
         "name": {
-          "title": "Name",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
         },
         "description": {
           "anyOf": [
@@ -5056,7 +5885,6 @@
         }
       },
       "required": [
-        "name",
         "warehouse_id"
       ],
       "title": "WarehouseModel",
@@ -5074,6 +5902,18 @@
   },
   "additionalProperties": false,
   "properties": {
+    "version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Version"
+    },
     "variables": {
       "additionalProperties": {
         "anyOf": [

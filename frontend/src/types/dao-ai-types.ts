@@ -175,13 +175,17 @@ export interface GenieContextAwareCacheParametersModel {
   database: DatabaseModel | string;  // Can be inline or reference
   warehouse: WarehouseModel | string;  // Can be inline or reference
   table_name?: string;  // Default: "genie_context_aware_cache"
-  context_window_size?: number;  // Default: 2 - Number of previous turns to include for context
+  context_window_size?: number;  // Default: 4 - Number of previous turns to include for context
   max_context_tokens?: number;  // Default: 2000 - Maximum context length to prevent extremely long embeddings
-  // Prompt history fields (new in dao-ai 0.1.21)
+  // Prompt history fields
   prompt_history_table?: string;  // Default: "genie_prompt_history"
   max_prompt_history_length?: number;  // Default: 50
   use_genie_api_for_history?: boolean;  // Default: false
-  prompt_history_ttl_seconds?: number | null;  // Optional TTL for prompt history
+  prompt_history_ttl_seconds?: number | null;  // Optional TTL for prompt history (null = use cache TTL)
+  // IVFFlat index tuning for pg_vector similarity search
+  ivfflat_lists?: number | null;  // Number of IVF lists (null = auto-computed as max(100, sqrt(row_count)))
+  ivfflat_probes?: number | null;  // Number of lists to probe per query (null = auto-computed as max(10, sqrt(lists)))
+  ivfflat_candidates?: number;  // Top-K candidates before Python-side reranking (default: 20)
 }
 
 // In-Memory Semantic Cache for Genie (no database required)
@@ -278,9 +282,11 @@ export interface DecompositionModel {
 }
 
 // Instructed retrieval with query decomposition, reranking, routing, and verification
+// In dao-ai 0.1.24+, columns is the single source of truth for schema context.
+// Each pipeline component (decomposition, routing, verification, reranking)
+// generates the specific context it needs from the structured column metadata.
 export interface InstructedRetrieverModel {
-  schema_description: string;  // Required - column names, types, and filter syntax
-  columns?: ColumnInfo[];
+  columns: ColumnInfo[];  // Required - structured column metadata for all pipeline components
   constraints?: string[];
   decomposition?: DecompositionModel;  // Query decomposition and RRF merging
   rerank?: InstructionAwareRerankModel;  // LLM-based instruction-aware reranking
@@ -293,6 +299,7 @@ export interface ColumnInfo {
   name: string;
   type?: "string" | "number" | "boolean" | "datetime";
   operators?: string[];  // Default: ["", "NOT", "<", "<=", ">", ">=", "LIKE", "NOT LIKE"]
+  description?: string;  // Human-readable description for LLM context (e.g. "Brand/manufacturer (MILWAUKEE, DEWALT, etc.)")
 }
 
 // Few-shot example for instructed retrieval

@@ -1937,18 +1937,17 @@ export function generateYAML(config: AppConfig): string {
       }
 
       // Handle instructed retrieval configuration (nested decomposition, rerank, router, verifier)
+      // In dao-ai 0.1.24+, columns is required and is the single source of truth for schema context
       if (retriever.instructed) {
-        const instructedConfig: Record<string, any> = {
-          schema_description: retriever.instructed.schema_description,
-        };
+        const instructedConfig: Record<string, any> = {};
         
-        if (retriever.instructed.columns && retriever.instructed.columns.length > 0) {
-          instructedConfig.columns = retriever.instructed.columns.map(col => ({
-            name: col.name,
-            ...(col.type && { type: col.type }),
-            ...(col.operators && col.operators.length > 0 && { operators: col.operators }),
-          }));
-        }
+        // columns is required - always include it
+        instructedConfig.columns = retriever.instructed.columns.map(col => ({
+          name: col.name,
+          ...(col.type && { type: col.type }),
+          ...(col.operators && col.operators.length > 0 && { operators: col.operators }),
+          ...(col.description && { description: col.description }),
+        }));
         
         if (retriever.instructed.constraints && retriever.instructed.constraints.length > 0) {
           instructedConfig.constraints = retriever.instructed.constraints;
