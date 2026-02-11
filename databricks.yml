@@ -44,11 +44,13 @@ resources:
             permission: CAN_QUERY
       # Enable on-behalf-of-user authentication
       # These scopes allow the app to access Databricks APIs on behalf of the user
-      # Reference: https://learn.microsoft.com/en-us/azure/databricks/dev-tools/databricks-apps/auth#user-authorization
+      # so that resource listings reflect the user's own permissions.
+      # Reference: https://docs.databricks.com/aws/en/dev-tools/databricks-apps/auth#user-authorization
       user_api_scopes:
         - sql
         - serving.serving-endpoints
         - vectorsearch.vector-search-indexes
+        - vectorsearch.vector-search-endpoints
         - files.files
         - dashboards.genie
         - catalog.connections

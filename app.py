@@ -93,6 +93,7 @@ OAUTH_CLIENT_ID = os.environ.get('OAUTH_CLIENT_ID')
 OAUTH_CLIENT_SECRET = os.environ.get('OAUTH_CLIENT_SECRET')
 
 # API Scopes to request during OAuth
+# Keep in sync with user_api_scopes in databricks.yml
 OAUTH_SCOPES = [
     'sql',
     'dashboards.genie',
@@ -100,6 +101,10 @@ OAUTH_SCOPES = [
     'serving.serving-endpoints',
     'vectorsearch.vector-search-indexes',
     'vectorsearch.vector-search-endpoints',
+    'catalog.connections',
+    'catalog.catalogs:read',
+    'catalog.schemas:read',
+    'catalog.tables:read',
     'offline_access',  # For refresh tokens
 ]
 
@@ -856,22 +861,44 @@ def health_check():
 
 
 # =============================================================================
-# Unity Catalog APIs (using WorkspaceClient with default auth)
-# These APIs use the SDK's default authentication which doesn't require
-# specific user_api_scopes - the app's service principal has access.
+# Unity Catalog & Resource APIs (using user auth when available)
+# These APIs prefer the requesting user's credentials so that resource listings
+# (catalogs, schemas, endpoints, etc.) reflect the user's own permissions.
+# Falls back to the app's service principal / default SDK auth when no user
+# token is available (e.g. local development without OBO headers).
 # =============================================================================
 
 def get_workspace_client():
     """
-    Get a WorkspaceClient using the default constructor.
-    This uses environment variables, SDK config, or service principal auth.
+    Get a WorkspaceClient authenticated as the current user when possible.
+
+    Token resolution order (same as get_databricks_token_with_source):
+    1. Session token (OAuth flow)
+    2. Authorization header Bearer token (user's PAT)
+    3. X-Forwarded-Access-Token header (Databricks App on-behalf-of-user)
+    4. Databricks SDK Config (env vars, profiles, etc.)
+    5. DATABRICKS_TOKEN environment variable
+
+    Falls back to default SDK auth (service principal) when no user token
+    or host is available.
     """
+    from databricks.sdk import WorkspaceClient
+
     try:
-        from databricks.sdk import WorkspaceClient
-        return WorkspaceClient()
+        token, source = get_databricks_token_with_source()
+        host, _ = get_databricks_host_with_source()
+
+        if token and host:
+            host = host.rstrip('/')
+            if not host.startswith('http'):
+                host = f'https://{host}'
+            log('debug', f"WorkspaceClient using {source} token for user auth")
+            return WorkspaceClient(host=host, token=token)
     except Exception as e:
-        log('error', f"Failed to create WorkspaceClient: {e}")
-        raise
+        log('warning', f"Failed to resolve user credentials, falling back to default SDK auth: {e}")
+
+    log('debug', "WorkspaceClient using default SDK auth (service principal)")
+    return WorkspaceClient()
 
 
 def get_current_user_email() -> str | None:
