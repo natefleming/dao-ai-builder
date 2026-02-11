@@ -1,0 +1,13 @@
+# Gitleaks configuration for dao-ai-builder
+# https://github.com/gitleaks/gitleaks#configuration
+
+title = "dao-ai-builder gitleaks config"
+
+[allowlist]
+  description = "Allow minified frontend build artifacts (false positives from bundled libraries)"
+  paths = [
+    '''static/assets/.*\.js$''',
+    '''static/assets/.*\.js\.map$''',
+    '''frontend/dist/assets/.*\.js$''',
+    '''frontend/dist/assets/.*\.js\.map$''',
+  ]

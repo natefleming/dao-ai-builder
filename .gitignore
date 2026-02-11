@@ -5,8 +5,10 @@ frontend/.vite/
 frontend/.DS_Store
 
 # Built static files (for deployment)
-# Note: 'static/' is generated during deployment from frontend/dist
-static/
+# Note: 'static/' is generated from frontend/dist during build
+# The static/ folder is tracked so git-based Databricks App deployments work
+# Source maps are excluded to reduce repo size
+static/assets/*.js.map
 
 # Python
 __pycache__/
