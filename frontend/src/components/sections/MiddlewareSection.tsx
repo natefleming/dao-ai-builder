@@ -826,6 +826,22 @@ export default function MiddlewareSection() {
     setIsModalOpen(true);
   };
 
+  // Helper: extract an LLM key from a middleware arg that may be a "*ref" string or a resolved LLM object
+  const extractLlmKey = (modelArg: any): string => {
+    if (typeof modelArg === 'string' && modelArg.startsWith('*')) {
+      return modelArg.substring(1);
+    }
+    // When YAML aliases are resolved, modelArg becomes the LLM config object — find its key
+    if (typeof modelArg === 'object' && modelArg !== null) {
+      const llmEntries = Object.entries(llms);
+      const match = llmEntries.find(([, llm]) =>
+        (llm as any).name === modelArg.name
+      );
+      if (match) return match[0];
+    }
+    return typeof modelArg === 'string' ? modelArg : '';
+  };
+
   const parseMiddlewareArgs = (mw: MiddlewareModel, configuredTools: Record<string, any>): Partial<MiddlewareFormData> => {
     const parsed: Partial<MiddlewareFormData> = {};
     const args = mw.args || {};
@@ -836,9 +852,7 @@ export default function MiddlewareSection() {
     // Guardrail middleware
     if (name === 'dao_ai.middleware.create_guardrail_middleware') {
       parsed.guardrailName = args.name || '';
-      parsed.guardrailModel = typeof args.model === 'string' && args.model.startsWith('*') 
-        ? args.model.substring(1) 
-        : '';
+      parsed.guardrailModel = extractLlmKey(args.model);
       parsed.guardrailPrompt = args.prompt || '';
       parsed.guardrailRetries = args.num_retries || 3;
       parsed.guardrailFailOpen = args.fail_open !== false;
@@ -853,9 +867,7 @@ export default function MiddlewareSection() {
     
     // Safety guardrail
     if (name === 'dao_ai.middleware.create_safety_guardrail_middleware') {
-      parsed.safetyModel = typeof args.safety_model === 'string' && args.safety_model.startsWith('*')
-        ? args.safety_model.substring(1)
-        : '';
+      parsed.safetyModel = extractLlmKey(args.safety_model);
       parsed.safetyFailOpen = args.fail_open !== false;
     }
     
@@ -875,10 +887,7 @@ export default function MiddlewareSection() {
     // Summarization
     if (name === 'dao_ai.middleware.create_summarization_middleware') {
       const chatHistory = args.chat_history || {};
-      const model = chatHistory.model || '';
-      parsed.summaryModel = typeof model === 'string' && model.startsWith('*') 
-        ? model.substring(1) 
-        : '';
+      parsed.summaryModel = extractLlmKey(chatHistory.model);
       parsed.summaryMaxTokens = chatHistory.max_tokens || 2048;
       parsed.summaryUsesTokens = !!chatHistory.max_tokens_before_summary;
       parsed.summaryMaxTokensBefore = chatHistory.max_tokens_before_summary || 20480;
@@ -1000,8 +1009,7 @@ export default function MiddlewareSection() {
     
     // Veracity Guardrail
     if (name === 'dao_ai.middleware.create_veracity_guardrail_middleware') {
-      parsed.veracityModel = typeof args.model === 'string' && args.model.startsWith('*')
-        ? args.model.substring(1) : '';
+      parsed.veracityModel = extractLlmKey(args.model);
       parsed.veracityRetries = args.num_retries ?? 2;
       parsed.veracityFailOpen = args.fail_open !== false;
       parsed.veracityMaxContextLength = args.max_context_length ?? 8000;
@@ -1009,16 +1017,14 @@ export default function MiddlewareSection() {
     
     // Relevance Guardrail
     if (name === 'dao_ai.middleware.create_relevance_guardrail_middleware') {
-      parsed.relevanceModel = typeof args.model === 'string' && args.model.startsWith('*')
-        ? args.model.substring(1) : '';
+      parsed.relevanceModel = extractLlmKey(args.model);
       parsed.relevanceRetries = args.num_retries ?? 2;
       parsed.relevanceFailOpen = args.fail_open !== false;
     }
     
     // Tone Guardrail
     if (name === 'dao_ai.middleware.create_tone_guardrail_middleware') {
-      parsed.toneModel = typeof args.model === 'string' && args.model.startsWith('*')
-        ? args.model.substring(1) : '';
+      parsed.toneModel = extractLlmKey(args.model);
       parsed.toneProfile = args.tone || 'professional';
       parsed.toneCustomGuidelines = args.custom_guidelines || '';
       parsed.toneRetries = args.num_retries ?? 2;
@@ -1027,8 +1033,7 @@ export default function MiddlewareSection() {
     
     // Conciseness Guardrail
     if (name === 'dao_ai.middleware.create_conciseness_guardrail_middleware') {
-      parsed.concisenessModel = typeof args.model === 'string' && args.model.startsWith('*')
-        ? args.model.substring(1) : '';
+      parsed.concisenessModel = extractLlmKey(args.model);
       parsed.concisenessMaxLength = args.max_length ?? 3000;
       parsed.concisenessMinLength = args.min_length ?? 20;
       parsed.concisenessCheckVerbosity = args.check_verbosity !== false;
@@ -1051,8 +1056,7 @@ export default function MiddlewareSection() {
     
     // Deep Summarization
     if (name === 'dao_ai.middleware.create_deep_summarization_middleware') {
-      parsed.deepSumModel = typeof args.model === 'string' && args.model.startsWith('*')
-        ? args.model.substring(1) : (args.model || '');
+      parsed.deepSumModel = extractLlmKey(args.model);
       parsed.deepSumBackendType = args.backend_type || 'state';
       parsed.deepSumRootDir = args.root_dir || '';
       const deepSumVolPath = args.volume_path || '';
@@ -1084,8 +1088,7 @@ export default function MiddlewareSection() {
     
     // LLM Tool Selector
     if (name === 'dao_ai.middleware.create_llm_tool_selector_middleware') {
-      parsed.toolSelectorModel = typeof args.model === 'string' && args.model.startsWith('*')
-        ? args.model.substring(1) : '';
+      parsed.toolSelectorModel = extractLlmKey(args.model);
       parsed.toolSelectorMaxTools = args.max_tools ?? 3;
       if (Array.isArray(args.always_include)) {
         parsed.toolSelectorAlwaysInclude = args.always_include
@@ -1131,8 +1134,7 @@ export default function MiddlewareSection() {
           name: s.name || '',
           description: s.description || '',
           systemPrompt: s.system_prompt || '',
-          model: typeof s.model === 'string' && s.model.startsWith('*')
-            ? s.model.substring(1) : '',
+          model: extractLlmKey(s.model),
         }));
       } else {
         parsed.subagentEntries = [];
@@ -1197,7 +1199,7 @@ export default function MiddlewareSection() {
     if (factory === 'dao_ai.middleware.create_guardrail_middleware') {
       return {
         name: formData.guardrailName,
-        model: formData.guardrailModel ? `*${formData.guardrailModel}` : undefined,
+        model: formData.guardrailModel ? `__REF__${formData.guardrailModel}` : undefined,
         prompt: formData.guardrailPrompt,
         num_retries: formData.guardrailRetries,
         fail_open: formData.guardrailFailOpen,
@@ -1217,7 +1219,7 @@ export default function MiddlewareSection() {
         fail_open: formData.safetyFailOpen,
       };
       if (formData.safetyModel) {
-        result.safety_model = `*${formData.safetyModel}`;
+        result.safety_model = `__REF__${formData.safetyModel}`;
       }
       return result;
     }
@@ -1247,7 +1249,7 @@ export default function MiddlewareSection() {
     
     if (factory === 'dao_ai.middleware.create_summarization_middleware') {
       const chatHistory: any = {
-        model: formData.summaryModel ? `*${formData.summaryModel}` : undefined,
+        model: formData.summaryModel ? `__REF__${formData.summaryModel}` : undefined,
         max_tokens: formData.summaryMaxTokens,
       };
       
@@ -1410,7 +1412,7 @@ export default function MiddlewareSection() {
     // Veracity Guardrail
     if (factory === 'dao_ai.middleware.create_veracity_guardrail_middleware') {
       return {
-        ...(formData.veracityModel && { model: `*${formData.veracityModel}` }),
+        ...(formData.veracityModel && { model: `__REF__${formData.veracityModel}` }),
         num_retries: formData.veracityRetries,
         fail_open: formData.veracityFailOpen,
         max_context_length: formData.veracityMaxContextLength,
@@ -1420,7 +1422,7 @@ export default function MiddlewareSection() {
     // Relevance Guardrail
     if (factory === 'dao_ai.middleware.create_relevance_guardrail_middleware') {
       return {
-        ...(formData.relevanceModel && { model: `*${formData.relevanceModel}` }),
+        ...(formData.relevanceModel && { model: `__REF__${formData.relevanceModel}` }),
         num_retries: formData.relevanceRetries,
         fail_open: formData.relevanceFailOpen,
       };
@@ -1429,7 +1431,7 @@ export default function MiddlewareSection() {
     // Tone Guardrail
     if (factory === 'dao_ai.middleware.create_tone_guardrail_middleware') {
       return {
-        ...(formData.toneModel && { model: `*${formData.toneModel}` }),
+        ...(formData.toneModel && { model: `__REF__${formData.toneModel}` }),
         tone: formData.toneProfile,
         ...(formData.toneCustomGuidelines && { custom_guidelines: formData.toneCustomGuidelines }),
         num_retries: formData.toneRetries,
@@ -1440,7 +1442,7 @@ export default function MiddlewareSection() {
     // Conciseness Guardrail
     if (factory === 'dao_ai.middleware.create_conciseness_guardrail_middleware') {
       return {
-        ...(formData.concisenessModel && { model: `*${formData.concisenessModel}` }),
+        ...(formData.concisenessModel && { model: `__REF__${formData.concisenessModel}` }),
         max_length: formData.concisenessMaxLength,
         min_length: formData.concisenessMinLength,
         check_verbosity: formData.concisenessCheckVerbosity,
@@ -1469,7 +1471,7 @@ export default function MiddlewareSection() {
     // Deep Summarization
     if (factory === 'dao_ai.middleware.create_deep_summarization_middleware') {
       const result: Record<string, any> = {
-        ...(formData.deepSumModel && { model: formData.deepSumModel.startsWith('*') ? formData.deepSumModel : `*${formData.deepSumModel}` }),
+        ...(formData.deepSumModel && { model: `__REF__${formData.deepSumModel}` }),
         backend_type: formData.deepSumBackendType,
         trigger: [formData.deepSumTriggerType, formData.deepSumTriggerValue],
         keep: [formData.deepSumKeepType, formData.deepSumKeepValue],
@@ -1494,7 +1496,7 @@ export default function MiddlewareSection() {
     // LLM Tool Selector
     if (factory === 'dao_ai.middleware.create_llm_tool_selector_middleware') {
       const result: Record<string, any> = {
-        ...(formData.toolSelectorModel && { model: `*${formData.toolSelectorModel}` }),
+        ...(formData.toolSelectorModel && { model: `__REF__${formData.toolSelectorModel}` }),
         max_tools: formData.toolSelectorMaxTools,
       };
       if (formData.toolSelectorAlwaysInclude.length > 0) {
@@ -1556,7 +1558,7 @@ export default function MiddlewareSection() {
           name: s.name,
           description: s.description,
           system_prompt: s.systemPrompt,
-          ...(s.model && { model: `*${s.model}` }),
+          ...(s.model && { model: `__REF__${s.model}` }),
         }));
       }
       return result;
