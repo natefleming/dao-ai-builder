@@ -77,6 +77,8 @@ export default function GuardrailsSection() {
     modelKey: '',
     prompt: DEFAULT_GUARDRAIL_PROMPT,
     numRetries: '3',
+    failOpen: true,
+    maxContextLength: '8000',
   });
   const [refNameManuallyEdited, setRefNameManuallyEdited] = useState(false);
   
@@ -125,6 +127,8 @@ export default function GuardrailsSection() {
       modelKey: '',
       prompt: DEFAULT_GUARDRAIL_PROMPT,
       numRetries: '3',
+      failOpen: true,
+      maxContextLength: '8000',
     });
     setEditingKey(null);
     setShowAiInput(false);
@@ -136,7 +140,7 @@ export default function GuardrailsSection() {
   const { scrollToAsset } = useYamlScrollStore();
 
   // Handle editing an existing guardrail
-  const handleEdit = (key: string, guardrail: { name: string; model: { name: string }; prompt: string; num_retries?: number }) => {
+  const handleEdit = (key: string, guardrail: { name: string; model: { name: string }; prompt: string; num_retries?: number; fail_open?: boolean; max_context_length?: number }) => {
     scrollToAsset(key);
     setEditingKey(key);
     setRefNameManuallyEdited(true); // Preserve the reference name when editing
@@ -150,6 +154,8 @@ export default function GuardrailsSection() {
       modelKey: llmKey,
       prompt: guardrail.prompt,
       numRetries: String(guardrail.num_retries ?? 3),
+      failOpen: guardrail.fail_open !== false,
+      maxContextLength: String(guardrail.max_context_length ?? 8000),
     });
     
     setIsModalOpen(true);
@@ -172,6 +178,8 @@ export default function GuardrailsSection() {
         model: llms[formData.modelKey],
         prompt: formData.prompt,
         num_retries: parseInt(formData.numRetries),
+        fail_open: formData.failOpen,
+        max_context_length: parseInt(formData.maxContextLength),
       };
       
       // Use refName as the YAML key
@@ -254,6 +262,9 @@ export default function GuardrailsSection() {
                 </div>
                 <div className="flex items-center space-x-3">
                   <Badge variant="success">retries: {guardrail.num_retries ?? 3}</Badge>
+                  <Badge variant={guardrail.fail_open !== false ? 'info' : 'warning'}>
+                    fail open: {guardrail.fail_open !== false ? 'yes' : 'no'}
+                  </Badge>
                   <Button
                     variant="ghost"
                     size="sm"
@@ -500,15 +511,42 @@ export default function GuardrailsSection() {
             />
           </div>
 
-          <Input
-            label="Number of Retries"
-            type="number"
-            min="0"
-            max="10"
-            value={formData.numRetries}
-            onChange={(e) => setFormData({ ...formData, numRetries: e.target.value })}
-            hint="How many times to retry if evaluation fails"
-          />
+          <div className="grid grid-cols-2 gap-4">
+            <Input
+              label="Number of Retries"
+              type="number"
+              min="0"
+              max="10"
+              value={formData.numRetries}
+              onChange={(e) => setFormData({ ...formData, numRetries: e.target.value })}
+              hint="How many times to retry if evaluation fails"
+            />
+            <Input
+              label="Max Context Length"
+              type="number"
+              min="0"
+              value={formData.maxContextLength}
+              onChange={(e) => setFormData({ ...formData, maxContextLength: e.target.value })}
+              hint="Max character length for extracted tool context (default: 8000)"
+            />
+          </div>
+
+          <div className="p-3 bg-slate-800/30 rounded-lg border border-slate-700/50">
+            <label className="flex items-center space-x-3 text-sm text-slate-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={formData.failOpen}
+                onChange={(e) => setFormData({ ...formData, failOpen: e.target.checked })}
+                className="rounded border-slate-600 bg-slate-700 text-purple-500 focus:ring-purple-500"
+              />
+              <div>
+                <span className="font-medium">Fail Open</span>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  When enabled, responses pass through if the guardrail judge call fails (recommended for production)
+                </p>
+              </div>
+            </label>
+          </div>
 
           <div className="flex justify-end space-x-3 pt-4">
             <Button variant="secondary" type="button" onClick={() => {

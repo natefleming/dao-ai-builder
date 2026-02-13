@@ -415,6 +415,8 @@ export interface GuardrailModel {
   model: LLMModel;
   prompt: string;
   num_retries?: number;
+  fail_open?: boolean;
+  max_context_length?: number;
 }
 
 export interface MiddlewareModel {

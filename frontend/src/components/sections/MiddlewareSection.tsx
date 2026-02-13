@@ -52,6 +52,30 @@ const PRECONFIGURED_MIDDLEWARE = [
     category: 'Guardrails',
   },
   {
+    value: 'dao_ai.middleware.create_veracity_guardrail_middleware',
+    label: 'Veracity Guardrail',
+    description: 'Groundedness check against tool/retrieval context',
+    category: 'Guardrails',
+  },
+  {
+    value: 'dao_ai.middleware.create_relevance_guardrail_middleware',
+    label: 'Relevance Guardrail',
+    description: 'Check if response addresses the user query',
+    category: 'Guardrails',
+  },
+  {
+    value: 'dao_ai.middleware.create_tone_guardrail_middleware',
+    label: 'Tone Guardrail',
+    description: 'Validate response matches a tone profile',
+    category: 'Guardrails',
+  },
+  {
+    value: 'dao_ai.middleware.create_conciseness_guardrail_middleware',
+    label: 'Conciseness Guardrail',
+    description: 'Length and verbosity checks with LLM evaluation',
+    category: 'Guardrails',
+  },
+  {
     value: 'dao_ai.middleware.create_user_id_validation_middleware',
     label: 'User ID Validation',
     description: 'Ensure user_id is present in context',
@@ -142,6 +166,54 @@ const PRECONFIGURED_MIDDLEWARE = [
     category: 'Privacy',
   },
   {
+    value: 'dao_ai.middleware.create_tool_call_observability_middleware',
+    label: 'Tool Call Observability',
+    description: 'Log tool calls with timing and argument tracking',
+    category: 'Observability',
+  },
+  {
+    value: 'dao_ai.middleware.create_todo_list_middleware',
+    label: 'Todo List',
+    description: 'Agent task planning and tracking with write_todos tool',
+    category: 'Deep Agents',
+  },
+  {
+    value: 'dao_ai.middleware.create_deep_summarization_middleware',
+    label: 'Deep Summarization',
+    description: 'Backend-offloading summarization with arg truncation',
+    category: 'Processing',
+  },
+  {
+    value: 'dao_ai.middleware.create_llm_tool_selector_middleware',
+    label: 'LLM Tool Selector',
+    description: 'Intelligently select relevant tools per query',
+    category: 'Processing',
+  },
+  {
+    value: 'dao_ai.middleware.create_filesystem_middleware',
+    label: 'Filesystem',
+    description: 'File operations (ls, read, write, edit, glob, grep)',
+    category: 'Deep Agents',
+  },
+  {
+    value: 'dao_ai.middleware.create_subagent_middleware',
+    label: 'SubAgent',
+    description: 'Spawn subagents for complex multi-step tasks',
+    category: 'Deep Agents',
+  },
+  {
+    value: 'dao_ai.middleware.create_agents_memory_middleware',
+    label: 'Agents Memory',
+    description: 'Load AGENTS.md context files into system prompt',
+    category: 'Deep Agents',
+  },
+  {
+    value: 'dao_ai.middleware.create_skills_middleware',
+    label: 'Skills',
+    description: 'Discover and expose SKILL.md agent skills',
+    category: 'Deep Agents',
+  },
+  {
     value: 'custom',
     label: 'Custom Factory...',
     description: 'Custom middleware factory function',
@@ -153,6 +225,35 @@ const PRECONFIGURED_MIDDLEWARE = [
 const MIDDLEWARE_CATEGORIES = Array.from(
   new Set(PRECONFIGURED_MIDDLEWARE.map(m => m.category))
 );
+
+/**
+ * Normalize a middleware factory name to its canonical short form.
+ *
+ * YAML configs may use fully-qualified module paths (e.g.,
+ * "dao_ai.middleware.todo.create_todo_list_middleware") or the short
+ * re-exported form ("dao_ai.middleware.create_todo_list_middleware").
+ * This function maps the long form to the short canonical form used
+ * in PRECONFIGURED_MIDDLEWARE so that lookups, parsing, and category
+ * matching all work correctly regardless of which form was imported.
+ */
+const normalizeMiddlewareName = (name: string): string => {
+  // Fast path: already matches a preconfigured value
+  if (PRECONFIGURED_MIDDLEWARE.find(pm => pm.value === name)) {
+    return name;
+  }
+
+  // Extract the terminal function name (e.g., "create_todo_list_middleware")
+  const parts = name.split('.');
+  const funcName = parts[parts.length - 1];
+
+  // Find a preconfigured entry whose value ends with the same function name
+  const match = PRECONFIGURED_MIDDLEWARE.find(pm => {
+    const pmParts = pm.value.split('.');
+    return pmParts[pmParts.length - 1] === funcName;
+  });
+
+  return match ? match.value : name;
+};
 
 interface CustomFieldEntry {
   id: string;
@@ -294,6 +395,14 @@ function parseToolReference(
   };
 }
 
+interface SubAgentEntry {
+  id: string;
+  name: string;
+  description: string;
+  systemPrompt: string;
+  model: string; // LLM ref key or empty
+}
+
 interface MiddlewareFormData {
   refName: string;
   selectedFactory: string;
@@ -304,6 +413,8 @@ interface MiddlewareFormData {
   guardrailModel: string; // LLM ref key
   guardrailPrompt: string;
   guardrailRetries: number;
+  guardrailFailOpen: boolean;
+  guardrailMaxContextLength: number;
   
   // Content filter parameters
   bannedKeywords: string[]; // Array of keywords
@@ -311,6 +422,7 @@ interface MiddlewareFormData {
   
   // Safety guardrail parameters
   safetyModel: string; // Optional LLM ref key
+  safetyFailOpen: boolean;
   
   // Custom field validation parameters
   customFields: CustomFieldEntry[];
@@ -324,6 +436,7 @@ interface MiddlewareFormData {
   
   // HITL parameters
   hitlInterruptTools: InterruptToolEntry[];
+  hitlDescriptionPrefix: string;
   
   // Assert/Suggest/Refine common params
   assertConstraint: string; // Python reference
@@ -333,14 +446,14 @@ interface MiddlewareFormData {
   assertMiddlewareName: string;
   
   suggestConstraint: string;
-  suggestMaxRetries: number;
-  suggestModel: string; // Optional LLM ref
+  suggestAllowOneRetry: boolean;
+  suggestLogLevel: string;
   suggestMiddlewareName: string;
   
-  refineConstraint: string;
+  refineRewardFn: string;
+  refineThreshold: number;
   refineMaxIterations: number;
-  refineModel: string; // Optional LLM ref
-  refineMiddlewareName: string;
+  refineSelectBest: boolean;
   
   // Tool Call Limit parameters
   toolCallLimitTool: string; // Tool ref key, empty = global limit
@@ -386,6 +499,97 @@ interface MiddlewareFormData {
   piiApplyToOutput: boolean;
   piiApplyToToolResults: boolean;
   
+  // Veracity Guardrail parameters
+  veracityModel: string;
+  veracityRetries: number;
+  veracityFailOpen: boolean;
+  veracityMaxContextLength: number;
+  
+  // Relevance Guardrail parameters
+  relevanceModel: string;
+  relevanceRetries: number;
+  relevanceFailOpen: boolean;
+  
+  // Tone Guardrail parameters
+  toneModel: string;
+  toneProfile: string;
+  toneCustomGuidelines: string;
+  toneRetries: number;
+  toneFailOpen: boolean;
+  
+  // Conciseness Guardrail parameters
+  concisenessModel: string;
+  concisenessMaxLength: number;
+  concisenessMinLength: number;
+  concisenessCheckVerbosity: boolean;
+  concisenessRetries: number;
+  concisenessFailOpen: boolean;
+  
+  // Tool Call Observability parameters
+  observabilityLogLevel: string;
+  observabilityIncludeArgs: boolean;
+  observabilityTrackTiming: boolean;
+  
+  // Todo List parameters
+  todoSystemPrompt: string;
+  todoToolDescription: string;
+  
+  // Deep Summarization parameters
+  deepSumModel: string;
+  deepSumBackendType: string;
+  deepSumRootDir: string;
+  deepSumVolumePath: string;
+  deepSumTriggerType: string;
+  deepSumTriggerValue: number;
+  deepSumKeepType: string;
+  deepSumKeepValue: number;
+  deepSumHistoryPathPrefix: string;
+  deepSumTruncateArgsEnabled: boolean;
+  deepSumTruncateArgsTriggerType: string;
+  deepSumTruncateArgsTriggerValue: number;
+  deepSumTruncateArgsKeepType: string;
+  deepSumTruncateArgsKeepValue: number;
+  deepSumTruncateArgsMaxLength: number;
+  
+  // LLM Tool Selector parameters
+  toolSelectorModel: string;
+  toolSelectorMaxTools: number;
+  toolSelectorAlwaysInclude: string[];
+  
+  // Filesystem parameters
+  filesystemBackendType: string;
+  filesystemRootDir: string;
+  filesystemVolumePath: string;
+  filesystemEvictLimit: number | null;
+  filesystemSystemPrompt: string;
+  filesystemCustomToolDescs: string; // JSON string of { tool_name: description }
+  
+  // SubAgent parameters
+  subagentBackendType: string;
+  subagentRootDir: string;
+  subagentVolumePath: string;
+  subagentSystemPrompt: string;
+  subagentTaskDescription: string;
+  subagentEntries: SubAgentEntry[];
+  
+  // Agents Memory parameters
+  agentsMemorySources: string[];
+  agentsMemoryBackendType: string;
+  agentsMemoryRootDir: string;
+  agentsMemoryVolumePath: string;
+  
+  // Skills parameters
+  skillsSources: string[];
+  skillsBackendType: string;
+  skillsRootDir: string;
+  skillsVolumePath: string;
+  
+  // Shared volume source toggle for Deep Agents middleware
+  // 'reference' = select from configured volumes, 'manual' = type path directly
+  volumeSource: 'reference' | 'manual';
+  volumeRef: string; // Key of the selected configured volume
+  volumeSubPath: string; // Optional sub-path within the selected volume
+  
   // Generic args (only for custom)
   genericArgs: Record<string, any>;
 }
@@ -398,9 +602,12 @@ const defaultFormData: MiddlewareFormData = {
   guardrailModel: '',
   guardrailPrompt: '',
   guardrailRetries: 3,
+  guardrailFailOpen: true,
+  guardrailMaxContextLength: 8000,
   bannedKeywords: [],
   blockMessage: 'I cannot provide that response. Please rephrase your request.',
   safetyModel: '',
+  safetyFailOpen: true,
   customFields: [],
   summaryModel: '',
   summaryMaxTokens: 2048,
@@ -408,19 +615,20 @@ const defaultFormData: MiddlewareFormData = {
   summaryMaxMessagesBefore: 10,
   summaryUsesTokens: true,
   hitlInterruptTools: [],
+  hitlDescriptionPrefix: '',
   assertConstraint: '',
   assertMaxRetries: 3,
   assertOnFailure: 'error',
   assertFallbackMessage: 'Unable to generate a valid response.',
   assertMiddlewareName: '',
   suggestConstraint: '',
-  suggestMaxRetries: 3,
-  suggestModel: '',
+  suggestAllowOneRetry: false,
+  suggestLogLevel: 'warning',
   suggestMiddlewareName: '',
-  refineConstraint: '',
+  refineRewardFn: '',
+  refineThreshold: 0.8,
   refineMaxIterations: 3,
-  refineModel: '',
-  refineMiddlewareName: '',
+  refineSelectBest: true,
   
   // Tool Call Limit defaults
   toolCallLimitTool: '', // Empty = global limit
@@ -466,6 +674,95 @@ const defaultFormData: MiddlewareFormData = {
   piiApplyToOutput: false,
   piiApplyToToolResults: false,
   
+  // Veracity Guardrail defaults
+  veracityModel: '',
+  veracityRetries: 2,
+  veracityFailOpen: true,
+  veracityMaxContextLength: 8000,
+  
+  // Relevance Guardrail defaults
+  relevanceModel: '',
+  relevanceRetries: 2,
+  relevanceFailOpen: true,
+  
+  // Tone Guardrail defaults
+  toneModel: '',
+  toneProfile: 'professional',
+  toneCustomGuidelines: '',
+  toneRetries: 2,
+  toneFailOpen: true,
+  
+  // Conciseness Guardrail defaults
+  concisenessModel: '',
+  concisenessMaxLength: 3000,
+  concisenessMinLength: 20,
+  concisenessCheckVerbosity: true,
+  concisenessRetries: 2,
+  concisenessFailOpen: true,
+  
+  // Tool Call Observability defaults
+  observabilityLogLevel: 'INFO',
+  observabilityIncludeArgs: false,
+  observabilityTrackTiming: true,
+  
+  // Todo List defaults
+  todoSystemPrompt: '',
+  todoToolDescription: '',
+  
+  // Deep Summarization defaults
+  deepSumModel: '',
+  deepSumBackendType: 'state',
+  deepSumRootDir: '',
+  deepSumVolumePath: '',
+  deepSumTriggerType: 'tokens',
+  deepSumTriggerValue: 100000,
+  deepSumKeepType: 'messages',
+  deepSumKeepValue: 20,
+  deepSumHistoryPathPrefix: '/conversation_history',
+  deepSumTruncateArgsEnabled: false,
+  deepSumTruncateArgsTriggerType: 'messages',
+  deepSumTruncateArgsTriggerValue: 50,
+  deepSumTruncateArgsKeepType: 'messages',
+  deepSumTruncateArgsKeepValue: 20,
+  deepSumTruncateArgsMaxLength: 2000,
+  
+  // LLM Tool Selector defaults
+  toolSelectorModel: '',
+  toolSelectorMaxTools: 3,
+  toolSelectorAlwaysInclude: [] as string[],
+  
+  // Filesystem defaults
+  filesystemBackendType: 'state',
+  filesystemRootDir: '',
+  filesystemVolumePath: '',
+  filesystemEvictLimit: 20000,
+  filesystemSystemPrompt: '',
+  filesystemCustomToolDescs: '',
+  
+  // SubAgent defaults
+  subagentBackendType: 'state',
+  subagentRootDir: '',
+  subagentVolumePath: '',
+  subagentSystemPrompt: '',
+  subagentTaskDescription: '',
+  subagentEntries: [] as SubAgentEntry[],
+  
+  // Agents Memory defaults
+  agentsMemorySources: [] as string[],
+  agentsMemoryBackendType: 'state',
+  agentsMemoryRootDir: '',
+  agentsMemoryVolumePath: '',
+  
+  // Skills defaults
+  skillsSources: [] as string[],
+  skillsBackendType: 'state',
+  skillsRootDir: '',
+  skillsVolumePath: '',
+  
+  volumeSource: 'reference',
+  volumeRef: '',
+  volumeSubPath: '',
+  
   genericArgs: {},
 };
 
@@ -486,6 +783,43 @@ export default function MiddlewareSection() {
   // Tools for middleware that reference tools
   const tools = config.tools || {};
 
+  // Volumes for Deep Agents middleware that reference volume paths
+  const volumes = config.resources?.volumes || {};
+  const volumeOptions = Object.entries(volumes).map(([key, vol]) => {
+    const catalog = vol.schema?.catalog_name || '';
+    const schema = vol.schema?.schema_name || '';
+    const path = catalog && schema ? `/Volumes/${catalog}/${schema}/${vol.name}` : vol.name;
+    return { value: key, label: `${key} (${path})`, path };
+  });
+
+  // Helper: build a volume path from a configured volume key
+  const getVolumePathFromKey = (volumeKey: string): string => {
+    const vol = volumes[volumeKey];
+    if (!vol) return '';
+    const catalog = vol.schema?.catalog_name || '';
+    const schema = vol.schema?.schema_name || '';
+    return catalog && schema ? `/Volumes/${catalog}/${schema}/${vol.name}` : vol.name;
+  };
+
+  // Helper: find a volume key that matches a given volume path (supports sub-paths)
+  // Returns { key, subPath } where subPath is the portion after the volume root (if any)
+  const findVolumeKeyByPath = (volumePath: string): { key: string; subPath: string } => {
+    // Try exact match first
+    const exact = volumeOptions.find(opt => opt.path === volumePath);
+    if (exact) return { key: exact.value, subPath: '' };
+    // Try prefix match (longest match wins) for sub-paths like /Volumes/cat/schema/vol/sub/path
+    let bestMatch: { key: string; subPath: string; len: number } | null = null;
+    for (const opt of volumeOptions) {
+      if (volumePath.startsWith(opt.path + '/')) {
+        const subPath = volumePath.slice(opt.path.length + 1); // strip leading '/'
+        if (!bestMatch || opt.path.length > bestMatch.len) {
+          bestMatch = { key: opt.value, subPath, len: opt.path.length };
+        }
+      }
+    }
+    return bestMatch ? { key: bestMatch.key, subPath: bestMatch.subPath } : { key: '', subPath: '' };
+  };
+
   const handleAdd = () => {
     setEditingMiddleware(null);
     setFormData(defaultFormData);
@@ -495,32 +829,38 @@ export default function MiddlewareSection() {
   const parseMiddlewareArgs = (mw: MiddlewareModel, configuredTools: Record<string, any>): Partial<MiddlewareFormData> => {
     const parsed: Partial<MiddlewareFormData> = {};
     const args = mw.args || {};
+    // Normalize the name so fully-qualified paths (e.g. dao_ai.middleware.todo.create_todo_list_middleware)
+    // match the same branches as the short canonical form
+    const name = normalizeMiddlewareName(mw.name);
     
     // Guardrail middleware
-    if (mw.name === 'dao_ai.middleware.create_guardrail_middleware') {
+    if (name === 'dao_ai.middleware.create_guardrail_middleware') {
       parsed.guardrailName = args.name || '';
       parsed.guardrailModel = typeof args.model === 'string' && args.model.startsWith('*') 
         ? args.model.substring(1) 
         : '';
       parsed.guardrailPrompt = args.prompt || '';
       parsed.guardrailRetries = args.num_retries || 3;
+      parsed.guardrailFailOpen = args.fail_open !== false;
+      parsed.guardrailMaxContextLength = args.max_context_length ?? 8000;
     }
     
     // Content filter
-    if (mw.name === 'dao_ai.middleware.create_content_filter_middleware') {
+    if (name === 'dao_ai.middleware.create_content_filter_middleware') {
       parsed.bannedKeywords = Array.isArray(args.banned_keywords) ? args.banned_keywords : [];
       parsed.blockMessage = args.block_message || defaultFormData.blockMessage;
     }
     
     // Safety guardrail
-    if (mw.name === 'dao_ai.middleware.create_safety_guardrail_middleware') {
+    if (name === 'dao_ai.middleware.create_safety_guardrail_middleware') {
       parsed.safetyModel = typeof args.safety_model === 'string' && args.safety_model.startsWith('*')
         ? args.safety_model.substring(1)
         : '';
+      parsed.safetyFailOpen = args.fail_open !== false;
     }
     
     // Custom field validation
-    if (mw.name === 'dao_ai.middleware.create_custom_field_validation_middleware') {
+    if (name === 'dao_ai.middleware.create_custom_field_validation_middleware') {
       parsed.customFields = Array.isArray(args.fields) 
         ? args.fields.map((f: any, idx: number) => ({
             id: `field_${idx}`,
@@ -533,7 +873,7 @@ export default function MiddlewareSection() {
     }
     
     // Summarization
-    if (mw.name === 'dao_ai.middleware.create_summarization_middleware') {
+    if (name === 'dao_ai.middleware.create_summarization_middleware') {
       const chatHistory = args.chat_history || {};
       const model = chatHistory.model || '';
       parsed.summaryModel = typeof model === 'string' && model.startsWith('*') 
@@ -546,7 +886,7 @@ export default function MiddlewareSection() {
     }
     
     // HITL
-    if (mw.name === 'dao_ai.middleware.create_human_in_the_loop_middleware') {
+    if (name === 'dao_ai.middleware.create_human_in_the_loop_middleware') {
       const interruptOn = args.interrupt_on || {};
       parsed.hitlInterruptTools = Object.entries(interruptOn).map(([toolName, config]: [string, any], idx) => ({
         id: `tool_${idx}`,
@@ -554,10 +894,11 @@ export default function MiddlewareSection() {
         reviewPrompt: config.review_prompt || '',
         allowedDecisions: config.allowed_decisions || ['approve', 'edit', 'reject'],
       }));
+      parsed.hitlDescriptionPrefix = args.description_prefix || '';
     }
     
     // Assert
-    if (mw.name === 'dao_ai.middleware.create_assert_middleware') {
+    if (name === 'dao_ai.middleware.create_assert_middleware') {
       parsed.assertConstraint = args.constraint || '';
       parsed.assertMaxRetries = args.max_retries || 3;
       parsed.assertOnFailure = args.on_failure || 'error';
@@ -566,27 +907,23 @@ export default function MiddlewareSection() {
     }
     
     // Suggest
-    if (mw.name === 'dao_ai.middleware.create_suggest_middleware') {
+    if (name === 'dao_ai.middleware.create_suggest_middleware') {
       parsed.suggestConstraint = args.constraint || '';
-      parsed.suggestMaxRetries = args.max_retries || 3;
-      parsed.suggestModel = typeof args.suggestion_model === 'string' && args.suggestion_model.startsWith('*')
-        ? args.suggestion_model.substring(1)
-        : '';
+      parsed.suggestAllowOneRetry = args.allow_one_retry || false;
+      parsed.suggestLogLevel = args.log_level || 'warning';
       parsed.suggestMiddlewareName = args.name || '';
     }
     
     // Refine
-    if (mw.name === 'dao_ai.middleware.create_refine_middleware') {
-      parsed.refineConstraint = args.constraint || '';
+    if (name === 'dao_ai.middleware.create_refine_middleware') {
+      parsed.refineRewardFn = args.reward_fn || '';
+      parsed.refineThreshold = args.threshold ?? 0.8;
       parsed.refineMaxIterations = args.max_iterations || 3;
-      parsed.refineModel = typeof args.refine_model === 'string' && args.refine_model.startsWith('*')
-        ? args.refine_model.substring(1)
-        : '';
-      parsed.refineMiddlewareName = args.name || '';
+      parsed.refineSelectBest = args.select_best !== false;
     }
     
     // Tool Call Limit
-    if (mw.name === 'dao_ai.middleware.create_tool_call_limit_middleware') {
+    if (name === 'dao_ai.middleware.create_tool_call_limit_middleware') {
       if (args.tool) {
         const toolEntry = parseToolReference(args.tool, configuredTools);
         // Use toolRef if found, otherwise empty (global)
@@ -600,14 +937,14 @@ export default function MiddlewareSection() {
     }
     
     // Model Call Limit
-    if (mw.name === 'dao_ai.middleware.create_model_call_limit_middleware') {
+    if (name === 'dao_ai.middleware.create_model_call_limit_middleware') {
       parsed.modelCallLimitThreadLimit = args.thread_limit ?? null;
       parsed.modelCallLimitRunLimit = args.run_limit ?? null;
       parsed.modelCallLimitExitBehavior = args.exit_behavior || 'end';
     }
     
     // Tool Retry
-    if (mw.name === 'dao_ai.middleware.create_tool_retry_middleware') {
+    if (name === 'dao_ai.middleware.create_tool_retry_middleware') {
       parsed.toolRetryMaxRetries = args.max_retries || 3;
       parsed.toolRetryBackoffFactor = args.backoff_factor || 2.0;
       parsed.toolRetryInitialDelay = args.initial_delay || 1.0;
@@ -625,7 +962,7 @@ export default function MiddlewareSection() {
     }
     
     // Model Retry
-    if (mw.name === 'dao_ai.middleware.create_model_retry_middleware') {
+    if (name === 'dao_ai.middleware.create_model_retry_middleware') {
       parsed.modelRetryMaxRetries = args.max_retries || 3;
       parsed.modelRetryBackoffFactor = args.backoff_factor || 2.0;
       parsed.modelRetryInitialDelay = args.initial_delay || 1.0;
@@ -635,7 +972,7 @@ export default function MiddlewareSection() {
     }
     
     // Context Editing
-    if (mw.name === 'dao_ai.middleware.create_context_editing_middleware') {
+    if (name === 'dao_ai.middleware.create_context_editing_middleware') {
       parsed.contextEditingTrigger = args.trigger || 100000;
       parsed.contextEditingKeep = args.keep || 3;
       parsed.contextEditingClearAtLeast = args.clear_at_least || 0;
@@ -653,7 +990,7 @@ export default function MiddlewareSection() {
     }
     
     // PII Middleware
-    if (mw.name === 'dao_ai.middleware.create_pii_middleware') {
+    if (name === 'dao_ai.middleware.create_pii_middleware') {
       parsed.piiType = args.pii_type || 'email';
       parsed.piiStrategy = args.strategy || 'redact';
       parsed.piiApplyToInput = args.apply_to_input !== false;
@@ -661,8 +998,175 @@ export default function MiddlewareSection() {
       parsed.piiApplyToToolResults = args.apply_to_tool_results || false;
     }
     
+    // Veracity Guardrail
+    if (name === 'dao_ai.middleware.create_veracity_guardrail_middleware') {
+      parsed.veracityModel = typeof args.model === 'string' && args.model.startsWith('*')
+        ? args.model.substring(1) : '';
+      parsed.veracityRetries = args.num_retries ?? 2;
+      parsed.veracityFailOpen = args.fail_open !== false;
+      parsed.veracityMaxContextLength = args.max_context_length ?? 8000;
+    }
+    
+    // Relevance Guardrail
+    if (name === 'dao_ai.middleware.create_relevance_guardrail_middleware') {
+      parsed.relevanceModel = typeof args.model === 'string' && args.model.startsWith('*')
+        ? args.model.substring(1) : '';
+      parsed.relevanceRetries = args.num_retries ?? 2;
+      parsed.relevanceFailOpen = args.fail_open !== false;
+    }
+    
+    // Tone Guardrail
+    if (name === 'dao_ai.middleware.create_tone_guardrail_middleware') {
+      parsed.toneModel = typeof args.model === 'string' && args.model.startsWith('*')
+        ? args.model.substring(1) : '';
+      parsed.toneProfile = args.tone || 'professional';
+      parsed.toneCustomGuidelines = args.custom_guidelines || '';
+      parsed.toneRetries = args.num_retries ?? 2;
+      parsed.toneFailOpen = args.fail_open !== false;
+    }
+    
+    // Conciseness Guardrail
+    if (name === 'dao_ai.middleware.create_conciseness_guardrail_middleware') {
+      parsed.concisenessModel = typeof args.model === 'string' && args.model.startsWith('*')
+        ? args.model.substring(1) : '';
+      parsed.concisenessMaxLength = args.max_length ?? 3000;
+      parsed.concisenessMinLength = args.min_length ?? 20;
+      parsed.concisenessCheckVerbosity = args.check_verbosity !== false;
+      parsed.concisenessRetries = args.num_retries ?? 2;
+      parsed.concisenessFailOpen = args.fail_open !== false;
+    }
+    
+    // Tool Call Observability
+    if (name === 'dao_ai.middleware.create_tool_call_observability_middleware') {
+      parsed.observabilityLogLevel = args.log_level || 'INFO';
+      parsed.observabilityIncludeArgs = args.include_args || false;
+      parsed.observabilityTrackTiming = args.track_timing !== false;
+    }
+    
+    // Todo List
+    if (name === 'dao_ai.middleware.create_todo_list_middleware') {
+      parsed.todoSystemPrompt = args.system_prompt || '';
+      parsed.todoToolDescription = args.tool_description || '';
+    }
+    
+    // Deep Summarization
+    if (name === 'dao_ai.middleware.create_deep_summarization_middleware') {
+      parsed.deepSumModel = typeof args.model === 'string' && args.model.startsWith('*')
+        ? args.model.substring(1) : (args.model || '');
+      parsed.deepSumBackendType = args.backend_type || 'state';
+      parsed.deepSumRootDir = args.root_dir || '';
+      const deepSumVolPath = args.volume_path || '';
+      parsed.deepSumVolumePath = deepSumVolPath;
+      const { key: deepSumVolKey, subPath: deepSumSubPath } = findVolumeKeyByPath(deepSumVolPath);
+      parsed.volumeSource = deepSumVolKey ? 'reference' : (deepSumVolPath ? 'manual' : 'reference');
+      parsed.volumeRef = deepSumVolKey;
+      parsed.volumeSubPath = deepSumSubPath;
+      if (Array.isArray(args.trigger) && args.trigger.length === 2) {
+        parsed.deepSumTriggerType = args.trigger[0];
+        parsed.deepSumTriggerValue = args.trigger[1];
+      }
+      if (Array.isArray(args.keep) && args.keep.length === 2) {
+        parsed.deepSumKeepType = args.keep[0];
+        parsed.deepSumKeepValue = args.keep[1];
+      }
+      parsed.deepSumHistoryPathPrefix = args.history_path_prefix || '/conversation_history';
+      if (Array.isArray(args.truncate_args_trigger) && args.truncate_args_trigger.length === 2) {
+        parsed.deepSumTruncateArgsEnabled = true;
+        parsed.deepSumTruncateArgsTriggerType = args.truncate_args_trigger[0];
+        parsed.deepSumTruncateArgsTriggerValue = args.truncate_args_trigger[1];
+      }
+      if (Array.isArray(args.truncate_args_keep) && args.truncate_args_keep.length === 2) {
+        parsed.deepSumTruncateArgsKeepType = args.truncate_args_keep[0];
+        parsed.deepSumTruncateArgsKeepValue = args.truncate_args_keep[1];
+      }
+      parsed.deepSumTruncateArgsMaxLength = args.truncate_args_max_length ?? 2000;
+    }
+    
+    // LLM Tool Selector
+    if (name === 'dao_ai.middleware.create_llm_tool_selector_middleware') {
+      parsed.toolSelectorModel = typeof args.model === 'string' && args.model.startsWith('*')
+        ? args.model.substring(1) : '';
+      parsed.toolSelectorMaxTools = args.max_tools ?? 3;
+      if (Array.isArray(args.always_include)) {
+        parsed.toolSelectorAlwaysInclude = args.always_include
+          .map((t: any) => parseToolReference(t, configuredTools).toolRef)
+          .filter(Boolean);
+      } else {
+        parsed.toolSelectorAlwaysInclude = [];
+      }
+    }
+    
+    // Filesystem
+    if (name === 'dao_ai.middleware.create_filesystem_middleware') {
+      parsed.filesystemBackendType = args.backend_type || 'state';
+      parsed.filesystemRootDir = args.root_dir || '';
+      const fsVolPath = args.volume_path || '';
+      parsed.filesystemVolumePath = fsVolPath;
+      const { key: fsVolKey, subPath: fsSubPath } = findVolumeKeyByPath(fsVolPath);
+      parsed.volumeSource = fsVolKey ? 'reference' : (fsVolPath ? 'manual' : 'reference');
+      parsed.volumeRef = fsVolKey;
+      parsed.volumeSubPath = fsSubPath;
+      parsed.filesystemEvictLimit = args.tool_token_limit_before_evict ?? 20000;
+      parsed.filesystemSystemPrompt = args.system_prompt || '';
+      if (args.custom_tool_descriptions && typeof args.custom_tool_descriptions === 'object') {
+        parsed.filesystemCustomToolDescs = JSON.stringify(args.custom_tool_descriptions, null, 2);
+      }
+    }
+    
+    // SubAgent
+    if (name === 'dao_ai.middleware.create_subagent_middleware') {
+      parsed.subagentBackendType = args.backend_type || 'state';
+      parsed.subagentRootDir = args.root_dir || '';
+      const subVolPath = args.volume_path || '';
+      parsed.subagentVolumePath = subVolPath;
+      const { key: subVolKey, subPath: subSubPath } = findVolumeKeyByPath(subVolPath);
+      parsed.volumeSource = subVolKey ? 'reference' : (subVolPath ? 'manual' : 'reference');
+      parsed.volumeRef = subVolKey;
+      parsed.volumeSubPath = subSubPath;
+      parsed.subagentSystemPrompt = args.system_prompt || '';
+      parsed.subagentTaskDescription = args.task_description || '';
+      if (Array.isArray(args.subagents)) {
+        parsed.subagentEntries = args.subagents.map((s: any, idx: number) => ({
+          id: `subagent_${idx}`,
+          name: s.name || '',
+          description: s.description || '',
+          systemPrompt: s.system_prompt || '',
+          model: typeof s.model === 'string' && s.model.startsWith('*')
+            ? s.model.substring(1) : '',
+        }));
+      } else {
+        parsed.subagentEntries = [];
+      }
+    }
+    
+    // Agents Memory
+    if (name === 'dao_ai.middleware.create_agents_memory_middleware') {
+      parsed.agentsMemorySources = Array.isArray(args.sources) ? args.sources : [];
+      parsed.agentsMemoryBackendType = args.backend_type || 'state';
+      parsed.agentsMemoryRootDir = args.root_dir || '';
+      const amVolPath = args.volume_path || '';
+      parsed.agentsMemoryVolumePath = amVolPath;
+      const { key: amVolKey, subPath: amSubPath } = findVolumeKeyByPath(amVolPath);
+      parsed.volumeSource = amVolKey ? 'reference' : (amVolPath ? 'manual' : 'reference');
+      parsed.volumeRef = amVolKey;
+      parsed.volumeSubPath = amSubPath;
+    }
+    
+    // Skills
+    if (name === 'dao_ai.middleware.create_skills_middleware') {
+      parsed.skillsSources = Array.isArray(args.sources) ? args.sources : [];
+      parsed.skillsBackendType = args.backend_type || 'state';
+      parsed.skillsRootDir = args.root_dir || '';
+      const skVolPath = args.volume_path || '';
+      parsed.skillsVolumePath = skVolPath;
+      const { key: skVolKey, subPath: skSubPath } = findVolumeKeyByPath(skVolPath);
+      parsed.volumeSource = skVolKey ? 'reference' : (skVolPath ? 'manual' : 'reference');
+      parsed.volumeRef = skVolKey;
+      parsed.volumeSubPath = skSubPath;
+    }
+    
     // Custom - generic args
-    if (mw.name === 'custom' || !PRECONFIGURED_MIDDLEWARE.find(pm => pm.value === mw.name)) {
+    if (name === 'custom' || !PRECONFIGURED_MIDDLEWARE.find(pm => pm.value === name)) {
       parsed.genericArgs = args;
     }
     
@@ -673,14 +1177,15 @@ export default function MiddlewareSection() {
     const mw = middleware[key];
     setEditingMiddleware(key);
     
-    const preconfigured = PRECONFIGURED_MIDDLEWARE.find(pm => pm.value === mw.name && pm.value !== 'custom');
+    const normalizedName = normalizeMiddlewareName(mw.name);
+    const preconfigured = PRECONFIGURED_MIDDLEWARE.find(pm => pm.value === normalizedName && pm.value !== 'custom');
     const parsedArgs = parseMiddlewareArgs(mw, tools);
     
     setFormData({
       ...defaultFormData,
       ...parsedArgs,
       refName: key,
-      selectedFactory: preconfigured ? mw.name : 'custom',
+      selectedFactory: preconfigured ? normalizedName : 'custom',
       customFactory: preconfigured ? '' : mw.name,
     });
     setIsModalOpen(true);
@@ -695,6 +1200,8 @@ export default function MiddlewareSection() {
         model: formData.guardrailModel ? `*${formData.guardrailModel}` : undefined,
         prompt: formData.guardrailPrompt,
         num_retries: formData.guardrailRetries,
+        fail_open: formData.guardrailFailOpen,
+        max_context_length: formData.guardrailMaxContextLength,
       };
     }
     
@@ -706,7 +1213,13 @@ export default function MiddlewareSection() {
     }
     
     if (factory === 'dao_ai.middleware.create_safety_guardrail_middleware') {
-      return formData.safetyModel ? { safety_model: `*${formData.safetyModel}` } : undefined;
+      const result: Record<string, any> = {
+        fail_open: formData.safetyFailOpen,
+      };
+      if (formData.safetyModel) {
+        result.safety_model = `*${formData.safetyModel}`;
+      }
+      return result;
     }
     
     if (factory === 'dao_ai.middleware.create_user_id_validation_middleware') {
@@ -758,6 +1271,7 @@ export default function MiddlewareSection() {
       
       return {
         interrupt_on: interruptOn,
+        ...(formData.hitlDescriptionPrefix && { description_prefix: formData.hitlDescriptionPrefix }),
       };
     }
     
@@ -774,18 +1288,18 @@ export default function MiddlewareSection() {
     if (factory === 'dao_ai.middleware.create_suggest_middleware') {
       return {
         constraint: formData.suggestConstraint,
-        max_retries: formData.suggestMaxRetries,
-        ...(formData.suggestModel && { suggestion_model: `*${formData.suggestModel}` }),
+        allow_one_retry: formData.suggestAllowOneRetry,
+        log_level: formData.suggestLogLevel,
         ...(formData.suggestMiddlewareName && { name: formData.suggestMiddlewareName }),
       };
     }
     
     if (factory === 'dao_ai.middleware.create_refine_middleware') {
       return {
-        constraint: formData.refineConstraint,
+        reward_fn: formData.refineRewardFn,
+        threshold: formData.refineThreshold,
         max_iterations: formData.refineMaxIterations,
-        ...(formData.refineModel && { refine_model: `*${formData.refineModel}` }),
-        ...(formData.refineMiddlewareName && { name: formData.refineMiddlewareName }),
+        select_best: formData.refineSelectBest,
       };
     }
     
@@ -893,6 +1407,195 @@ export default function MiddlewareSection() {
       };
     }
     
+    // Veracity Guardrail
+    if (factory === 'dao_ai.middleware.create_veracity_guardrail_middleware') {
+      return {
+        ...(formData.veracityModel && { model: `*${formData.veracityModel}` }),
+        num_retries: formData.veracityRetries,
+        fail_open: formData.veracityFailOpen,
+        max_context_length: formData.veracityMaxContextLength,
+      };
+    }
+    
+    // Relevance Guardrail
+    if (factory === 'dao_ai.middleware.create_relevance_guardrail_middleware') {
+      return {
+        ...(formData.relevanceModel && { model: `*${formData.relevanceModel}` }),
+        num_retries: formData.relevanceRetries,
+        fail_open: formData.relevanceFailOpen,
+      };
+    }
+    
+    // Tone Guardrail
+    if (factory === 'dao_ai.middleware.create_tone_guardrail_middleware') {
+      return {
+        ...(formData.toneModel && { model: `*${formData.toneModel}` }),
+        tone: formData.toneProfile,
+        ...(formData.toneCustomGuidelines && { custom_guidelines: formData.toneCustomGuidelines }),
+        num_retries: formData.toneRetries,
+        fail_open: formData.toneFailOpen,
+      };
+    }
+    
+    // Conciseness Guardrail
+    if (factory === 'dao_ai.middleware.create_conciseness_guardrail_middleware') {
+      return {
+        ...(formData.concisenessModel && { model: `*${formData.concisenessModel}` }),
+        max_length: formData.concisenessMaxLength,
+        min_length: formData.concisenessMinLength,
+        check_verbosity: formData.concisenessCheckVerbosity,
+        num_retries: formData.concisenessRetries,
+        fail_open: formData.concisenessFailOpen,
+      };
+    }
+    
+    // Tool Call Observability
+    if (factory === 'dao_ai.middleware.create_tool_call_observability_middleware') {
+      return {
+        log_level: formData.observabilityLogLevel,
+        include_args: formData.observabilityIncludeArgs,
+        track_timing: formData.observabilityTrackTiming,
+      };
+    }
+    
+    // Todo List
+    if (factory === 'dao_ai.middleware.create_todo_list_middleware') {
+      const result: Record<string, any> = {};
+      if (formData.todoSystemPrompt) result.system_prompt = formData.todoSystemPrompt;
+      if (formData.todoToolDescription) result.tool_description = formData.todoToolDescription;
+      return Object.keys(result).length > 0 ? result : undefined;
+    }
+    
+    // Deep Summarization
+    if (factory === 'dao_ai.middleware.create_deep_summarization_middleware') {
+      const result: Record<string, any> = {
+        ...(formData.deepSumModel && { model: formData.deepSumModel.startsWith('*') ? formData.deepSumModel : `*${formData.deepSumModel}` }),
+        backend_type: formData.deepSumBackendType,
+        trigger: [formData.deepSumTriggerType, formData.deepSumTriggerValue],
+        keep: [formData.deepSumKeepType, formData.deepSumKeepValue],
+        history_path_prefix: formData.deepSumHistoryPathPrefix,
+      };
+      if (formData.deepSumBackendType === 'filesystem' && formData.deepSumRootDir) {
+        result.root_dir = formData.deepSumRootDir;
+      }
+      if (formData.deepSumBackendType === 'volume' && formData.deepSumVolumePath) {
+        const basePath = formData.deepSumVolumePath;
+        result.volume_path = formData.volumeSource === 'reference' && formData.volumeSubPath
+          ? `${basePath}/${formData.volumeSubPath}` : basePath;
+      }
+      if (formData.deepSumTruncateArgsEnabled) {
+        result.truncate_args_trigger = [formData.deepSumTruncateArgsTriggerType, formData.deepSumTruncateArgsTriggerValue];
+        result.truncate_args_keep = [formData.deepSumTruncateArgsKeepType, formData.deepSumTruncateArgsKeepValue];
+        result.truncate_args_max_length = formData.deepSumTruncateArgsMaxLength;
+      }
+      return result;
+    }
+    
+    // LLM Tool Selector
+    if (factory === 'dao_ai.middleware.create_llm_tool_selector_middleware') {
+      const result: Record<string, any> = {
+        ...(formData.toolSelectorModel && { model: `*${formData.toolSelectorModel}` }),
+        max_tools: formData.toolSelectorMaxTools,
+      };
+      if (formData.toolSelectorAlwaysInclude.length > 0) {
+        result.always_include = formData.toolSelectorAlwaysInclude.map(ref => `__REF__${ref}`);
+      }
+      return result;
+    }
+    
+    // Filesystem
+    if (factory === 'dao_ai.middleware.create_filesystem_middleware') {
+      const result: Record<string, any> = {
+        backend_type: formData.filesystemBackendType,
+      };
+      if (formData.filesystemBackendType === 'filesystem' && formData.filesystemRootDir) {
+        result.root_dir = formData.filesystemRootDir;
+      }
+      if (formData.filesystemBackendType === 'volume' && formData.filesystemVolumePath) {
+        const basePath = formData.filesystemVolumePath;
+        result.volume_path = formData.volumeSource === 'reference' && formData.volumeSubPath
+          ? `${basePath}/${formData.volumeSubPath}` : basePath;
+      }
+      if (formData.filesystemEvictLimit !== null) {
+        result.tool_token_limit_before_evict = formData.filesystemEvictLimit;
+      }
+      if (formData.filesystemSystemPrompt) {
+        result.system_prompt = formData.filesystemSystemPrompt;
+      }
+      if (formData.filesystemCustomToolDescs) {
+        try {
+          result.custom_tool_descriptions = JSON.parse(formData.filesystemCustomToolDescs);
+        } catch {
+          // Invalid JSON, skip
+        }
+      }
+      return result;
+    }
+    
+    // SubAgent
+    if (factory === 'dao_ai.middleware.create_subagent_middleware') {
+      const result: Record<string, any> = {
+        backend_type: formData.subagentBackendType,
+      };
+      if (formData.subagentBackendType === 'filesystem' && formData.subagentRootDir) {
+        result.root_dir = formData.subagentRootDir;
+      }
+      if (formData.subagentBackendType === 'volume' && formData.subagentVolumePath) {
+        const basePath = formData.subagentVolumePath;
+        result.volume_path = formData.volumeSource === 'reference' && formData.volumeSubPath
+          ? `${basePath}/${formData.volumeSubPath}` : basePath;
+      }
+      if (formData.subagentSystemPrompt) {
+        result.system_prompt = formData.subagentSystemPrompt;
+      }
+      if (formData.subagentTaskDescription) {
+        result.task_description = formData.subagentTaskDescription;
+      }
+      if (formData.subagentEntries.length > 0) {
+        result.subagents = formData.subagentEntries.map(s => ({
+          name: s.name,
+          description: s.description,
+          system_prompt: s.systemPrompt,
+          ...(s.model && { model: `*${s.model}` }),
+        }));
+      }
+      return result;
+    }
+    
+    // Agents Memory
+    if (factory === 'dao_ai.middleware.create_agents_memory_middleware') {
+      const result: Record<string, any> = {
+        sources: formData.agentsMemorySources,
+        backend_type: formData.agentsMemoryBackendType,
+      };
+      if (formData.agentsMemoryBackendType === 'filesystem' && formData.agentsMemoryRootDir) {
+        result.root_dir = formData.agentsMemoryRootDir;
+      }
+      if (formData.agentsMemoryBackendType === 'volume' && formData.agentsMemoryVolumePath) {
+        const basePath = formData.agentsMemoryVolumePath;
+        result.volume_path = formData.volumeSource === 'reference' && formData.volumeSubPath
+          ? `${basePath}/${formData.volumeSubPath}` : basePath;
+      }
+      return result;
+    }
+    
+    // Skills
+    if (factory === 'dao_ai.middleware.create_skills_middleware') {
+      const result: Record<string, any> = {
+        sources: formData.skillsSources,
+        backend_type: formData.skillsBackendType,
+      };
+      if (formData.skillsBackendType === 'filesystem' && formData.skillsRootDir) {
+        result.root_dir = formData.skillsRootDir;
+      }
+      if (formData.skillsBackendType === 'volume' && formData.skillsVolumePath) {
+        const basePath = formData.skillsVolumePath;
+        result.volume_path = formData.volumeSource === 'reference' && formData.volumeSubPath
+          ? `${basePath}/${formData.volumeSubPath}` : basePath;
+      }
+      return result;
+    }
+    
     // Custom - generic args
     return Object.keys(formData.genericArgs).length > 0 ? formData.genericArgs : undefined;
   };
@@ -932,7 +1635,7 @@ export default function MiddlewareSection() {
   };
 
   const getMiddlewareInfo = (name: string) => {
-    return PRECONFIGURED_MIDDLEWARE.find(pm => pm.value === name);
+    return PRECONFIGURED_MIDDLEWARE.find(pm => pm.value === normalizeMiddlewareName(name));
   };
 
   const getReferences = (_key: string): string[] => {
@@ -1337,6 +2040,29 @@ export default function MiddlewareSection() {
                     }
                     hint="Maximum retry attempts"
                   />
+                  <Input
+                    label="Max Context Length"
+                    type="number"
+                    value={formData.guardrailMaxContextLength}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                      setFormData({ ...formData, guardrailMaxContextLength: parseInt(e.target.value) || 8000 })
+                    }
+                    hint="Max character length for extracted tool context"
+                  />
+                  <div className="col-span-2 flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="guardrailFailOpen"
+                      checked={formData.guardrailFailOpen}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setFormData({ ...formData, guardrailFailOpen: e.target.checked })
+                      }
+                      className="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500"
+                    />
+                    <label htmlFor="guardrailFailOpen" className="text-sm text-slate-300">
+                      Fail Open (let responses through when the judge call fails)
+                    </label>
+                  </div>
                 </div>
               )}
               
@@ -1397,15 +2123,31 @@ export default function MiddlewareSection() {
               
               {/* Safety Guardrail */}
               {formData.selectedFactory === 'dao_ai.middleware.create_safety_guardrail_middleware' && (
-                <Select
-                  label="Safety Model (Optional)"
-                  options={llmOptions}
-                  value={formData.safetyModel}
-                  onChange={(e: ChangeEvent<HTMLSelectElement>) => 
-                    setFormData({ ...formData, safetyModel: e.target.value })
-                  }
-                  hint="LLM for safety evaluation (optional)"
-                />
+                <div className="space-y-4">
+                  <Select
+                    label="Safety Model (Optional)"
+                    options={llmOptions}
+                    value={formData.safetyModel}
+                    onChange={(e: ChangeEvent<HTMLSelectElement>) => 
+                      setFormData({ ...formData, safetyModel: e.target.value })
+                    }
+                    hint="LLM for safety evaluation (optional)"
+                  />
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="safetyFailOpen"
+                      checked={formData.safetyFailOpen}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setFormData({ ...formData, safetyFailOpen: e.target.checked })
+                      }
+                      className="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500"
+                    />
+                    <label htmlFor="safetyFailOpen" className="text-sm text-slate-300">
+                      Fail Open (let responses through when the safety check fails)
+                    </label>
+                  </div>
+                </div>
               )}
               
               {/* User ID / Thread ID Validation - No params */}
@@ -1655,6 +2397,15 @@ export default function MiddlewareSection() {
                       Add Tool
                     </Button>
                   </div>
+                  <Input
+                    label="Description Prefix (Optional)"
+                    value={formData.hitlDescriptionPrefix}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                      setFormData({ ...formData, hitlDescriptionPrefix: e.target.value })
+                    }
+                    placeholder="Tool execution pending approval"
+                    hint="Prefix for the human review description"
+                  />
                 </div>
               )}
               
@@ -1729,22 +2480,32 @@ export default function MiddlewareSection() {
                       hint="Python reference to constraint"
                     />
                   </div>
-                  <Input
-                    label="Max Retries"
-                    type="number"
-                    value={formData.suggestMaxRetries}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => 
-                      setFormData({ ...formData, suggestMaxRetries: parseInt(e.target.value) || 3 })
-                    }
-                  />
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="suggestAllowOneRetry"
+                      checked={formData.suggestAllowOneRetry}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setFormData({ ...formData, suggestAllowOneRetry: e.target.checked })
+                      }
+                      className="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500"
+                    />
+                    <label htmlFor="suggestAllowOneRetry" className="text-sm text-slate-300">
+                      Allow One Retry
+                    </label>
+                  </div>
                   <Select
-                    label="Suggestion Model (Optional)"
-                    options={llmOptions}
-                    value={formData.suggestModel}
+                    label="Log Level"
+                    options={[
+                      { value: 'warning', label: 'Warning' },
+                      { value: 'info', label: 'Info' },
+                      { value: 'debug', label: 'Debug' },
+                    ]}
+                    value={formData.suggestLogLevel}
                     onChange={(e: ChangeEvent<HTMLSelectElement>) => 
-                      setFormData({ ...formData, suggestModel: e.target.value })
+                      setFormData({ ...formData, suggestLogLevel: e.target.value })
                     }
-                    hint="LLM for generating suggestions"
+                    hint="Log level for constraint feedback"
                   />
                   <Input
                     label="Middleware Name (Optional)"
@@ -1762,16 +2523,26 @@ export default function MiddlewareSection() {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="col-span-2">
                     <Input
-                      label="Constraint"
-                      value={formData.refineConstraint}
+                      label="Reward Function"
+                      value={formData.refineRewardFn}
                       onChange={(e: ChangeEvent<HTMLInputElement>) => 
-                        setFormData({ ...formData, refineConstraint: e.target.value })
+                        setFormData({ ...formData, refineRewardFn: e.target.value })
                       }
-                      placeholder="e.g., my_module.MyConstraint"
+                      placeholder="e.g., my_module.my_reward_fn"
                       required
-                      hint="Python reference to constraint"
+                      hint="Python reference to a reward function that scores responses (0.0 to 1.0)"
                     />
                   </div>
+                  <Input
+                    label="Threshold"
+                    type="number"
+                    value={formData.refineThreshold}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                      setFormData({ ...formData, refineThreshold: parseFloat(e.target.value) || 0.8 })
+                    }
+                    placeholder="0.8"
+                    hint="Score threshold to stop early (0.0 - 1.0)"
+                  />
                   <Input
                     label="Max Iterations"
                     type="number"
@@ -1779,24 +2550,22 @@ export default function MiddlewareSection() {
                     onChange={(e: ChangeEvent<HTMLInputElement>) => 
                       setFormData({ ...formData, refineMaxIterations: parseInt(e.target.value) || 3 })
                     }
+                    hint="Maximum improvement iterations"
                   />
-                  <Select
-                    label="Refine Model (Optional)"
-                    options={llmOptions}
-                    value={formData.refineModel}
-                    onChange={(e: ChangeEvent<HTMLSelectElement>) => 
-                      setFormData({ ...formData, refineModel: e.target.value })
-                    }
-                    hint="LLM for refinement"
-                  />
-                  <Input
-                    label="Middleware Name (Optional)"
-                    value={formData.refineMiddlewareName}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => 
-                      setFormData({ ...formData, refineMiddlewareName: e.target.value })
-                    }
-                    placeholder="Optional custom name"
-                  />
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="refineSelectBest"
+                      checked={formData.refineSelectBest}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setFormData({ ...formData, refineSelectBest: e.target.checked })
+                      }
+                      className="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500"
+                    />
+                    <label htmlFor="refineSelectBest" className="text-sm text-slate-300">
+                      Select Best Response
+                    </label>
+                  </div>
                 </div>
               )}
               
@@ -2237,6 +3006,1234 @@ export default function MiddlewareSection() {
                       ⚠️ Custom PII types require a Python detector function. Configure this through custom middleware or programmatically.
                     </p>
                   )}
+                </div>
+              )}
+              
+              {/* Veracity Guardrail */}
+              {formData.selectedFactory === 'dao_ai.middleware.create_veracity_guardrail_middleware' && (
+                <div className="space-y-4">
+                  <p className="text-xs text-slate-400 bg-slate-900/50 p-2 rounded-lg border border-slate-700/30">
+                    Checks whether the agent's response is grounded in tool/retrieval context. Uses a built-in expert prompt — no custom prompt needed. Automatically skips when no tool context is present.
+                  </p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <Select
+                      label="Judge Model"
+                      options={llmOptions}
+                      value={formData.veracityModel}
+                      onChange={(e: ChangeEvent<HTMLSelectElement>) => 
+                        setFormData({ ...formData, veracityModel: e.target.value })
+                      }
+                      required
+                      hint="LLM for veracity evaluation"
+                    />
+                    <Input
+                      label="Max Retries"
+                      type="number"
+                      value={formData.veracityRetries}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                        setFormData({ ...formData, veracityRetries: parseInt(e.target.value) || 2 })
+                      }
+                      hint="Maximum retry attempts (default: 2)"
+                    />
+                    <Input
+                      label="Max Context Length"
+                      type="number"
+                      value={formData.veracityMaxContextLength}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                        setFormData({ ...formData, veracityMaxContextLength: parseInt(e.target.value) || 8000 })
+                      }
+                      hint="Max chars for extracted tool context"
+                    />
+                    <div className="flex items-end">
+                      <label className="flex items-center space-x-2 text-sm text-slate-300 pb-2">
+                        <input
+                          type="checkbox"
+                          checked={formData.veracityFailOpen}
+                          onChange={(e) => setFormData({ ...formData, veracityFailOpen: e.target.checked })}
+                          className="rounded border-slate-600 bg-slate-700"
+                        />
+                        <span>Fail open (pass on error)</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              )}
+              
+              {/* Relevance Guardrail */}
+              {formData.selectedFactory === 'dao_ai.middleware.create_relevance_guardrail_middleware' && (
+                <div className="space-y-4">
+                  <p className="text-xs text-slate-400 bg-slate-900/50 p-2 rounded-lg border border-slate-700/30">
+                    Checks whether the agent's response directly addresses the user's query. Uses a built-in expert prompt — no custom prompt needed.
+                  </p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <Select
+                      label="Judge Model"
+                      options={llmOptions}
+                      value={formData.relevanceModel}
+                      onChange={(e: ChangeEvent<HTMLSelectElement>) => 
+                        setFormData({ ...formData, relevanceModel: e.target.value })
+                      }
+                      required
+                      hint="LLM for relevance evaluation"
+                    />
+                    <Input
+                      label="Max Retries"
+                      type="number"
+                      value={formData.relevanceRetries}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                        setFormData({ ...formData, relevanceRetries: parseInt(e.target.value) || 2 })
+                      }
+                      hint="Maximum retry attempts (default: 2)"
+                    />
+                  </div>
+                  <label className="flex items-center space-x-2 text-sm text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={formData.relevanceFailOpen}
+                      onChange={(e) => setFormData({ ...formData, relevanceFailOpen: e.target.checked })}
+                      className="rounded border-slate-600 bg-slate-700"
+                    />
+                    <span>Fail open (pass on error)</span>
+                  </label>
+                </div>
+              )}
+              
+              {/* Tone Guardrail */}
+              {formData.selectedFactory === 'dao_ai.middleware.create_tone_guardrail_middleware' && (
+                <div className="space-y-4">
+                  <p className="text-xs text-slate-400 bg-slate-900/50 p-2 rounded-lg border border-slate-700/30">
+                    Validates the response matches a configurable tone profile. Select a preset or provide custom guidelines.
+                  </p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <Select
+                      label="Judge Model"
+                      options={llmOptions}
+                      value={formData.toneModel}
+                      onChange={(e: ChangeEvent<HTMLSelectElement>) => 
+                        setFormData({ ...formData, toneModel: e.target.value })
+                      }
+                      required
+                      hint="LLM for tone evaluation"
+                    />
+                    <Select
+                      label="Tone Profile"
+                      options={[
+                        { value: 'professional', label: 'Professional' },
+                        { value: 'casual', label: 'Casual' },
+                        { value: 'technical', label: 'Technical' },
+                        { value: 'empathetic', label: 'Empathetic' },
+                        { value: 'concise', label: 'Concise' },
+                      ]}
+                      value={formData.toneProfile}
+                      onChange={(e: ChangeEvent<HTMLSelectElement>) => 
+                        setFormData({ ...formData, toneProfile: e.target.value })
+                      }
+                      hint="Preset tone profile"
+                    />
+                    <div className="col-span-2">
+                      <Textarea
+                        label="Custom Guidelines (Optional)"
+                        value={formData.toneCustomGuidelines}
+                        onChange={(e: ChangeEvent<HTMLTextAreaElement>) => 
+                          setFormData({ ...formData, toneCustomGuidelines: e.target.value })
+                        }
+                        placeholder="Custom tone guidelines override the preset profile..."
+                        rows={3}
+                        hint="Overrides the preset profile if provided"
+                      />
+                    </div>
+                    <Input
+                      label="Max Retries"
+                      type="number"
+                      value={formData.toneRetries}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                        setFormData({ ...formData, toneRetries: parseInt(e.target.value) || 2 })
+                      }
+                      hint="Maximum retry attempts (default: 2)"
+                    />
+                    <div className="flex items-end">
+                      <label className="flex items-center space-x-2 text-sm text-slate-300 pb-2">
+                        <input
+                          type="checkbox"
+                          checked={formData.toneFailOpen}
+                          onChange={(e) => setFormData({ ...formData, toneFailOpen: e.target.checked })}
+                          className="rounded border-slate-600 bg-slate-700"
+                        />
+                        <span>Fail open (pass on error)</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              )}
+              
+              {/* Conciseness Guardrail */}
+              {formData.selectedFactory === 'dao_ai.middleware.create_conciseness_guardrail_middleware' && (
+                <div className="space-y-4">
+                  <p className="text-xs text-slate-400 bg-slate-900/50 p-2 rounded-lg border border-slate-700/30">
+                    Hybrid deterministic + LLM conciseness check. Performs a fast length check first, then optionally evaluates verbosity using the judge LLM.
+                  </p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <Select
+                      label="Judge Model"
+                      options={llmOptions}
+                      value={formData.concisenessModel}
+                      onChange={(e: ChangeEvent<HTMLSelectElement>) => 
+                        setFormData({ ...formData, concisenessModel: e.target.value })
+                      }
+                      required
+                      hint="LLM for verbosity evaluation"
+                    />
+                    <Input
+                      label="Max Retries"
+                      type="number"
+                      value={formData.concisenessRetries}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                        setFormData({ ...formData, concisenessRetries: parseInt(e.target.value) || 2 })
+                      }
+                      hint="Maximum retry attempts (default: 2)"
+                    />
+                    <Input
+                      label="Max Length (chars)"
+                      type="number"
+                      value={formData.concisenessMaxLength}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                        setFormData({ ...formData, concisenessMaxLength: parseInt(e.target.value) || 3000 })
+                      }
+                      hint="Maximum response character length"
+                    />
+                    <Input
+                      label="Min Length (chars)"
+                      type="number"
+                      value={formData.concisenessMinLength}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                        setFormData({ ...formData, concisenessMinLength: parseInt(e.target.value) || 20 })
+                      }
+                      hint="Minimum response character length"
+                    />
+                  </div>
+                  <div className="flex items-center space-x-6">
+                    <label className="flex items-center space-x-2 text-sm text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={formData.concisenessCheckVerbosity}
+                        onChange={(e) => setFormData({ ...formData, concisenessCheckVerbosity: e.target.checked })}
+                        className="rounded border-slate-600 bg-slate-700"
+                      />
+                      <span>Check verbosity (LLM evaluation)</span>
+                    </label>
+                    <label className="flex items-center space-x-2 text-sm text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={formData.concisenessFailOpen}
+                        onChange={(e) => setFormData({ ...formData, concisenessFailOpen: e.target.checked })}
+                        className="rounded border-slate-600 bg-slate-700"
+                      />
+                      <span>Fail open (pass on error)</span>
+                    </label>
+                  </div>
+                </div>
+              )}
+              
+              {/* Tool Call Observability */}
+              {formData.selectedFactory === 'dao_ai.middleware.create_tool_call_observability_middleware' && (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <Select
+                      label="Log Level"
+                      options={[
+                        { value: 'DEBUG', label: 'DEBUG' },
+                        { value: 'INFO', label: 'INFO' },
+                        { value: 'WARNING', label: 'WARNING' },
+                      ]}
+                      value={formData.observabilityLogLevel}
+                      onChange={(e: ChangeEvent<HTMLSelectElement>) => 
+                        setFormData({ ...formData, observabilityLogLevel: e.target.value })
+                      }
+                      hint="Logging level for tool calls"
+                    />
+                  </div>
+                  <div className="flex items-center space-x-6">
+                    <label className="flex items-center space-x-2 text-sm text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={formData.observabilityIncludeArgs}
+                        onChange={(e) => setFormData({ ...formData, observabilityIncludeArgs: e.target.checked })}
+                        className="rounded border-slate-600 bg-slate-700"
+                      />
+                      <span>Include tool call arguments</span>
+                    </label>
+                    <label className="flex items-center space-x-2 text-sm text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={formData.observabilityTrackTiming}
+                        onChange={(e) => setFormData({ ...formData, observabilityTrackTiming: e.target.checked })}
+                        className="rounded border-slate-600 bg-slate-700"
+                      />
+                      <span>Track execution timing</span>
+                    </label>
+                  </div>
+                </div>
+              )}
+              
+              {/* Todo List */}
+              {formData.selectedFactory === 'dao_ai.middleware.create_todo_list_middleware' && (
+                <div className="space-y-4">
+                  <p className="text-xs text-slate-400 bg-slate-900/50 p-2 rounded-lg border border-slate-700/30">
+                    Provides agents with a write_todos tool for task planning and tracking. Both fields are optional.
+                  </p>
+                  <Textarea
+                    label="System Prompt (Optional)"
+                    value={formData.todoSystemPrompt}
+                    onChange={(e: ChangeEvent<HTMLTextAreaElement>) => 
+                      setFormData({ ...formData, todoSystemPrompt: e.target.value })
+                    }
+                    placeholder="Custom system prompt to guide todo usage..."
+                    rows={3}
+                    hint="If empty, uses the built-in prompt"
+                  />
+                  <Input
+                    label="Tool Description (Optional)"
+                    value={formData.todoToolDescription}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                      setFormData({ ...formData, todoToolDescription: e.target.value })
+                    }
+                    placeholder="Custom description for the write_todos tool..."
+                    hint="If empty, uses the built-in description"
+                  />
+                </div>
+              )}
+              
+              {/* Deep Summarization */}
+              {formData.selectedFactory === 'dao_ai.middleware.create_deep_summarization_middleware' && (
+                <div className="space-y-4">
+                  <p className="text-xs text-slate-400 bg-slate-900/50 p-2 rounded-lg border border-slate-700/30">
+                    Advanced summarization with backend offloading, tool argument truncation, and fraction-based triggers.
+                  </p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <Select
+                      label="Summary Model"
+                      options={llmOptions}
+                      value={formData.deepSumModel}
+                      onChange={(e: ChangeEvent<HTMLSelectElement>) => 
+                        setFormData({ ...formData, deepSumModel: e.target.value })
+                      }
+                      required
+                      hint="LLM for generating summaries"
+                    />
+                    <Select
+                      label="Backend Type"
+                      options={[
+                        { value: 'state', label: 'State (ephemeral)' },
+                        { value: 'filesystem', label: 'Filesystem (disk)' },
+                        { value: 'store', label: 'Store (persistent)' },
+                        { value: 'volume', label: 'Volume (Databricks UC)' },
+                      ]}
+                      value={formData.deepSumBackendType}
+                      onChange={(e: ChangeEvent<HTMLSelectElement>) => 
+                        setFormData({ ...formData, deepSumBackendType: e.target.value })
+                      }
+                      hint="Backend for storing offloaded history"
+                    />
+                  </div>
+                  {formData.deepSumBackendType === 'filesystem' && (
+                    <Input
+                      label="Root Directory"
+                      value={formData.deepSumRootDir}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                        setFormData({ ...formData, deepSumRootDir: e.target.value })
+                      }
+                      placeholder="/workspace"
+                      required
+                      hint="Required for filesystem backend"
+                    />
+                  )}
+                  {formData.deepSumBackendType === 'volume' && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <label className="text-sm font-medium text-slate-300">Volume Path</label>
+                        <div className="flex items-center space-x-2">
+                          <button
+                            type="button"
+                            onClick={() => setFormData({ ...formData, volumeSource: 'reference', deepSumVolumePath: '', volumeRef: '', volumeSubPath: '' })}
+                            className={`px-2 py-1 text-xs rounded ${
+                              formData.volumeSource === 'reference' ? 'bg-blue-500/30 text-blue-300' : 'bg-slate-700 text-slate-400'
+                            }`}
+                          >
+                            Select
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setFormData({ ...formData, volumeSource: 'manual', deepSumVolumePath: '', volumeRef: '', volumeSubPath: '' })}
+                            className={`px-2 py-1 text-xs rounded ${
+                              formData.volumeSource === 'manual' ? 'bg-blue-500/30 text-blue-300' : 'bg-slate-700 text-slate-400'
+                            }`}
+                          >
+                            Manual
+                          </button>
+                        </div>
+                      </div>
+                      {formData.volumeSource === 'reference' ? (
+                        <div className="space-y-2">
+                          <Select
+                            value={formData.volumeRef}
+                            onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                              const key = e.target.value;
+                              setFormData({ ...formData, volumeRef: key, deepSumVolumePath: getVolumePathFromKey(key) });
+                            }}
+                            options={[
+                              { value: '', label: 'Select volume...' },
+                              ...volumeOptions.map(v => ({ value: v.value, label: v.label })),
+                            ]}
+                          />
+                          <p className="text-xs text-slate-500">
+                            {volumeOptions.length === 0 ? 'No volumes configured — add one in the Resources section.' : `Select from ${volumeOptions.length} configured volume${volumeOptions.length !== 1 ? 's' : ''}.`}
+                          </p>
+                          <Input
+                            value={formData.volumeSubPath}
+                            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                              setFormData({ ...formData, volumeSubPath: e.target.value })
+                            }
+                            placeholder="optional/sub/path"
+                          />
+                          <p className="text-xs text-slate-500">
+                            Optional path within the volume (e.g., &quot;agents/workspace&quot;).
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <Input
+                            value={formData.deepSumVolumePath}
+                            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                              setFormData({ ...formData, deepSumVolumePath: e.target.value })
+                            }
+                            placeholder="/Volumes/catalog/schema/volume"
+                            required
+                          />
+                          <p className="text-xs text-slate-500">
+                            Enter the full UC Volumes path directly.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <label className="block text-sm font-medium text-slate-300">Trigger Threshold</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Select
+                          options={[
+                            { value: 'tokens', label: 'Tokens' },
+                            { value: 'messages', label: 'Messages' },
+                            { value: 'fraction', label: 'Fraction' },
+                          ]}
+                          value={formData.deepSumTriggerType}
+                          onChange={(e: ChangeEvent<HTMLSelectElement>) => 
+                            setFormData({ ...formData, deepSumTriggerType: e.target.value })
+                          }
+                        />
+                        <Input
+                          type="number"
+                          step={formData.deepSumTriggerType === 'fraction' ? '0.01' : '1'}
+                          value={formData.deepSumTriggerValue}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                            setFormData({ ...formData, deepSumTriggerValue: parseFloat(e.target.value) || 0 })
+                          }
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="block text-sm font-medium text-slate-300">Keep After Summary</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Select
+                          options={[
+                            { value: 'messages', label: 'Messages' },
+                            { value: 'tokens', label: 'Tokens' },
+                            { value: 'fraction', label: 'Fraction' },
+                          ]}
+                          value={formData.deepSumKeepType}
+                          onChange={(e: ChangeEvent<HTMLSelectElement>) => 
+                            setFormData({ ...formData, deepSumKeepType: e.target.value })
+                          }
+                        />
+                        <Input
+                          type="number"
+                          step={formData.deepSumKeepType === 'fraction' ? '0.01' : '1'}
+                          value={formData.deepSumKeepValue}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                            setFormData({ ...formData, deepSumKeepValue: parseFloat(e.target.value) || 0 })
+                          }
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  <Input
+                    label="History Path Prefix"
+                    value={formData.deepSumHistoryPathPrefix}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                      setFormData({ ...formData, deepSumHistoryPathPrefix: e.target.value })
+                    }
+                    placeholder="/conversation_history"
+                    hint="Path prefix for stored conversation history"
+                  />
+                  <div className="space-y-3 p-3 bg-slate-900/30 rounded-lg border border-slate-700/30">
+                    <label className="flex items-center space-x-2 text-sm text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={formData.deepSumTruncateArgsEnabled}
+                        onChange={(e) => setFormData({ ...formData, deepSumTruncateArgsEnabled: e.target.checked })}
+                        className="rounded border-slate-600 bg-slate-700"
+                      />
+                      <span className="font-medium">Enable argument truncation</span>
+                    </label>
+                    {formData.deepSumTruncateArgsEnabled && (
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-3 gap-3">
+                          <Select
+                            label="Trigger Type"
+                            options={[
+                              { value: 'messages', label: 'Messages' },
+                              { value: 'tokens', label: 'Tokens' },
+                              { value: 'fraction', label: 'Fraction' },
+                            ]}
+                            value={formData.deepSumTruncateArgsTriggerType}
+                            onChange={(e: ChangeEvent<HTMLSelectElement>) => 
+                              setFormData({ ...formData, deepSumTruncateArgsTriggerType: e.target.value })
+                            }
+                          />
+                          <Input
+                            label="Trigger Value"
+                            type="number"
+                            step={formData.deepSumTruncateArgsTriggerType === 'fraction' ? '0.01' : '1'}
+                            value={formData.deepSumTruncateArgsTriggerValue}
+                            onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                              setFormData({ ...formData, deepSumTruncateArgsTriggerValue: parseFloat(e.target.value) || 0 })
+                            }
+                          />
+                          <Input
+                            label="Max Arg Length"
+                            type="number"
+                            value={formData.deepSumTruncateArgsMaxLength}
+                            onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                              setFormData({ ...formData, deepSumTruncateArgsMaxLength: parseInt(e.target.value) || 2000 })
+                            }
+                            hint="Max chars per arg"
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <Select
+                            label="Keep Type"
+                            options={[
+                              { value: 'messages', label: 'Messages' },
+                              { value: 'tokens', label: 'Tokens' },
+                            ]}
+                            value={formData.deepSumTruncateArgsKeepType}
+                            onChange={(e: ChangeEvent<HTMLSelectElement>) => 
+                              setFormData({ ...formData, deepSumTruncateArgsKeepType: e.target.value })
+                            }
+                            hint="Unit for keep threshold"
+                          />
+                          <Input
+                            label="Keep Value"
+                            type="number"
+                            value={formData.deepSumTruncateArgsKeepValue}
+                            onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                              setFormData({ ...formData, deepSumTruncateArgsKeepValue: parseInt(e.target.value) || 20 })
+                            }
+                            hint="Recent items to preserve after truncation"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+              
+              {/* LLM Tool Selector */}
+              {formData.selectedFactory === 'dao_ai.middleware.create_llm_tool_selector_middleware' && (
+                <div className="space-y-4">
+                  <p className="text-xs text-slate-400 bg-slate-900/50 p-2 rounded-lg border border-slate-700/30">
+                    Uses an LLM to select the most relevant tools per query. Ideal for agents with many tools (10+).
+                  </p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <Select
+                      label="Selector Model"
+                      options={llmOptions}
+                      value={formData.toolSelectorModel}
+                      onChange={(e: ChangeEvent<HTMLSelectElement>) => 
+                        setFormData({ ...formData, toolSelectorModel: e.target.value })
+                      }
+                      required
+                      hint="Fast model recommended (e.g., gpt-4o-mini)"
+                    />
+                    <Input
+                      label="Max Tools"
+                      type="number"
+                      min="1"
+                      value={formData.toolSelectorMaxTools}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                        setFormData({ ...formData, toolSelectorMaxTools: parseInt(e.target.value) || 3 })
+                      }
+                      hint="Max tools selected per query"
+                    />
+                  </div>
+                  <MultiSelect
+                    label="Always Include Tools"
+                    options={Object.entries(tools).map(([key, tool]) => ({
+                      value: key,
+                      label: `${key} (${tool.name})`,
+                    }))}
+                    value={formData.toolSelectorAlwaysInclude}
+                    onChange={(value) => setFormData({ ...formData, toolSelectorAlwaysInclude: value })}
+                    placeholder="None (all tools eligible for filtering)"
+                    hint="Tools that should always be available regardless of LLM selection"
+                  />
+                </div>
+              )}
+              
+              {/* Filesystem */}
+              {formData.selectedFactory === 'dao_ai.middleware.create_filesystem_middleware' && (
+                <div className="space-y-4">
+                  <p className="text-xs text-slate-400 bg-slate-900/50 p-2 rounded-lg border border-slate-700/30">
+                    Provides agents with filesystem tools: ls, read_file, write_file, edit_file, glob, grep. Auto-evicts large tool results.
+                  </p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <Select
+                      label="Backend Type"
+                      options={[
+                        { value: 'state', label: 'State (ephemeral)' },
+                        { value: 'filesystem', label: 'Filesystem (disk)' },
+                        { value: 'store', label: 'Store (persistent)' },
+                        { value: 'volume', label: 'Volume (Databricks UC)' },
+                      ]}
+                      value={formData.filesystemBackendType}
+                      onChange={(e: ChangeEvent<HTMLSelectElement>) => 
+                        setFormData({ ...formData, filesystemBackendType: e.target.value })
+                      }
+                      hint="Backend for file storage"
+                    />
+                    <Input
+                      label="Eviction Token Limit"
+                      type="number"
+                      value={formData.filesystemEvictLimit ?? ''}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                        setFormData({ ...formData, filesystemEvictLimit: e.target.value ? parseInt(e.target.value) : null })
+                      }
+                      placeholder="20000"
+                      hint="Token limit before evicting results to filesystem"
+                    />
+                  </div>
+                  {formData.filesystemBackendType === 'filesystem' && (
+                    <Input
+                      label="Root Directory"
+                      value={formData.filesystemRootDir}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                        setFormData({ ...formData, filesystemRootDir: e.target.value })
+                      }
+                      placeholder="/workspace"
+                      required
+                      hint="Required for filesystem backend"
+                    />
+                  )}
+                  {formData.filesystemBackendType === 'volume' && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <label className="text-sm font-medium text-slate-300">Volume Path</label>
+                        <div className="flex items-center space-x-2">
+                          <button
+                            type="button"
+                            onClick={() => setFormData({ ...formData, volumeSource: 'reference', filesystemVolumePath: '', volumeRef: '', volumeSubPath: '' })}
+                            className={`px-2 py-1 text-xs rounded ${
+                              formData.volumeSource === 'reference' ? 'bg-blue-500/30 text-blue-300' : 'bg-slate-700 text-slate-400'
+                            }`}
+                          >
+                            Select
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setFormData({ ...formData, volumeSource: 'manual', filesystemVolumePath: '', volumeRef: '', volumeSubPath: '' })}
+                            className={`px-2 py-1 text-xs rounded ${
+                              formData.volumeSource === 'manual' ? 'bg-blue-500/30 text-blue-300' : 'bg-slate-700 text-slate-400'
+                            }`}
+                          >
+                            Manual
+                          </button>
+                        </div>
+                      </div>
+                      {formData.volumeSource === 'reference' ? (
+                        <div className="space-y-2">
+                          <Select
+                            value={formData.volumeRef}
+                            onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                              const key = e.target.value;
+                              setFormData({ ...formData, volumeRef: key, filesystemVolumePath: getVolumePathFromKey(key) });
+                            }}
+                            options={[
+                              { value: '', label: 'Select volume...' },
+                              ...volumeOptions.map(v => ({ value: v.value, label: v.label })),
+                            ]}
+                          />
+                          <p className="text-xs text-slate-500">
+                            {volumeOptions.length === 0 ? 'No volumes configured — add one in the Resources section.' : `Select from ${volumeOptions.length} configured volume${volumeOptions.length !== 1 ? 's' : ''}.`}
+                          </p>
+                          <Input
+                            value={formData.volumeSubPath}
+                            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                              setFormData({ ...formData, volumeSubPath: e.target.value })
+                            }
+                            placeholder="optional/sub/path"
+                          />
+                          <p className="text-xs text-slate-500">
+                            Optional path within the volume (e.g., &quot;agents/workspace&quot;).
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <Input
+                            value={formData.filesystemVolumePath}
+                            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                              setFormData({ ...formData, filesystemVolumePath: e.target.value })
+                            }
+                            placeholder="/Volumes/catalog/schema/volume"
+                            required
+                          />
+                          <p className="text-xs text-slate-500">
+                            Enter the full UC Volumes path directly.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <Textarea
+                    label="System Prompt (Optional)"
+                    value={formData.filesystemSystemPrompt}
+                    onChange={(e: ChangeEvent<HTMLTextAreaElement>) => 
+                      setFormData({ ...formData, filesystemSystemPrompt: e.target.value })
+                    }
+                    placeholder="You have access to filesystem tools for reading, writing, and editing files. Use ls to explore directories, read_file to view contents, write_file to create new files, edit_file to modify existing files, glob to find files by pattern, and grep to search file contents."
+                    rows={3}
+                    hint="Overrides the default prompt that guides the agent on how to use filesystem tools (ls, read_file, write_file, edit_file, glob, grep). Leave empty to use the built-in guidance."
+                  />
+                  <Textarea
+                    label="Custom Tool Descriptions (Optional)"
+                    value={formData.filesystemCustomToolDescs}
+                    onChange={(e: ChangeEvent<HTMLTextAreaElement>) => 
+                      setFormData({ ...formData, filesystemCustomToolDescs: e.target.value })
+                    }
+                    placeholder={'{\n  "ls": "List directory contents",\n  "read_file": "Read a file"\n}'}
+                    rows={3}
+                    hint="JSON object mapping tool names to custom descriptions. Leave empty to use defaults."
+                  />
+                </div>
+              )}
+              
+              {/* SubAgent */}
+              {formData.selectedFactory === 'dao_ai.middleware.create_subagent_middleware' && (
+                <div className="space-y-4">
+                  <p className="text-xs text-slate-400 bg-slate-900/50 p-2 rounded-lg border border-slate-700/30">
+                    Provides a &quot;task&quot; tool for spawning subagents to handle complex, multi-step tasks with isolated context.
+                  </p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <Select
+                      label="Backend Type"
+                      options={[
+                        { value: 'state', label: 'State (ephemeral)' },
+                        { value: 'filesystem', label: 'Filesystem (disk)' },
+                        { value: 'store', label: 'Store (persistent)' },
+                        { value: 'volume', label: 'Volume (Databricks UC)' },
+                      ]}
+                      value={formData.subagentBackendType}
+                      onChange={(e: ChangeEvent<HTMLSelectElement>) => 
+                        setFormData({ ...formData, subagentBackendType: e.target.value })
+                      }
+                      hint="Backend for subagent file storage"
+                    />
+                    <div />
+                  </div>
+                  {formData.subagentBackendType === 'filesystem' && (
+                    <Input
+                      label="Root Directory"
+                      value={formData.subagentRootDir}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                        setFormData({ ...formData, subagentRootDir: e.target.value })
+                      }
+                      placeholder="/workspace"
+                      required
+                      hint="Required for filesystem backend"
+                    />
+                  )}
+                  {formData.subagentBackendType === 'volume' && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <label className="text-sm font-medium text-slate-300">Volume Path</label>
+                        <div className="flex items-center space-x-2">
+                          <button
+                            type="button"
+                            onClick={() => setFormData({ ...formData, volumeSource: 'reference', subagentVolumePath: '', volumeRef: '', volumeSubPath: '' })}
+                            className={`px-2 py-1 text-xs rounded ${
+                              formData.volumeSource === 'reference' ? 'bg-blue-500/30 text-blue-300' : 'bg-slate-700 text-slate-400'
+                            }`}
+                          >
+                            Select
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setFormData({ ...formData, volumeSource: 'manual', subagentVolumePath: '', volumeRef: '', volumeSubPath: '' })}
+                            className={`px-2 py-1 text-xs rounded ${
+                              formData.volumeSource === 'manual' ? 'bg-blue-500/30 text-blue-300' : 'bg-slate-700 text-slate-400'
+                            }`}
+                          >
+                            Manual
+                          </button>
+                        </div>
+                      </div>
+                      {formData.volumeSource === 'reference' ? (
+                        <div className="space-y-2">
+                          <Select
+                            value={formData.volumeRef}
+                            onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                              const key = e.target.value;
+                              setFormData({ ...formData, volumeRef: key, subagentVolumePath: getVolumePathFromKey(key) });
+                            }}
+                            options={[
+                              { value: '', label: 'Select volume...' },
+                              ...volumeOptions.map(v => ({ value: v.value, label: v.label })),
+                            ]}
+                          />
+                          <p className="text-xs text-slate-500">
+                            {volumeOptions.length === 0 ? 'No volumes configured — add one in the Resources section.' : `Select from ${volumeOptions.length} configured volume${volumeOptions.length !== 1 ? 's' : ''}.`}
+                          </p>
+                          <Input
+                            value={formData.volumeSubPath}
+                            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                              setFormData({ ...formData, volumeSubPath: e.target.value })
+                            }
+                            placeholder="optional/sub/path"
+                          />
+                          <p className="text-xs text-slate-500">
+                            Optional path within the volume (e.g., &quot;agents/workspace&quot;).
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <Input
+                            value={formData.subagentVolumePath}
+                            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                              setFormData({ ...formData, subagentVolumePath: e.target.value })
+                            }
+                            placeholder="/Volumes/catalog/schema/volume"
+                            required
+                          />
+                          <p className="text-xs text-slate-500">
+                            Enter the full UC Volumes path directly.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <Textarea
+                    label="System Prompt (Optional)"
+                    value={formData.subagentSystemPrompt}
+                    onChange={(e: ChangeEvent<HTMLTextAreaElement>) => 
+                      setFormData({ ...formData, subagentSystemPrompt: e.target.value })
+                    }
+                    placeholder="Custom system prompt for guiding task tool usage..."
+                    rows={2}
+                    hint="Overrides built-in task guidance prompt"
+                  />
+                  <Input
+                    label="Task Description (Optional)"
+                    value={formData.subagentTaskDescription}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                      setFormData({ ...formData, subagentTaskDescription: e.target.value })
+                    }
+                    placeholder="Custom description for the task tool..."
+                    hint="Overrides built-in task tool description"
+                  />
+                  
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-sm font-medium text-slate-300">Subagent Definitions</label>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => {
+                          const newEntry: SubAgentEntry = {
+                            id: `subagent_${Date.now()}`,
+                            name: '',
+                            description: '',
+                            systemPrompt: '',
+                            model: '',
+                          };
+                          setFormData({ ...formData, subagentEntries: [...formData.subagentEntries, newEntry] });
+                        }}
+                      >
+                        <Plus className="w-3 h-3 mr-1" />
+                        Add Subagent
+                      </Button>
+                    </div>
+                    {formData.subagentEntries.length === 0 && (
+                      <p className="text-xs text-slate-500">
+                        No subagents defined. A general-purpose subagent will be created automatically.
+                      </p>
+                    )}
+                    {formData.subagentEntries.map((entry, idx) => (
+                      <div key={entry.id} className="p-3 bg-slate-900/50 rounded-lg border border-slate-700 space-y-2">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs font-medium text-slate-400">Subagent {idx + 1}</span>
+                          <Button
+                            type="button"
+                            variant="danger"
+                            size="sm"
+                            onClick={() => {
+                              const newEntries = formData.subagentEntries.filter(e => e.id !== entry.id);
+                              setFormData({ ...formData, subagentEntries: newEntries });
+                            }}
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </Button>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <Input
+                            label="Name"
+                            value={entry.name}
+                            onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                              const newEntries = [...formData.subagentEntries];
+                              newEntries[idx] = { ...entry, name: e.target.value };
+                              setFormData({ ...formData, subagentEntries: newEntries });
+                            }}
+                            placeholder="e.g., code-reviewer"
+                            required
+                          />
+                          <Select
+                            label="Model (Optional)"
+                            options={llmOptions}
+                            value={entry.model}
+                            onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                              const newEntries = [...formData.subagentEntries];
+                              newEntries[idx] = { ...entry, model: e.target.value };
+                              setFormData({ ...formData, subagentEntries: newEntries });
+                            }}
+                            hint="Override model for this subagent"
+                          />
+                          <div className="col-span-2">
+                            <Input
+                              label="Description"
+                              value={entry.description}
+                              onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                                const newEntries = [...formData.subagentEntries];
+                                newEntries[idx] = { ...entry, description: e.target.value };
+                                setFormData({ ...formData, subagentEntries: newEntries });
+                              }}
+                              placeholder="What this subagent does (used for delegation)"
+                              required
+                            />
+                          </div>
+                          <div className="col-span-2">
+                            <Textarea
+                              label="System Prompt"
+                              value={entry.systemPrompt}
+                              onChange={(e: ChangeEvent<HTMLTextAreaElement>) => {
+                                const newEntries = [...formData.subagentEntries];
+                                newEntries[idx] = { ...entry, systemPrompt: e.target.value };
+                                setFormData({ ...formData, subagentEntries: newEntries });
+                              }}
+                              placeholder="Instructions for the subagent..."
+                              rows={2}
+                              required
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {/* Agents Memory */}
+              {formData.selectedFactory === 'dao_ai.middleware.create_agents_memory_middleware' && (
+                <div className="space-y-4">
+                  <p className="text-xs text-slate-400 bg-slate-900/50 p-2 rounded-lg border border-slate-700/30">
+                    Loads AGENTS.md context files at startup and injects content into the system prompt.
+                  </p>
+                  <Select
+                    label="Backend Type"
+                    options={[
+                      { value: 'state', label: 'State (ephemeral)' },
+                      { value: 'filesystem', label: 'Filesystem (disk)' },
+                      { value: 'store', label: 'Store (persistent)' },
+                      { value: 'volume', label: 'Volume (Databricks UC)' },
+                    ]}
+                    value={formData.agentsMemoryBackendType}
+                    onChange={(e: ChangeEvent<HTMLSelectElement>) => 
+                      setFormData({ ...formData, agentsMemoryBackendType: e.target.value })
+                    }
+                    hint="Backend for file storage"
+                  />
+                  {formData.agentsMemoryBackendType === 'filesystem' && (
+                    <Input
+                      label="Root Directory"
+                      value={formData.agentsMemoryRootDir}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                        setFormData({ ...formData, agentsMemoryRootDir: e.target.value })
+                      }
+                      placeholder="/"
+                      required
+                      hint="Required for filesystem backend"
+                    />
+                  )}
+                  {formData.agentsMemoryBackendType === 'volume' && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <label className="text-sm font-medium text-slate-300">Volume Path</label>
+                        <div className="flex items-center space-x-2">
+                          <button
+                            type="button"
+                            onClick={() => setFormData({ ...formData, volumeSource: 'reference', agentsMemoryVolumePath: '', volumeRef: '', volumeSubPath: '' })}
+                            className={`px-2 py-1 text-xs rounded ${
+                              formData.volumeSource === 'reference' ? 'bg-blue-500/30 text-blue-300' : 'bg-slate-700 text-slate-400'
+                            }`}
+                          >
+                            Select
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setFormData({ ...formData, volumeSource: 'manual', agentsMemoryVolumePath: '', volumeRef: '', volumeSubPath: '' })}
+                            className={`px-2 py-1 text-xs rounded ${
+                              formData.volumeSource === 'manual' ? 'bg-blue-500/30 text-blue-300' : 'bg-slate-700 text-slate-400'
+                            }`}
+                          >
+                            Manual
+                          </button>
+                        </div>
+                      </div>
+                      {formData.volumeSource === 'reference' ? (
+                        <div className="space-y-2">
+                          <Select
+                            value={formData.volumeRef}
+                            onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                              const key = e.target.value;
+                              setFormData({ ...formData, volumeRef: key, agentsMemoryVolumePath: getVolumePathFromKey(key) });
+                            }}
+                            options={[
+                              { value: '', label: 'Select volume...' },
+                              ...volumeOptions.map(v => ({ value: v.value, label: v.label })),
+                            ]}
+                          />
+                          <p className="text-xs text-slate-500">
+                            {volumeOptions.length === 0 ? 'No volumes configured — add one in the Resources section.' : `Select from ${volumeOptions.length} configured volume${volumeOptions.length !== 1 ? 's' : ''}.`}
+                          </p>
+                          <Input
+                            value={formData.volumeSubPath}
+                            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                              setFormData({ ...formData, volumeSubPath: e.target.value })
+                            }
+                            placeholder="optional/sub/path"
+                          />
+                          <p className="text-xs text-slate-500">
+                            Optional path within the volume (e.g., &quot;agents/workspace&quot;).
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <Input
+                            value={formData.agentsMemoryVolumePath}
+                            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                              setFormData({ ...formData, agentsMemoryVolumePath: e.target.value })
+                            }
+                            placeholder="/Volumes/catalog/schema/volume"
+                            required
+                          />
+                          <p className="text-xs text-slate-500">
+                            Enter the full UC Volumes path directly.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <div className="space-y-2">
+                    <label className="block text-sm font-medium text-slate-300">Source Paths</label>
+                    {formData.agentsMemorySources.map((source, idx) => (
+                      <div key={idx} className="flex items-center space-x-2">
+                        <Input
+                          value={source}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                            const newSources = [...formData.agentsMemorySources];
+                            newSources[idx] = e.target.value;
+                            setFormData({ ...formData, agentsMemorySources: newSources });
+                          }}
+                          placeholder="e.g., ~/.deepagents/AGENTS.md"
+                          className="flex-1"
+                        />
+                        <Button
+                          type="button"
+                          variant="danger"
+                          size="sm"
+                          onClick={() => {
+                            const newSources = formData.agentsMemorySources.filter((_, i) => i !== idx);
+                            setFormData({ ...formData, agentsMemorySources: newSources });
+                          }}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    ))}
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => {
+                        setFormData({ ...formData, agentsMemorySources: [...formData.agentsMemorySources, ''] });
+                      }}
+                    >
+                      <Plus className="w-3 h-3 mr-1" />
+                      Add Source
+                    </Button>
+                  </div>
+                </div>
+              )}
+              
+              {/* Skills */}
+              {formData.selectedFactory === 'dao_ai.middleware.create_skills_middleware' && (
+                <div className="space-y-4">
+                  <p className="text-xs text-slate-400 bg-slate-900/50 p-2 rounded-lg border border-slate-700/30">
+                    Discovers SKILL.md files from configured sources and injects skill listings into the system prompt. Later sources override earlier ones.
+                  </p>
+                  <Select
+                    label="Backend Type"
+                    options={[
+                      { value: 'state', label: 'State (ephemeral)' },
+                      { value: 'filesystem', label: 'Filesystem (disk)' },
+                      { value: 'store', label: 'Store (persistent)' },
+                      { value: 'volume', label: 'Volume (Databricks UC)' },
+                    ]}
+                    value={formData.skillsBackendType}
+                    onChange={(e: ChangeEvent<HTMLSelectElement>) => 
+                      setFormData({ ...formData, skillsBackendType: e.target.value })
+                    }
+                    hint="Backend for file storage"
+                  />
+                  {formData.skillsBackendType === 'filesystem' && (
+                    <Input
+                      label="Root Directory"
+                      value={formData.skillsRootDir}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => 
+                        setFormData({ ...formData, skillsRootDir: e.target.value })
+                      }
+                      placeholder="/"
+                      required
+                      hint="Required for filesystem backend"
+                    />
+                  )}
+                  {formData.skillsBackendType === 'volume' && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <label className="text-sm font-medium text-slate-300">Volume Path</label>
+                        <div className="flex items-center space-x-2">
+                          <button
+                            type="button"
+                            onClick={() => setFormData({ ...formData, volumeSource: 'reference', skillsVolumePath: '', volumeRef: '', volumeSubPath: '' })}
+                            className={`px-2 py-1 text-xs rounded ${
+                              formData.volumeSource === 'reference' ? 'bg-blue-500/30 text-blue-300' : 'bg-slate-700 text-slate-400'
+                            }`}
+                          >
+                            Select
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setFormData({ ...formData, volumeSource: 'manual', skillsVolumePath: '', volumeRef: '', volumeSubPath: '' })}
+                            className={`px-2 py-1 text-xs rounded ${
+                              formData.volumeSource === 'manual' ? 'bg-blue-500/30 text-blue-300' : 'bg-slate-700 text-slate-400'
+                            }`}
+                          >
+                            Manual
+                          </button>
+                        </div>
+                      </div>
+                      {formData.volumeSource === 'reference' ? (
+                        <div className="space-y-2">
+                          <Select
+                            value={formData.volumeRef}
+                            onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                              const key = e.target.value;
+                              setFormData({ ...formData, volumeRef: key, skillsVolumePath: getVolumePathFromKey(key) });
+                            }}
+                            options={[
+                              { value: '', label: 'Select volume...' },
+                              ...volumeOptions.map(v => ({ value: v.value, label: v.label })),
+                            ]}
+                          />
+                          <p className="text-xs text-slate-500">
+                            {volumeOptions.length === 0 ? 'No volumes configured — add one in the Resources section.' : `Select from ${volumeOptions.length} configured volume${volumeOptions.length !== 1 ? 's' : ''}.`}
+                          </p>
+                          <Input
+                            value={formData.volumeSubPath}
+                            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                              setFormData({ ...formData, volumeSubPath: e.target.value })
+                            }
+                            placeholder="optional/sub/path"
+                          />
+                          <p className="text-xs text-slate-500">
+                            Optional path within the volume (e.g., &quot;agents/workspace&quot;).
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <Input
+                            value={formData.skillsVolumePath}
+                            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                              setFormData({ ...formData, skillsVolumePath: e.target.value })
+                            }
+                            placeholder="/Volumes/catalog/schema/volume"
+                            required
+                          />
+                          <p className="text-xs text-slate-500">
+                            Enter the full UC Volumes path directly.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <div className="space-y-2">
+                    <label className="block text-sm font-medium text-slate-300">Skill Source Paths</label>
+                    <p className="text-xs text-slate-500">Later sources have higher priority (last one wins for same-name skills)</p>
+                    {formData.skillsSources.map((source, idx) => (
+                      <div key={idx} className="flex items-center space-x-2">
+                        <Input
+                          value={source}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                            const newSources = [...formData.skillsSources];
+                            newSources[idx] = e.target.value;
+                            setFormData({ ...formData, skillsSources: newSources });
+                          }}
+                          placeholder="e.g., /skills/base/"
+                          className="flex-1"
+                        />
+                        <Button
+                          type="button"
+                          variant="danger"
+                          size="sm"
+                          onClick={() => {
+                            const newSources = formData.skillsSources.filter((_, i) => i !== idx);
+                            setFormData({ ...formData, skillsSources: newSources });
+                          }}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    ))}
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => {
+                        setFormData({ ...formData, skillsSources: [...formData.skillsSources, ''] });
+                      }}
+                    >
+                      <Plus className="w-3 h-3 mr-1" />
+                      Add Source
+                    </Button>
+                  </div>
                 </div>
               )}
             </div>

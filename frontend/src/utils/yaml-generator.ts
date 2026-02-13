@@ -2091,6 +2091,8 @@ export function generateYAML(config: AppConfig): string {
         model: formatModelReference(guardrail.model, definedLLMs, `guardrails.${key}.model`),
         prompt: guardrail.prompt,
         ...(guardrail.num_retries !== undefined && { num_retries: guardrail.num_retries }),
+        ...(guardrail.fail_open !== undefined && { fail_open: guardrail.fail_open }),
+        ...(guardrail.max_context_length !== undefined && { max_context_length: guardrail.max_context_length }),
       };
     });
   }
