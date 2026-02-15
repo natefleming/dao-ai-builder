@@ -469,9 +469,14 @@ export interface SupervisorModel {
   middleware?: MiddlewareModel[];
 }
 
+export interface HandoffRouteModel {
+  agent: AgentModel | string;
+  is_deterministic?: boolean;
+}
+
 export interface SwarmModel {
   default_agent?: AgentModel | string;
-  handoffs?: Record<string, (AgentModel | string)[] | null>;
+  handoffs?: Record<string, (AgentModel | string | HandoffRouteModel)[] | null>;
   middleware?: MiddlewareModel[];
 }
 

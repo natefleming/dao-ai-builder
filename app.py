@@ -4822,6 +4822,167 @@ Output ONLY the prompt text, without any additional explanation or markdown code
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/ai/generate-middleware-prompt', methods=['POST'])
+def generate_middleware_prompt():
+    """Generate an optimized prompt for middleware configuration using Claude.
+    
+    Request body:
+    - middleware_type: The middleware factory type (e.g., 'guardrail', 'todo', 'filesystem', 'subagent', 'tone')
+    - context: Description of what the prompt should achieve (optional)
+    - existing_prompt: Existing prompt to improve (optional)
+    - middleware_name: Name of the middleware being configured (optional)
+    
+    Returns:
+    - prompt: Generated optimized prompt
+    """
+    try:
+        data = request.get_json()
+        middleware_type = data.get('middleware_type', '')
+        context = data.get('context', '')
+        existing_prompt = data.get('existing_prompt', '')
+        middleware_name = data.get('middleware_name', '')
+        
+        if not context and not existing_prompt:
+            return jsonify({'error': 'Either context or existing_prompt is required'}), 400
+        
+        log('info', f"Generating middleware prompt for type '{middleware_type}' using Claude")
+        
+        # Middleware-type-specific system messages
+        middleware_system_prompts: dict[str, str] = {
+            'guardrail': """You are an expert prompt engineer specializing in creating guardrail evaluation prompts for AI agents. Your task is to generate an optimized guardrail prompt that evaluates AI responses for quality, safety, and adherence to guidelines.
+
+When creating guardrail prompts, follow these guidelines:
+1. Clearly define the role as an expert judge evaluating AI responses
+2. Include specific, measurable evaluation criteria
+3. Provide clear pass/fail conditions for each criterion
+4. Use {inputs} placeholder for the user's original query/conversation
+5. Use {outputs} placeholder for the AI's response being evaluated
+6. Make the evaluation criteria objective and actionable
+7. Include instructions to provide constructive feedback when the response fails
+8. Structure the output to include both a pass/fail decision and detailed reasoning
+
+Output ONLY the prompt text, without any additional explanation or markdown formatting.""",
+
+            'todo': """You are an expert prompt engineer specializing in creating system prompts for AI-powered task management and todo list middleware. Your task is to generate an optimized system prompt that guides an AI agent in managing tasks, tracking progress, and organizing work items.
+
+When creating todo system prompts, follow these guidelines:
+1. Define how the agent should create, update, and prioritize tasks
+2. Include instructions for task categorization and status tracking
+3. Provide guidance on breaking down complex tasks into subtasks
+4. Include instructions for task dependencies and ordering
+5. Define how the agent should report task status and progress
+6. Include guidelines for handling blocked or stale tasks
+7. Make the instructions clear and actionable
+
+Output ONLY the prompt text, without any additional explanation or markdown formatting.""",
+
+            'filesystem': """You are an expert prompt engineer specializing in creating system prompts for AI-powered filesystem middleware. Your task is to generate an optimized system prompt that guides an AI agent in managing file operations, reading and writing files, and organizing file-based workflows.
+
+When creating filesystem system prompts, follow these guidelines:
+1. Define how the agent should navigate and manage files
+2. Include safety guidelines for file operations (read vs write permissions)
+3. Provide instructions for file organization and naming conventions
+4. Include guidance on handling large files and content truncation
+5. Define how the agent should handle file conflicts and errors
+6. Include instructions for maintaining file state consistency
+7. Make the instructions clear and focused on the specific use case
+
+Output ONLY the prompt text, without any additional explanation or markdown formatting.""",
+
+            'subagent': """You are an expert prompt engineer specializing in creating system prompts for AI sub-agent orchestration middleware. Your task is to generate an optimized system prompt that guides a parent agent in delegating tasks to specialized sub-agents.
+
+When creating sub-agent system prompts, follow these guidelines:
+1. Define the overall coordination strategy for sub-agents
+2. Include instructions for task delegation and assignment
+3. Provide guidance on when to use which sub-agent based on capabilities
+4. Include instructions for aggregating and synthesizing sub-agent responses
+5. Define error handling when sub-agents fail or produce low-quality output
+6. Include guidelines for managing sub-agent context and conversation state
+7. Make the instructions clear about the parent agent's supervisory role
+
+Output ONLY the prompt text, without any additional explanation or markdown formatting.""",
+
+            'tone': """You are an expert prompt engineer specializing in creating tone and style guidelines for AI agents. Your task is to generate optimized custom tone guidelines that define how an AI agent should communicate.
+
+When creating tone guidelines, follow these guidelines:
+1. Define the desired communication style (formal, casual, technical, etc.)
+2. Include specific vocabulary preferences and restrictions
+3. Provide examples of desired tone in different scenarios
+4. Include guidelines for handling sensitive or difficult topics
+5. Define appropriate use of humor, empathy, and formality
+6. Include instructions for adapting tone based on context
+7. Make the guidelines specific and measurable, not vague
+
+Output ONLY the guidelines text, without any additional explanation or markdown formatting.""",
+        }
+        
+        # Default system prompt for unknown middleware types
+        default_system = """You are an expert prompt engineer specializing in creating system prompts for AI middleware components. Your task is to generate an optimized prompt for configuring middleware behavior.
+
+When creating middleware prompts, follow these guidelines:
+1. Be specific about the middleware's role and purpose
+2. Include clear instructions for the expected behavior
+3. Provide guidelines for edge cases and error handling
+4. Make the instructions actionable and measurable
+5. Structure the prompt clearly with sections if needed
+
+Output ONLY the prompt text, without any additional explanation or markdown formatting."""
+        
+        system_message = middleware_system_prompts.get(middleware_type, default_system)
+        
+        # Build user message
+        user_parts = []
+        
+        if existing_prompt:
+            user_parts.append(f"Please improve and optimize this existing prompt:\n\n{existing_prompt}")
+        else:
+            user_parts.append(f"Please create an optimized prompt for {middleware_type} middleware configuration.")
+        
+        if middleware_name:
+            user_parts.append(f"\nMiddleware Name: {middleware_name}")
+        
+        if context:
+            user_parts.append(f"\nContext/Requirements: {context}")
+        
+        user_message = "\n".join(user_parts)
+        
+        # Call the Databricks serving endpoint
+        from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
+        
+        w = get_workspace_client()
+        
+        messages = [
+            ChatMessage(role=ChatMessageRole.SYSTEM, content=system_message),
+            ChatMessage(role=ChatMessageRole.USER, content=user_message)
+        ]
+        
+        log('info', "Calling Claude endpoint for middleware prompt via SDK serving_endpoints.query()")
+        
+        response = w.serving_endpoints.query(
+            name="databricks-claude-sonnet-4",
+            messages=messages,
+            max_tokens=2000,
+            temperature=0.7
+        )
+        
+        generated_prompt = ''
+        if response.choices and len(response.choices) > 0:
+            generated_prompt = response.choices[0].message.content
+        
+        if not generated_prompt:
+            log('error', f"No content in response: {response}")
+            return jsonify({'error': 'No response generated'}), 500
+        
+        log('info', f"Successfully generated middleware prompt ({len(generated_prompt)} chars)")
+        return jsonify({'prompt': generated_prompt.strip()})
+            
+    except Exception as e:
+        import traceback
+        log('error', f"Error generating middleware prompt: {e}")
+        log('error', f"Traceback: {traceback.format_exc()}")
+        return jsonify({'error': str(e)}), 500
+
+
 # =============================================================================
 # Main Entry Point
 # =============================================================================

@@ -394,6 +394,9 @@ function convertReferencesToAliases(yamlString: string): string {
   result = result.replace(/- __REF__(\w+)/g, '- *$1');
   // Replace any remaining unquoted occurrences
   result = result.replace(/__REF__(\w+)/g, '*$1');
+  // Replace prompt reference markers with unquoted aliases (same as __REF__ but separate marker)
+  result = result.replace(/"__PROMPT_REF__(\w+)"/g, '*$1');
+  result = result.replace(/__PROMPT_REF__(\w+)/g, '*$1');
   return result;
 }
 
@@ -981,6 +984,7 @@ function formatOrchestration(orchestration: OrchestrationModel, definedLLMs: Rec
     }
     
     // Handle handoffs - null means any, [] means none, array means specific
+    // Targets can be strings, AgentModels, or HandoffRouteModel objects (with agent + is_deterministic)
     if (orchestration.swarm.handoffs && Object.keys(orchestration.swarm.handoffs).length > 0) {
       result.swarm.handoffs = {};
       Object.entries(orchestration.swarm.handoffs).forEach(([agentName, targets]) => {
@@ -992,8 +996,21 @@ function formatOrchestration(orchestration: OrchestrationModel, definedLLMs: Rec
             // Empty array means no handoffs (terminal agent)
             result.swarm.handoffs[agentName] = [];
           } else {
-            // Specific targets - create references to agents
-            result.swarm.handoffs[agentName] = targets.map(t => findAgentReference(t));
+            // Specific targets - create references to agents or HandoffRouteModel objects
+            result.swarm.handoffs[agentName] = targets.map(t => {
+              // Check if this is a HandoffRouteModel (has 'agent' and 'is_deterministic' fields)
+              if (typeof t === 'object' && t !== null && 'agent' in t && 'is_deterministic' in t) {
+                const handoffRoute = t as { agent: string | { name: string }; is_deterministic: boolean };
+                const agentRef = findAgentReference(handoffRoute.agent);
+                if (handoffRoute.is_deterministic) {
+                  return { agent: agentRef, is_deterministic: true };
+                }
+                // Non-deterministic HandoffRouteModel: emit as plain agent reference
+                return agentRef;
+              }
+              // Plain string or AgentModel - standard agentic handoff
+              return findAgentReference(t);
+            });
           }
         }
       });

@@ -14,7 +14,7 @@ import {
   Position,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Bot, Cpu, Shield, Wrench, GitBranch, Users } from 'lucide-react';
+import { Bot, Cpu, Shield, Wrench, GitBranch, Users, ArrowRightLeft } from 'lucide-react';
 import { AppConfig } from '@/types/dao-ai-types';
 
 interface GraphVisualizationProps {
@@ -69,6 +69,13 @@ function AgentNode({ data }: { data: AgentNodeData }) {
             <span>→ {data.handoffTargets.join(', ')}</span>
           </div>
         )}
+        
+        {data.deterministicTargets && data.deterministicTargets.length > 0 && (
+          <div className="flex items-center gap-2 text-amber-400">
+            <ArrowRightLeft className="w-3 h-3 text-amber-400" />
+            <span>⇒ {data.deterministicTargets.join(', ')}</span>
+          </div>
+        )}
       </div>
       
       <Handle type="source" position={Position.Bottom} className="!bg-blue-500 !w-3 !h-3" />
@@ -111,6 +118,11 @@ function SupervisorNode({ data }: { data: SupervisorNodeData }) {
   );
 }
 
+interface HandoffTargetInfo {
+  name: string;
+  isDeterministic: boolean;
+}
+
 interface AgentNodeData extends Record<string, unknown> {
   name: string;
   description?: string;
@@ -119,6 +131,7 @@ interface AgentNodeData extends Record<string, unknown> {
   guardrailCount: number;
   isDefault?: boolean;
   handoffTargets?: string[];
+  deterministicTargets?: string[];
 }
 
 interface SupervisorNodeData extends Record<string, unknown> {
@@ -151,16 +164,30 @@ export default function GraphVisualization({ config }: GraphVisualizationProps) 
             <GitBranch className="w-5 h-5 text-blue-400" />
             <h3 className="text-sm font-medium text-slate-200">Agent Graph</h3>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-400">Orchestration:</span>
-            <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-              orchestrationType === 'supervisor' ? 'bg-purple-500/20 text-purple-300' :
-              orchestrationType === 'swarm' ? 'bg-blue-500/20 text-blue-300' :
-              'bg-slate-700 text-slate-400'
-            }`}>
-              {orchestrationType === 'supervisor' ? 'Supervisor' : 
-               orchestrationType === 'swarm' ? 'Swarm' : 'Not Configured'}
-            </span>
+          <div className="flex items-center gap-4">
+            {orchestrationType === 'swarm' && (
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1.5">
+                  <div className="w-6 h-0.5 bg-cyan-400 rounded" />
+                  <span className="text-[10px] text-slate-400">Agentic</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="w-6 h-0.5 bg-amber-500 rounded" style={{ borderTop: '2px dashed #f59e0b', height: 0 }} />
+                  <span className="text-[10px] text-slate-400">Deterministic</span>
+                </div>
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-400">Orchestration:</span>
+              <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                orchestrationType === 'supervisor' ? 'bg-purple-500/20 text-purple-300' :
+                orchestrationType === 'swarm' ? 'bg-blue-500/20 text-blue-300' :
+                'bg-slate-700 text-slate-400'
+              }`}>
+                {orchestrationType === 'supervisor' ? 'Supervisor' : 
+                 orchestrationType === 'swarm' ? 'Swarm' : 'Not Configured'}
+              </span>
+            </div>
           </div>
         </div>
       </div>
@@ -330,17 +357,22 @@ function buildGraph(config: AppConfig): { nodes: Node[]; edges: Edge[] } {
     const handoffs = swarm.handoffs || {};
     
     // Determine handoff targets for each agent based on swarm rules
-    const getHandoffTargets = (agentName: string): string[] => {
+    // Returns HandoffTargetInfo[] with deterministic flag per target
+    const getHandoffTargets = (agentName: string): HandoffTargetInfo[] => {
       const hasHandoffEntry = Object.prototype.hasOwnProperty.call(handoffs, agentName);
       
       if (!hasHandoffEntry) {
-        return allAgentNames.filter(name => name !== agentName);
+        return allAgentNames
+          .filter(name => name !== agentName)
+          .map(name => ({ name, isDeterministic: false }));
       }
       
       const agentHandoffs = handoffs[agentName];
       
       if (agentHandoffs === null || agentHandoffs === undefined) {
-        return allAgentNames.filter(name => name !== agentName);
+        return allAgentNames
+          .filter(name => name !== agentName)
+          .map(name => ({ name, isDeterministic: false }));
       }
       
       if (Array.isArray(agentHandoffs) && agentHandoffs.length === 0) {
@@ -349,8 +381,23 @@ function buildGraph(config: AppConfig): { nodes: Node[]; edges: Edge[] } {
       
       if (Array.isArray(agentHandoffs)) {
         return agentHandoffs
-          .map(h => typeof h === 'string' ? h : h?.name || '')
-          .filter(name => name && name !== agentName && allAgentNames.includes(name));
+          .map(h => {
+            if (typeof h === 'string') {
+              return { name: h, isDeterministic: false };
+            }
+            // HandoffRouteModel: has 'agent' and 'is_deterministic' fields
+            if (h && typeof h === 'object' && 'agent' in h) {
+              const route = h as { agent: string | { name: string }; is_deterministic?: boolean };
+              const targetName = typeof route.agent === 'string' ? route.agent : route.agent?.name || '';
+              return { name: targetName, isDeterministic: route.is_deterministic === true };
+            }
+            // AgentModel: has 'name' field
+            if (h && typeof h === 'object' && 'name' in h) {
+              return { name: (h as { name: string }).name || '', isDeterministic: false };
+            }
+            return { name: '', isDeterministic: false };
+          })
+          .filter(t => t.name && t.name !== agentName && allAgentNames.includes(t.name));
       }
       
       return [];
@@ -365,6 +412,9 @@ function buildGraph(config: AppConfig): { nodes: Node[]; edges: Edge[] } {
       const canHandoffToAll = !hasHandoffEntry || handoffs[agent.name] === null || handoffs[agent.name] === undefined;
       const canHandoffToNone = hasHandoffEntry && Array.isArray(handoffs[agent.name]) && handoffs[agent.name]?.length === 0;
       
+      const agenticTargets = handoffTargets.filter(t => !t.isDeterministic).map(t => t.name);
+      const deterministicTargets = handoffTargets.filter(t => t.isDeterministic).map(t => t.name);
+      
       return {
         name: agent.name,
         description: agent.description,
@@ -376,7 +426,8 @@ function buildGraph(config: AppConfig): { nodes: Node[]; edges: Edge[] } {
           ? ['(all agents)'] 
           : canHandoffToNone 
           ? ['(none)'] 
-          : handoffTargets.length > 0 ? handoffTargets : undefined,
+          : agenticTargets.length > 0 ? agenticTargets : undefined,
+        deterministicTargets: deterministicTargets.length > 0 ? deterministicTargets : undefined,
       };
     };
     
@@ -477,26 +528,47 @@ function buildGraph(config: AppConfig): { nodes: Node[]; edges: Edge[] } {
       });
     }
 
-    // Add edges for handoffs
+    // Add edges for handoffs - differentiate deterministic vs agentic
     agentKeys.forEach((sourceKey) => {
       const sourceAgent = agents[sourceKey];
       const handoffTargets = getHandoffTargets(sourceAgent.name);
       
-      handoffTargets.forEach((targetName, idx) => {
-        const targetKey = agentKeys.find(key => agents[key].name === targetName);
+      handoffTargets.forEach((target, idx) => {
+        const targetKey = agentKeys.find(key => agents[key].name === target.name);
         if (!targetKey || sourceKey === targetKey) return;
 
-        edges.push({
-          id: `${sourceKey}-${targetKey}-${idx}`,
-          source: sourceKey,
-          target: targetKey,
-          animated: true,
-          style: { stroke: '#22d3ee', strokeWidth: 2 },
-          markerEnd: {
-            type: MarkerType.ArrowClosed,
-            color: '#22d3ee',
-          },
-        });
+        if (target.isDeterministic) {
+          // Deterministic edge: amber/orange, not animated, thicker, dashed
+          edges.push({
+            id: `${sourceKey}-${targetKey}-${idx}`,
+            source: sourceKey,
+            target: targetKey,
+            animated: false,
+            label: 'deterministic',
+            labelStyle: { fill: '#f59e0b', fontSize: 10, fontWeight: 600 },
+            labelBgStyle: { fill: '#1e293b', fillOpacity: 0.9 },
+            labelBgPadding: [4, 2] as [number, number],
+            labelBgBorderRadius: 4,
+            style: { stroke: '#f59e0b', strokeWidth: 3, strokeDasharray: '8 4' },
+            markerEnd: {
+              type: MarkerType.ArrowClosed,
+              color: '#f59e0b',
+            },
+          });
+        } else {
+          // Agentic edge: cyan, animated (current behavior)
+          edges.push({
+            id: `${sourceKey}-${targetKey}-${idx}`,
+            source: sourceKey,
+            target: targetKey,
+            animated: true,
+            style: { stroke: '#22d3ee', strokeWidth: 2 },
+            markerEnd: {
+              type: MarkerType.ArrowClosed,
+              color: '#22d3ee',
+            },
+          });
+        }
       });
     });
   } else {

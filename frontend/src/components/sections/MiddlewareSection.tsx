@@ -1,5 +1,5 @@
 import { useState, ChangeEvent } from 'react';
-import { Plus, Trash2, Layers, Edit2, ChevronDown, ChevronUp } from 'lucide-react';
+import { Plus, Trash2, Layers, Edit2, ChevronDown, ChevronUp, Sparkles, Loader2, FileText } from 'lucide-react';
 import { useConfigStore } from '@/stores/configStore';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
@@ -9,9 +9,67 @@ import Textarea from '../ui/Textarea';
 import Card from '../ui/Card';
 import Modal from '../ui/Modal';
 import Badge from '../ui/Badge';
-import { MiddlewareModel } from '@/types/dao-ai-types';
+import { MiddlewareModel, PromptModel } from '@/types/dao-ai-types';
 import { normalizeRefNameWhileTyping } from '@/utils/name-utils';
 import { safeDelete } from '@/utils/safe-delete';
+
+// AI middleware prompt generation API
+async function generateMiddlewarePromptWithAI(params: {
+  middleware_type: string;
+  context?: string;
+  existing_prompt?: string;
+  middleware_name?: string;
+}): Promise<string> {
+  const response = await fetch('/api/ai/generate-middleware-prompt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to generate prompt');
+  }
+  
+  const data = await response.json();
+  return data.prompt;
+}
+
+// Detect if a value is a PromptModel object (as opposed to a plain string)
+function isPromptModelObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && 'name' in value;
+}
+
+// Extract prompt source/ref/inline from a potentially PromptModel-typed arg
+function parsePromptArg(
+  value: unknown,
+  prompts: Record<string, PromptModel>
+): { source: PromptSource; ref: string; inline: string } {
+  if (isPromptModelObject(value)) {
+    const promptModel = value as unknown as PromptModel;
+    const matchedKey = Object.entries(prompts).find(
+      ([, p]) => p.name === promptModel.name
+    )?.[0];
+    if (matchedKey) {
+      return { source: 'configured', ref: matchedKey, inline: '' };
+    }
+    // Fallback: PromptModel but not found in config, show default_template as inline
+    return { source: 'inline', ref: '', inline: promptModel.default_template || '' };
+  }
+  return { source: 'inline', ref: '', inline: typeof value === 'string' ? value : '' };
+}
+
+// Build the prompt value for middleware args from source/ref/inline
+function buildPromptValue(
+  source: PromptSource,
+  ref: string,
+  inline: string
+): string | undefined {
+  if (source === 'configured' && ref) {
+    return `__PROMPT_REF__${ref}`;
+  }
+  return inline || undefined;
+}
 
 // Helper to generate default reference name from factory function
 const generateDefaultRefName = (factoryFunction: string): string => {
@@ -395,11 +453,15 @@ function parseToolReference(
   };
 }
 
+type PromptSource = 'inline' | 'configured';
+
 interface SubAgentEntry {
   id: string;
   name: string;
   description: string;
   systemPrompt: string;
+  systemPromptSource: PromptSource;
+  systemPromptRef: string;
   model: string; // LLM ref key or empty
 }
 
@@ -412,6 +474,8 @@ interface MiddlewareFormData {
   guardrailName: string;
   guardrailModel: string; // LLM ref key
   guardrailPrompt: string;
+  guardrailPromptSource: PromptSource;
+  guardrailPromptRef: string;
   guardrailRetries: number;
   guardrailFailOpen: boolean;
   guardrailMaxContextLength: number;
@@ -514,6 +578,8 @@ interface MiddlewareFormData {
   toneModel: string;
   toneProfile: string;
   toneCustomGuidelines: string;
+  toneCustomGuidelinesSource: PromptSource;
+  toneCustomGuidelinesRef: string;
   toneRetries: number;
   toneFailOpen: boolean;
   
@@ -532,6 +598,8 @@ interface MiddlewareFormData {
   
   // Todo List parameters
   todoSystemPrompt: string;
+  todoSystemPromptSource: PromptSource;
+  todoSystemPromptRef: string;
   todoToolDescription: string;
   
   // Deep Summarization parameters
@@ -562,6 +630,8 @@ interface MiddlewareFormData {
   filesystemVolumePath: string;
   filesystemEvictLimit: number | null;
   filesystemSystemPrompt: string;
+  filesystemSystemPromptSource: PromptSource;
+  filesystemSystemPromptRef: string;
   filesystemCustomToolDescs: string; // JSON string of { tool_name: description }
   
   // SubAgent parameters
@@ -569,6 +639,8 @@ interface MiddlewareFormData {
   subagentRootDir: string;
   subagentVolumePath: string;
   subagentSystemPrompt: string;
+  subagentSystemPromptSource: PromptSource;
+  subagentSystemPromptRef: string;
   subagentTaskDescription: string;
   subagentEntries: SubAgentEntry[];
   
@@ -601,6 +673,8 @@ const defaultFormData: MiddlewareFormData = {
   guardrailName: '',
   guardrailModel: '',
   guardrailPrompt: '',
+  guardrailPromptSource: 'inline',
+  guardrailPromptRef: '',
   guardrailRetries: 3,
   guardrailFailOpen: true,
   guardrailMaxContextLength: 8000,
@@ -689,6 +763,8 @@ const defaultFormData: MiddlewareFormData = {
   toneModel: '',
   toneProfile: 'professional',
   toneCustomGuidelines: '',
+  toneCustomGuidelinesSource: 'inline',
+  toneCustomGuidelinesRef: '',
   toneRetries: 2,
   toneFailOpen: true,
   
@@ -707,6 +783,8 @@ const defaultFormData: MiddlewareFormData = {
   
   // Todo List defaults
   todoSystemPrompt: '',
+  todoSystemPromptSource: 'inline',
+  todoSystemPromptRef: '',
   todoToolDescription: '',
   
   // Deep Summarization defaults
@@ -737,6 +815,8 @@ const defaultFormData: MiddlewareFormData = {
   filesystemVolumePath: '',
   filesystemEvictLimit: 20000,
   filesystemSystemPrompt: '',
+  filesystemSystemPromptSource: 'inline',
+  filesystemSystemPromptRef: '',
   filesystemCustomToolDescs: '',
   
   // SubAgent defaults
@@ -744,6 +824,8 @@ const defaultFormData: MiddlewareFormData = {
   subagentRootDir: '',
   subagentVolumePath: '',
   subagentSystemPrompt: '',
+  subagentSystemPromptSource: 'inline',
+  subagentSystemPromptRef: '',
   subagentTaskDescription: '',
   subagentEntries: [] as SubAgentEntry[],
   
@@ -766,6 +848,236 @@ const defaultFormData: MiddlewareFormData = {
   genericArgs: {},
 };
 
+// Middleware type to human-readable label mapping for AI generation
+const MIDDLEWARE_TYPE_LABELS: Record<string, string> = {
+  'dao_ai.middleware.create_guardrail_middleware': 'guardrail',
+  'dao_ai.middleware.create_todo_list_middleware': 'todo',
+  'dao_ai.middleware.create_filesystem_middleware': 'filesystem',
+  'dao_ai.middleware.create_subagent_middleware': 'subagent',
+  'dao_ai.middleware.create_tone_guardrail_middleware': 'tone',
+};
+
+// AI context placeholders by middleware type
+const AI_CONTEXT_PLACEHOLDERS: Record<string, string> = {
+  guardrail: 'e.g., "Evaluate responses for professional tone, factual accuracy, and no PII disclosure"',
+  todo: 'e.g., "Manage engineering sprint tasks with priority levels and blocking dependencies"',
+  filesystem: 'e.g., "Manage project files with read-only access to config files and write access to output directory"',
+  subagent: 'e.g., "Coordinate between a research agent and a writing agent to produce comprehensive reports"',
+  tone: 'e.g., "Maintain a warm, empathetic customer support tone while being technically accurate"',
+};
+
+interface MiddlewarePromptFieldProps {
+  label: string;
+  value: string;
+  source: PromptSource;
+  promptRef: string;
+  middlewareType: string;
+  middlewareName?: string;
+  placeholder?: string;
+  hint?: string;
+  required?: boolean;
+  rows?: number;
+  promptOptions: { value: string; label: string }[];
+  prompts: Record<string, PromptModel>;
+  onValueChange: (value: string) => void;
+  onSourceChange: (source: PromptSource) => void;
+  onRefChange: (ref: string) => void;
+}
+
+function MiddlewarePromptField({
+  label,
+  value,
+  source,
+  promptRef,
+  middlewareType,
+  middlewareName,
+  placeholder,
+  hint,
+  required,
+  rows = 3,
+  promptOptions,
+  prompts,
+  onValueChange,
+  onSourceChange,
+  onRefChange,
+}: MiddlewarePromptFieldProps) {
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [showAiInput, setShowAiInput] = useState(false);
+  const [aiContext, setAiContext] = useState('');
+
+  const typeLabel = MIDDLEWARE_TYPE_LABELS[middlewareType] || middlewareType;
+  const contextPlaceholder = AI_CONTEXT_PLACEHOLDERS[typeLabel] || 'Describe what this prompt should achieve...';
+
+  const handleGenerate = async (improveExisting = false) => {
+    setIsGenerating(true);
+    try {
+      const generated = await generateMiddlewarePromptWithAI({
+        middleware_type: typeLabel,
+        context: aiContext || undefined,
+        existing_prompt: improveExisting ? value : undefined,
+        middleware_name: middlewareName || undefined,
+      });
+      onValueChange(generated);
+      setShowAiInput(false);
+      setAiContext('');
+    } catch (error) {
+      console.error('Failed to generate middleware prompt:', error);
+      alert(error instanceof Error ? error.message : 'Failed to generate prompt');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  return (
+    <div className="col-span-2 space-y-2">
+      <div className="flex items-center justify-between">
+        <label className="text-sm font-medium text-slate-300">{label}</label>
+        <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5">
+          <button
+            type="button"
+            onClick={() => onSourceChange('inline')}
+            className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${
+              source === 'inline'
+                ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                : 'text-slate-400 border border-transparent hover:text-slate-300'
+            }`}
+          >
+            Inline
+          </button>
+          <button
+            type="button"
+            onClick={() => onSourceChange('configured')}
+            className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${
+              source === 'configured'
+                ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                : 'text-slate-400 border border-transparent hover:text-slate-300'
+            }`}
+          >
+            Configured
+          </button>
+        </div>
+      </div>
+
+      {source === 'configured' ? (
+        <div className="space-y-2">
+          <Select
+            value={promptRef}
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => onRefChange(e.target.value)}
+            options={promptOptions}
+            placeholder="Select a configured prompt..."
+          />
+          {promptRef && prompts[promptRef] && (
+            <div className="p-3 bg-slate-800/50 rounded-lg border border-slate-700">
+              <div className="flex items-center space-x-2 mb-2">
+                <FileText className="w-4 h-4 text-violet-400" />
+                <span className="text-sm font-medium text-slate-300">{prompts[promptRef].name}</span>
+              </div>
+              {prompts[promptRef].description && (
+                <p className="text-xs text-slate-400 mb-2">{prompts[promptRef].description}</p>
+              )}
+              {prompts[promptRef].default_template && (
+                <pre className="text-xs text-slate-500 bg-slate-900/50 p-2 rounded overflow-auto max-h-32">
+                  {prompts[promptRef].default_template?.substring(0, 300)}
+                  {(prompts[promptRef].default_template?.length || 0) > 300 ? '...' : ''}
+                </pre>
+              )}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {/* AI Assistant Controls */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <button
+                type="button"
+                onClick={() => setShowAiInput(!showAiInput)}
+                className="flex items-center space-x-1.5 px-3 py-1.5 text-xs rounded-lg font-medium bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-purple-300 border border-purple-500/30 hover:from-purple-500/30 hover:to-pink-500/30 transition-all"
+                disabled={isGenerating}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>AI Assistant</span>
+              </button>
+              {value && (
+                <button
+                  type="button"
+                  onClick={() => handleGenerate(true)}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 text-xs rounded-lg font-medium bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-purple-300 border border-purple-500/30 hover:from-purple-500/30 hover:to-pink-500/30 transition-all"
+                  disabled={isGenerating}
+                >
+                  {isGenerating ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="w-3.5 h-3.5" />
+                  )}
+                  <span>Improve Prompt</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {showAiInput && (
+            <div className="p-3 bg-gradient-to-r from-purple-500/10 to-pink-500/10 rounded-lg border border-purple-500/30 space-y-3">
+              <div className="flex items-center space-x-2">
+                <Sparkles className="w-4 h-4 text-purple-400" />
+                <span className="text-sm font-medium text-purple-300">Generate {label} with AI</span>
+              </div>
+              <p className="text-xs text-slate-400">
+                Describe what this {typeLabel} prompt should do. The AI will generate an optimized prompt based on your description.
+              </p>
+              <Textarea
+                value={aiContext}
+                onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setAiContext(e.target.value)}
+                placeholder={contextPlaceholder}
+                rows={3}
+              />
+              <div className="flex justify-end space-x-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => { setShowAiInput(false); setAiContext(''); }}
+                  disabled={isGenerating}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => handleGenerate(false)}
+                  disabled={isGenerating || !aiContext}
+                  className="bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
+                >
+                  {isGenerating ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+                      Generating...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4 mr-1.5" />
+                      Generate
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          <Textarea
+            value={value}
+            onChange={(e: ChangeEvent<HTMLTextAreaElement>) => onValueChange(e.target.value)}
+            placeholder={placeholder}
+            rows={rows}
+            required={required}
+            hint={hint}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function MiddlewareSection() {
   const { config, addMiddleware, removeMiddleware, updateMiddleware } = useConfigStore();
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -782,6 +1094,10 @@ export default function MiddlewareSection() {
   
   // Tools for middleware that reference tools
   const tools = config.tools || {};
+
+  // Prompts for middleware that can reference configured prompts
+  const prompts = config.prompts || {};
+  const promptOptions = Object.entries(prompts).map(([key, p]) => ({ value: key, label: `${key} — ${p.name}` }));
 
   // Volumes for Deep Agents middleware that reference volume paths
   const volumes = config.resources?.volumes || {};
@@ -842,7 +1158,7 @@ export default function MiddlewareSection() {
     return typeof modelArg === 'string' ? modelArg : '';
   };
 
-  const parseMiddlewareArgs = (mw: MiddlewareModel, configuredTools: Record<string, any>): Partial<MiddlewareFormData> => {
+  const parseMiddlewareArgs = (mw: MiddlewareModel, configuredTools: Record<string, any>, configuredPrompts: Record<string, PromptModel>): Partial<MiddlewareFormData> => {
     const parsed: Partial<MiddlewareFormData> = {};
     const args = mw.args || {};
     // Normalize the name so fully-qualified paths (e.g. dao_ai.middleware.todo.create_todo_list_middleware)
@@ -853,7 +1169,10 @@ export default function MiddlewareSection() {
     if (name === 'dao_ai.middleware.create_guardrail_middleware') {
       parsed.guardrailName = args.name || '';
       parsed.guardrailModel = extractLlmKey(args.model);
-      parsed.guardrailPrompt = args.prompt || '';
+      const guardrailPromptParsed = parsePromptArg(args.prompt, configuredPrompts);
+      parsed.guardrailPrompt = guardrailPromptParsed.inline;
+      parsed.guardrailPromptSource = guardrailPromptParsed.source;
+      parsed.guardrailPromptRef = guardrailPromptParsed.ref;
       parsed.guardrailRetries = args.num_retries || 3;
       parsed.guardrailFailOpen = args.fail_open !== false;
       parsed.guardrailMaxContextLength = args.max_context_length ?? 8000;
@@ -1026,7 +1345,10 @@ export default function MiddlewareSection() {
     if (name === 'dao_ai.middleware.create_tone_guardrail_middleware') {
       parsed.toneModel = extractLlmKey(args.model);
       parsed.toneProfile = args.tone || 'professional';
-      parsed.toneCustomGuidelines = args.custom_guidelines || '';
+      const toneParsed = parsePromptArg(args.custom_guidelines, configuredPrompts);
+      parsed.toneCustomGuidelines = toneParsed.inline;
+      parsed.toneCustomGuidelinesSource = toneParsed.source;
+      parsed.toneCustomGuidelinesRef = toneParsed.ref;
       parsed.toneRetries = args.num_retries ?? 2;
       parsed.toneFailOpen = args.fail_open !== false;
     }
@@ -1050,7 +1372,10 @@ export default function MiddlewareSection() {
     
     // Todo List
     if (name === 'dao_ai.middleware.create_todo_list_middleware') {
-      parsed.todoSystemPrompt = args.system_prompt || '';
+      const todoParsed = parsePromptArg(args.system_prompt, configuredPrompts);
+      parsed.todoSystemPrompt = todoParsed.inline;
+      parsed.todoSystemPromptSource = todoParsed.source;
+      parsed.todoSystemPromptRef = todoParsed.ref;
       parsed.todoToolDescription = args.tool_description || '';
     }
     
@@ -1110,7 +1435,10 @@ export default function MiddlewareSection() {
       parsed.volumeRef = fsVolKey;
       parsed.volumeSubPath = fsSubPath;
       parsed.filesystemEvictLimit = args.tool_token_limit_before_evict ?? 20000;
-      parsed.filesystemSystemPrompt = args.system_prompt || '';
+      const fsParsed = parsePromptArg(args.system_prompt, configuredPrompts);
+      parsed.filesystemSystemPrompt = fsParsed.inline;
+      parsed.filesystemSystemPromptSource = fsParsed.source;
+      parsed.filesystemSystemPromptRef = fsParsed.ref;
       if (args.custom_tool_descriptions && typeof args.custom_tool_descriptions === 'object') {
         parsed.filesystemCustomToolDescs = JSON.stringify(args.custom_tool_descriptions, null, 2);
       }
@@ -1126,16 +1454,24 @@ export default function MiddlewareSection() {
       parsed.volumeSource = subVolKey ? 'reference' : (subVolPath ? 'manual' : 'reference');
       parsed.volumeRef = subVolKey;
       parsed.volumeSubPath = subSubPath;
-      parsed.subagentSystemPrompt = args.system_prompt || '';
+      const subParsed = parsePromptArg(args.system_prompt, configuredPrompts);
+      parsed.subagentSystemPrompt = subParsed.inline;
+      parsed.subagentSystemPromptSource = subParsed.source;
+      parsed.subagentSystemPromptRef = subParsed.ref;
       parsed.subagentTaskDescription = args.task_description || '';
       if (Array.isArray(args.subagents)) {
-        parsed.subagentEntries = args.subagents.map((s: any, idx: number) => ({
-          id: `subagent_${idx}`,
-          name: s.name || '',
-          description: s.description || '',
-          systemPrompt: s.system_prompt || '',
-          model: extractLlmKey(s.model),
-        }));
+        parsed.subagentEntries = args.subagents.map((s: any, idx: number) => {
+          const sParsed = parsePromptArg(s.system_prompt, configuredPrompts);
+          return {
+            id: `subagent_${idx}`,
+            name: s.name || '',
+            description: s.description || '',
+            systemPrompt: sParsed.inline,
+            systemPromptSource: sParsed.source,
+            systemPromptRef: sParsed.ref,
+            model: extractLlmKey(s.model),
+          };
+        });
       } else {
         parsed.subagentEntries = [];
       }
@@ -1181,7 +1517,7 @@ export default function MiddlewareSection() {
     
     const normalizedName = normalizeMiddlewareName(mw.name);
     const preconfigured = PRECONFIGURED_MIDDLEWARE.find(pm => pm.value === normalizedName && pm.value !== 'custom');
-    const parsedArgs = parseMiddlewareArgs(mw, tools);
+    const parsedArgs = parseMiddlewareArgs(mw, tools, prompts);
     
     setFormData({
       ...defaultFormData,
@@ -1200,7 +1536,7 @@ export default function MiddlewareSection() {
       return {
         name: formData.guardrailName,
         model: formData.guardrailModel ? `__REF__${formData.guardrailModel}` : undefined,
-        prompt: formData.guardrailPrompt,
+        prompt: buildPromptValue(formData.guardrailPromptSource, formData.guardrailPromptRef, formData.guardrailPrompt),
         num_retries: formData.guardrailRetries,
         fail_open: formData.guardrailFailOpen,
         max_context_length: formData.guardrailMaxContextLength,
@@ -1430,10 +1766,11 @@ export default function MiddlewareSection() {
     
     // Tone Guardrail
     if (factory === 'dao_ai.middleware.create_tone_guardrail_middleware') {
+      const toneGuidelinesValue = buildPromptValue(formData.toneCustomGuidelinesSource, formData.toneCustomGuidelinesRef, formData.toneCustomGuidelines);
       return {
         ...(formData.toneModel && { model: `__REF__${formData.toneModel}` }),
         tone: formData.toneProfile,
-        ...(formData.toneCustomGuidelines && { custom_guidelines: formData.toneCustomGuidelines }),
+        ...(toneGuidelinesValue && { custom_guidelines: toneGuidelinesValue }),
         num_retries: formData.toneRetries,
         fail_open: formData.toneFailOpen,
       };
@@ -1463,7 +1800,8 @@ export default function MiddlewareSection() {
     // Todo List
     if (factory === 'dao_ai.middleware.create_todo_list_middleware') {
       const result: Record<string, any> = {};
-      if (formData.todoSystemPrompt) result.system_prompt = formData.todoSystemPrompt;
+      const todoPromptValue = buildPromptValue(formData.todoSystemPromptSource, formData.todoSystemPromptRef, formData.todoSystemPrompt);
+      if (todoPromptValue) result.system_prompt = todoPromptValue;
       if (formData.todoToolDescription) result.tool_description = formData.todoToolDescription;
       return Object.keys(result).length > 0 ? result : undefined;
     }
@@ -1521,8 +1859,9 @@ export default function MiddlewareSection() {
       if (formData.filesystemEvictLimit !== null) {
         result.tool_token_limit_before_evict = formData.filesystemEvictLimit;
       }
-      if (formData.filesystemSystemPrompt) {
-        result.system_prompt = formData.filesystemSystemPrompt;
+      const fsPromptValue = buildPromptValue(formData.filesystemSystemPromptSource, formData.filesystemSystemPromptRef, formData.filesystemSystemPrompt);
+      if (fsPromptValue) {
+        result.system_prompt = fsPromptValue;
       }
       if (formData.filesystemCustomToolDescs) {
         try {
@@ -1547,19 +1886,23 @@ export default function MiddlewareSection() {
         result.volume_path = formData.volumeSource === 'reference' && formData.volumeSubPath
           ? `${basePath}/${formData.volumeSubPath}` : basePath;
       }
-      if (formData.subagentSystemPrompt) {
-        result.system_prompt = formData.subagentSystemPrompt;
+      const subPromptValue = buildPromptValue(formData.subagentSystemPromptSource, formData.subagentSystemPromptRef, formData.subagentSystemPrompt);
+      if (subPromptValue) {
+        result.system_prompt = subPromptValue;
       }
       if (formData.subagentTaskDescription) {
         result.task_description = formData.subagentTaskDescription;
       }
       if (formData.subagentEntries.length > 0) {
-        result.subagents = formData.subagentEntries.map(s => ({
-          name: s.name,
-          description: s.description,
-          system_prompt: s.systemPrompt,
-          ...(s.model && { model: `__REF__${s.model}` }),
-        }));
+        result.subagents = formData.subagentEntries.map(s => {
+          const sPromptValue = buildPromptValue(s.systemPromptSource, s.systemPromptRef, s.systemPrompt);
+          return {
+            name: s.name,
+            description: s.description,
+            ...(sPromptValue && { system_prompt: sPromptValue }),
+            ...(s.model && { model: `__REF__${s.model}` }),
+          };
+        });
       }
       return result;
     }
@@ -2020,19 +2363,23 @@ export default function MiddlewareSection() {
                     required
                     hint="LLM to use for evaluation"
                   />
-                  <div className="col-span-2">
-                    <Textarea
-                      label="Evaluation Prompt"
-                      value={formData.guardrailPrompt}
-                      onChange={(e: ChangeEvent<HTMLTextAreaElement>) => 
-                        setFormData({ ...formData, guardrailPrompt: e.target.value })
-                      }
-                      placeholder="e.g., Evaluate if the response is professional and helpful."
-                      rows={3}
-                      required
-                      hint="Criteria for evaluating responses"
-                    />
-                  </div>
+                  <MiddlewarePromptField
+                    label="Evaluation Prompt"
+                    value={formData.guardrailPrompt}
+                    source={formData.guardrailPromptSource}
+                    promptRef={formData.guardrailPromptRef}
+                    middlewareType={formData.selectedFactory}
+                    middlewareName={formData.guardrailName}
+                    placeholder="e.g., Evaluate if the response is professional and helpful."
+                    hint="Criteria for evaluating responses"
+                    required
+                    rows={3}
+                    promptOptions={promptOptions}
+                    prompts={prompts}
+                    onValueChange={(v) => setFormData({ ...formData, guardrailPrompt: v })}
+                    onSourceChange={(s) => setFormData({ ...formData, guardrailPromptSource: s, ...(s === 'configured' ? { guardrailPrompt: '' } : { guardrailPromptRef: '' }) })}
+                    onRefChange={(r) => setFormData({ ...formData, guardrailPromptRef: r })}
+                  />
                   <Input
                     label="Max Retries"
                     type="number"
@@ -3132,18 +3479,22 @@ export default function MiddlewareSection() {
                       }
                       hint="Preset tone profile"
                     />
-                    <div className="col-span-2">
-                      <Textarea
-                        label="Custom Guidelines (Optional)"
-                        value={formData.toneCustomGuidelines}
-                        onChange={(e: ChangeEvent<HTMLTextAreaElement>) => 
-                          setFormData({ ...formData, toneCustomGuidelines: e.target.value })
-                        }
-                        placeholder="Custom tone guidelines override the preset profile..."
-                        rows={3}
-                        hint="Overrides the preset profile if provided"
-                      />
-                    </div>
+                    <MiddlewarePromptField
+                      label="Custom Guidelines (Optional)"
+                      value={formData.toneCustomGuidelines}
+                      source={formData.toneCustomGuidelinesSource}
+                      promptRef={formData.toneCustomGuidelinesRef}
+                      middlewareType={formData.selectedFactory}
+                      middlewareName={formData.refName}
+                      placeholder="Custom tone guidelines override the preset profile..."
+                      hint="Overrides the preset profile if provided"
+                      rows={3}
+                      promptOptions={promptOptions}
+                      prompts={prompts}
+                      onValueChange={(v) => setFormData({ ...formData, toneCustomGuidelines: v })}
+                      onSourceChange={(s) => setFormData({ ...formData, toneCustomGuidelinesSource: s, ...(s === 'configured' ? { toneCustomGuidelines: '' } : { toneCustomGuidelinesRef: '' }) })}
+                      onRefChange={(r) => setFormData({ ...formData, toneCustomGuidelinesRef: r })}
+                    />
                     <Input
                       label="Max Retries"
                       type="number"
@@ -3283,15 +3634,21 @@ export default function MiddlewareSection() {
                   <p className="text-xs text-slate-400 bg-slate-900/50 p-2 rounded-lg border border-slate-700/30">
                     Provides agents with a write_todos tool for task planning and tracking. Both fields are optional.
                   </p>
-                  <Textarea
+                  <MiddlewarePromptField
                     label="System Prompt (Optional)"
                     value={formData.todoSystemPrompt}
-                    onChange={(e: ChangeEvent<HTMLTextAreaElement>) => 
-                      setFormData({ ...formData, todoSystemPrompt: e.target.value })
-                    }
+                    source={formData.todoSystemPromptSource}
+                    promptRef={formData.todoSystemPromptRef}
+                    middlewareType={formData.selectedFactory}
+                    middlewareName={formData.refName}
                     placeholder="Custom system prompt to guide todo usage..."
-                    rows={3}
                     hint="If empty, uses the built-in prompt"
+                    rows={3}
+                    promptOptions={promptOptions}
+                    prompts={prompts}
+                    onValueChange={(v) => setFormData({ ...formData, todoSystemPrompt: v })}
+                    onSourceChange={(s) => setFormData({ ...formData, todoSystemPromptSource: s, ...(s === 'configured' ? { todoSystemPrompt: '' } : { todoSystemPromptRef: '' }) })}
+                    onRefChange={(r) => setFormData({ ...formData, todoSystemPromptRef: r })}
                   />
                   <Input
                     label="Tool Description (Optional)"
@@ -3705,15 +4062,21 @@ export default function MiddlewareSection() {
                       )}
                     </div>
                   )}
-                  <Textarea
+                  <MiddlewarePromptField
                     label="System Prompt (Optional)"
                     value={formData.filesystemSystemPrompt}
-                    onChange={(e: ChangeEvent<HTMLTextAreaElement>) => 
-                      setFormData({ ...formData, filesystemSystemPrompt: e.target.value })
-                    }
+                    source={formData.filesystemSystemPromptSource}
+                    promptRef={formData.filesystemSystemPromptRef}
+                    middlewareType={formData.selectedFactory}
+                    middlewareName={formData.refName}
                     placeholder="You have access to filesystem tools for reading, writing, and editing files. Use ls to explore directories, read_file to view contents, write_file to create new files, edit_file to modify existing files, glob to find files by pattern, and grep to search file contents."
-                    rows={3}
                     hint="Overrides the default prompt that guides the agent on how to use filesystem tools (ls, read_file, write_file, edit_file, glob, grep). Leave empty to use the built-in guidance."
+                    rows={3}
+                    promptOptions={promptOptions}
+                    prompts={prompts}
+                    onValueChange={(v) => setFormData({ ...formData, filesystemSystemPrompt: v })}
+                    onSourceChange={(s) => setFormData({ ...formData, filesystemSystemPromptSource: s, ...(s === 'configured' ? { filesystemSystemPrompt: '' } : { filesystemSystemPromptRef: '' }) })}
+                    onRefChange={(r) => setFormData({ ...formData, filesystemSystemPromptRef: r })}
                   />
                   <Textarea
                     label="Custom Tool Descriptions (Optional)"
@@ -3832,15 +4195,21 @@ export default function MiddlewareSection() {
                       )}
                     </div>
                   )}
-                  <Textarea
+                  <MiddlewarePromptField
                     label="System Prompt (Optional)"
                     value={formData.subagentSystemPrompt}
-                    onChange={(e: ChangeEvent<HTMLTextAreaElement>) => 
-                      setFormData({ ...formData, subagentSystemPrompt: e.target.value })
-                    }
+                    source={formData.subagentSystemPromptSource}
+                    promptRef={formData.subagentSystemPromptRef}
+                    middlewareType={formData.selectedFactory}
+                    middlewareName={formData.refName}
                     placeholder="Custom system prompt for guiding task tool usage..."
-                    rows={2}
                     hint="Overrides built-in task guidance prompt"
+                    rows={2}
+                    promptOptions={promptOptions}
+                    prompts={prompts}
+                    onValueChange={(v) => setFormData({ ...formData, subagentSystemPrompt: v })}
+                    onSourceChange={(s) => setFormData({ ...formData, subagentSystemPromptSource: s, ...(s === 'configured' ? { subagentSystemPrompt: '' } : { subagentSystemPromptRef: '' }) })}
+                    onRefChange={(r) => setFormData({ ...formData, subagentSystemPromptRef: r })}
                   />
                   <Input
                     label="Task Description (Optional)"
@@ -3865,6 +4234,8 @@ export default function MiddlewareSection() {
                             name: '',
                             description: '',
                             systemPrompt: '',
+                            systemPromptSource: 'inline',
+                            systemPromptRef: '',
                             model: '',
                           };
                           setFormData({ ...formData, subagentEntries: [...formData.subagentEntries, newEntry] });
@@ -3931,20 +4302,39 @@ export default function MiddlewareSection() {
                               required
                             />
                           </div>
-                          <div className="col-span-2">
-                            <Textarea
-                              label="System Prompt"
-                              value={entry.systemPrompt}
-                              onChange={(e: ChangeEvent<HTMLTextAreaElement>) => {
-                                const newEntries = [...formData.subagentEntries];
-                                newEntries[idx] = { ...entry, systemPrompt: e.target.value };
-                                setFormData({ ...formData, subagentEntries: newEntries });
-                              }}
-                              placeholder="Instructions for the subagent..."
-                              rows={2}
-                              required
-                            />
-                          </div>
+                          <MiddlewarePromptField
+                            label="System Prompt"
+                            value={entry.systemPrompt}
+                            source={entry.systemPromptSource}
+                            promptRef={entry.systemPromptRef}
+                            middlewareType={formData.selectedFactory}
+                            middlewareName={entry.name || `subagent-${idx + 1}`}
+                            placeholder="Instructions for the subagent..."
+                            hint="System prompt guiding this subagent's behavior"
+                            required
+                            rows={2}
+                            promptOptions={promptOptions}
+                            prompts={prompts}
+                            onValueChange={(v) => {
+                              const newEntries = [...formData.subagentEntries];
+                              newEntries[idx] = { ...entry, systemPrompt: v };
+                              setFormData({ ...formData, subagentEntries: newEntries });
+                            }}
+                            onSourceChange={(s) => {
+                              const newEntries = [...formData.subagentEntries];
+                              newEntries[idx] = {
+                                ...entry,
+                                systemPromptSource: s,
+                                ...(s === 'configured' ? { systemPrompt: '' } : { systemPromptRef: '' }),
+                              };
+                              setFormData({ ...formData, subagentEntries: newEntries });
+                            }}
+                            onRefChange={(r) => {
+                              const newEntries = [...formData.subagentEntries];
+                              newEntries[idx] = { ...entry, systemPromptRef: r };
+                              setFormData({ ...formData, subagentEntries: newEntries });
+                            }}
+                          />
                         </div>
                       </div>
                     ))}

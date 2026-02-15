@@ -2555,6 +2555,35 @@
       "title": "GuardrailModel",
       "type": "object"
     },
+    "HandoffRouteModel": {
+      "additionalProperties": false,
+      "description": "Configuration model for a handoff route in a swarm. When is_deterministic is true, control always transfers to the target agent after the source agent completes its turn. When false (default), the LLM decides via tool call.",
+      "properties": {
+        "agent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentModel"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "The target agent to hand off to, specified as an AgentModel or agent name string.",
+          "title": "Agent"
+        },
+        "is_deterministic": {
+          "default": false,
+          "description": "When true, the handoff is deterministic: control always transfers to this agent after the source agent completes its turn, without LLM tool-call routing. When false (default), a handoff tool is created and the LLM decides when to invoke it.",
+          "title": "Is Deterministic",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "agent"
+      ],
+      "title": "HandoffRouteModel",
+      "type": "object"
+    },
     "GuidelineModel": {
       "additionalProperties": false,
       "properties": {
@@ -4676,6 +4705,9 @@
                         },
                         {
                           "type": "string"
+                        },
+                        {
+                          "$ref": "#/$defs/HandoffRouteModel"
                         }
                       ]
                     },
@@ -4692,6 +4724,7 @@
               "type": "null"
             }
           ],
+          "description": "Mapping of agent names to their allowed handoff targets. Each target can be an agent name (str), an AgentModel, or a HandoffRouteModel for deterministic routing. Use null (~) to allow handoffs to all agents.",
           "title": "Handoffs"
         }
       },

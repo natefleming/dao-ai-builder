@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Settings, Save, GitBranch, Users, ArrowRightLeft, Plus, Trash2, Info, Bot, X, Tag, Wrench, Sparkles, Loader2, Variable, Layers } from 'lucide-react';
 import { useConfigStore } from '@/stores/configStore';
 import { useCatalogs, useSchemas } from '@/hooks/useDatabricks';
@@ -75,10 +75,15 @@ const WORKLOAD_SIZES = [
 type OrchestrationPattern = 'supervisor' | 'swarm' | 'none';
 type HandoffType = 'any' | 'none' | 'specific';
 
+interface HandoffTarget {
+  agent: string;
+  isDeterministic: boolean;
+}
+
 interface HandoffConfig {
   agentName: string;
   type: HandoffType;
-  targets: string[];
+  targets: HandoffTarget[];
 }
 
 // Environment variable entry - value can be from a variable reference or manual entry
@@ -294,10 +299,22 @@ export default function AppConfigSection() {
       if (Array.isArray(targets) && targets.length === 0) {
         return { agentName, type: 'none' as HandoffType, targets: [] };
       }
-      const targetNames = (targets as (string | { name: string })[]).map(t => 
-        typeof t === 'string' ? t : t.name
-      );
-      return { agentName, type: 'specific' as HandoffType, targets: targetNames };
+      const handoffTargets: HandoffTarget[] = (targets as (string | { name?: string; agent?: string | { name: string }; is_deterministic?: boolean })[]).map(t => {
+        if (typeof t === 'string') {
+          return { agent: t, isDeterministic: false };
+        }
+        // HandoffRouteModel: has 'agent' field
+        if ('agent' in t && t.agent !== undefined) {
+          const agentName = typeof t.agent === 'string' ? t.agent : t.agent?.name || '';
+          return { agent: agentName, isDeterministic: t.is_deterministic === true };
+        }
+        // AgentModel: has 'name' field
+        if ('name' in t && t.name !== undefined) {
+          return { agent: t.name, isDeterministic: false };
+        }
+        return { agent: '', isDeterministic: false };
+      }).filter(t => t.agent !== '');
+      return { agentName, type: 'specific' as HandoffType, targets: handoffTargets };
     });
   });
 
@@ -380,6 +397,11 @@ export default function AppConfigSection() {
   });
   const [chatHistoryMaxTokensBeforeSummary, setChatHistoryMaxTokensBeforeSummary] = useState(app?.chat_history?.max_tokens_before_summary || 20480);
   const [chatHistoryMaxMessagesBeforeSummary, setChatHistoryMaxMessagesBeforeSummary] = useState(app?.chat_history?.max_messages_before_summary || 10);
+
+  // Track whether initial sync from config has completed.
+  // After the first sync, local handoff/orchestration state is managed by the user
+  // and should not be overwritten by config re-renders.
+  const initialSyncDone = useRef(false);
 
   // Determine if there are unsaved changes
   const hasChanges = (() => {
@@ -470,11 +492,13 @@ export default function AppConfigSection() {
       
       // Check handoffs (simplified comparison)
       const savedHandoffs = app?.orchestration?.swarm?.handoffs || {};
-      const currentHandoffsDict: Record<string, string[] | null> = {};
+      const currentHandoffsDict: Record<string, (string | { agent: string; is_deterministic: boolean })[] | null> = {};
       handoffs.forEach(h => {
         if (h.type === 'any') currentHandoffsDict[h.agentName] = null;
         else if (h.type === 'none') currentHandoffsDict[h.agentName] = [];
-        else currentHandoffsDict[h.agentName] = h.targets;
+        else currentHandoffsDict[h.agentName] = h.targets.map(t =>
+          t.isDeterministic ? { agent: t.agent, is_deterministic: true } : t.agent
+        );
       });
       if (JSON.stringify(savedHandoffs) !== JSON.stringify(currentHandoffsDict)) return true;
       
@@ -692,114 +716,131 @@ export default function AppConfigSection() {
       setSelectedAgents(agentKeys);
     }
     
-    // Sync orchestration pattern and settings
-    // Note: Supervisor and Swarm require multiple agents, so force to 'none' if only one agent
-    let newPattern: OrchestrationPattern = 
-      app?.orchestration?.supervisor ? 'supervisor' :
-      app?.orchestration?.swarm ? 'swarm' : 'none';
-    
-    // Override to 'none' if insufficient agents for the pattern
-    if ((newPattern === 'supervisor' || newPattern === 'swarm') && agentKeys.length <= 1) {
-      newPattern = 'none';
-    }
-    
-    setPattern(newPattern);
-    
-    // Sync orchestration model (only supervisor uses a model)
-    const existingModel = app?.orchestration?.supervisor?.model?.name;
-    if (existingModel) {
-      const found = Object.entries(llms).find(([, llm]) => llm.name === existingModel);
-      setSelectedLLM(found ? found[0] : '');
-    } else {
-      setSelectedLLM('');
-    }
-    
-    // Sync supervisor prompt
-    setSupervisorPrompt(app?.orchestration?.supervisor?.prompt || '');
-    
-    // Sync supervisor tools
-    const existingSupervisorTools = app?.orchestration?.supervisor?.tools;
-    if (existingSupervisorTools && Array.isArray(existingSupervisorTools)) {
-      const toolKeys = existingSupervisorTools.map(t => {
-        const toolName = typeof t === 'string' ? t : t?.name;
-        const matchedKey = Object.entries(tools).find(([, tool]) => tool.name === toolName)?.[0];
-        return matchedKey || '';
-      }).filter(Boolean);
-      setSupervisorTools(toolKeys);
-    } else {
-      setSupervisorTools([]);
-    }
-    
-    // Sync supervisor middleware
-    const existingSupervisorMiddleware = app?.orchestration?.supervisor?.middleware;
-    if (existingSupervisorMiddleware && Array.isArray(existingSupervisorMiddleware)) {
-      const middlewareKeys = existingSupervisorMiddleware.map(m => {
-        const middlewareName = typeof m === 'string' ? m : (m as any)?.name;
-        if (!middlewareName) return '';
-        const matchedKey = Object.entries(middleware).find(([, mw]) => (mw as any)?.name === middlewareName)?.[0];
-        return matchedKey || '';
-      }).filter(Boolean);
-      setSupervisorMiddleware(middlewareKeys);
-    } else {
-      setSupervisorMiddleware([]);
-    }
-    
-    // Sync swarm default agent
-    const existingDefault = app?.orchestration?.swarm?.default_agent;
-    if (typeof existingDefault === 'string') {
-      setDefaultAgent(existingDefault);
-    } else if (existingDefault && 'name' in existingDefault) {
-      setDefaultAgent(existingDefault.name);
-    } else {
-      setDefaultAgent('');
-    }
-    
-    // Sync handoffs
-    const existingHandoffs = app?.orchestration?.swarm?.handoffs;
-    if (existingHandoffs) {
-      const newHandoffs: HandoffConfig[] = Object.entries(existingHandoffs).map(([agentName, targets]) => {
-        if (targets === null || targets === undefined) {
-          return { agentName, type: 'any' as HandoffType, targets: [] };
-        }
-        if (Array.isArray(targets) && targets.length === 0) {
-          return { agentName, type: 'none' as HandoffType, targets: [] };
-        }
-        const targetNames = (targets as (string | { name: string })[]).map(t => 
-          typeof t === 'string' ? t : t.name
-        );
-        return { agentName, type: 'specific' as HandoffType, targets: targetNames };
-      });
-      setHandoffs(newHandoffs);
-    } else {
-      setHandoffs([]);
-    }
-    
-    // Sync swarm middleware
-    const existingSwarmMiddleware = app?.orchestration?.swarm?.middleware;
-    if (existingSwarmMiddleware && Array.isArray(existingSwarmMiddleware)) {
-      const middlewareKeys = existingSwarmMiddleware.map(m => {
-        const middlewareName = typeof m === 'string' ? m : (m as any)?.name;
-        if (!middlewareName) return '';
-        const matchedKey = Object.entries(middleware).find(([, mw]) => (mw as any)?.name === middlewareName)?.[0];
-        return matchedKey || '';
-      }).filter(Boolean);
-      setSwarmMiddleware(middlewareKeys);
-    } else {
-      setSwarmMiddleware([]);
-    }
-    
-    // Sync orchestration memory reference
-    const orchMemory = app?.orchestration?.memory as unknown;
-    if (orchMemory) {
-      if (typeof orchMemory === 'string' && orchMemory.startsWith('*')) {
-        setOrchestrationMemoryRef(orchMemory.slice(1));
-      } else if (config.memory?.refName) {
-        setOrchestrationMemoryRef(config.memory.refName);
-      } else {
-        setOrchestrationMemoryRef('memory');
+    // Only sync orchestration state on initial mount or explicit config reload.
+    // After the first sync, local orchestration/handoff state is managed by the user
+    // and should not be overwritten by cascading config re-renders.
+    if (!initialSyncDone.current) {
+      initialSyncDone.current = true;
+
+      // Sync orchestration pattern and settings
+      // Note: Supervisor and Swarm require multiple agents, so force to 'none' if only one agent
+      let newPattern: OrchestrationPattern = 
+        app?.orchestration?.supervisor ? 'supervisor' :
+        app?.orchestration?.swarm ? 'swarm' : 'none';
+      
+      // Override to 'none' if insufficient agents for the pattern
+      if ((newPattern === 'supervisor' || newPattern === 'swarm') && agentKeys.length <= 1) {
+        newPattern = 'none';
       }
-    } else {
-      setOrchestrationMemoryRef('');
+      
+      setPattern(newPattern);
+      
+      // Sync orchestration model (only supervisor uses a model)
+      const existingModel = app?.orchestration?.supervisor?.model?.name;
+      if (existingModel) {
+        const found = Object.entries(llms).find(([, llm]) => llm.name === existingModel);
+        setSelectedLLM(found ? found[0] : '');
+      } else {
+        setSelectedLLM('');
+      }
+      
+      // Sync supervisor prompt
+      setSupervisorPrompt(app?.orchestration?.supervisor?.prompt || '');
+      
+      // Sync supervisor tools
+      const existingSupervisorTools = app?.orchestration?.supervisor?.tools;
+      if (existingSupervisorTools && Array.isArray(existingSupervisorTools)) {
+        const toolKeys = existingSupervisorTools.map(t => {
+          const toolName = typeof t === 'string' ? t : t?.name;
+          const matchedKey = Object.entries(tools).find(([, tool]) => tool.name === toolName)?.[0];
+          return matchedKey || '';
+        }).filter(Boolean);
+        setSupervisorTools(toolKeys);
+      } else {
+        setSupervisorTools([]);
+      }
+      
+      // Sync supervisor middleware
+      const existingSupervisorMiddleware = app?.orchestration?.supervisor?.middleware;
+      if (existingSupervisorMiddleware && Array.isArray(existingSupervisorMiddleware)) {
+        const middlewareKeys = existingSupervisorMiddleware.map(m => {
+          const middlewareName = typeof m === 'string' ? m : (m as any)?.name;
+          if (!middlewareName) return '';
+          const matchedKey = Object.entries(middleware).find(([, mw]) => (mw as any)?.name === middlewareName)?.[0];
+          return matchedKey || '';
+        }).filter(Boolean);
+        setSupervisorMiddleware(middlewareKeys);
+      } else {
+        setSupervisorMiddleware([]);
+      }
+      
+      // Sync swarm default agent
+      const existingDefault = app?.orchestration?.swarm?.default_agent;
+      if (typeof existingDefault === 'string') {
+        setDefaultAgent(existingDefault);
+      } else if (existingDefault && 'name' in existingDefault) {
+        setDefaultAgent(existingDefault.name);
+      } else {
+        setDefaultAgent('');
+      }
+      
+      // Sync handoffs
+      const existingHandoffs = app?.orchestration?.swarm?.handoffs;
+      if (existingHandoffs) {
+        const newHandoffs: HandoffConfig[] = Object.entries(existingHandoffs).map(([agentName, targets]) => {
+          if (targets === null || targets === undefined) {
+            return { agentName, type: 'any' as HandoffType, targets: [] as HandoffTarget[] };
+          }
+          if (Array.isArray(targets) && targets.length === 0) {
+            return { agentName, type: 'none' as HandoffType, targets: [] as HandoffTarget[] };
+          }
+          const handoffTargets: HandoffTarget[] = (targets as (string | { name?: string; agent?: string | { name: string }; is_deterministic?: boolean })[]).map(t => {
+            if (typeof t === 'string') {
+              return { agent: t, isDeterministic: false };
+            }
+            if ('agent' in t && t.agent !== undefined) {
+              const agentName = typeof t.agent === 'string' ? t.agent : t.agent?.name || '';
+              return { agent: agentName, isDeterministic: t.is_deterministic === true };
+            }
+            if ('name' in t && t.name !== undefined) {
+              return { agent: t.name, isDeterministic: false };
+            }
+            return { agent: '', isDeterministic: false };
+          }).filter(t => t.agent !== '');
+          return { agentName, type: 'specific' as HandoffType, targets: handoffTargets };
+        });
+        setHandoffs(newHandoffs);
+      } else {
+        setHandoffs([]);
+      }
+      
+      // Sync swarm middleware
+      const existingSwarmMiddleware = app?.orchestration?.swarm?.middleware;
+      if (existingSwarmMiddleware && Array.isArray(existingSwarmMiddleware)) {
+        const middlewareKeys = existingSwarmMiddleware.map(m => {
+          const middlewareName = typeof m === 'string' ? m : (m as any)?.name;
+          if (!middlewareName) return '';
+          const matchedKey = Object.entries(middleware).find(([, mw]) => (mw as any)?.name === middlewareName)?.[0];
+          return matchedKey || '';
+        }).filter(Boolean);
+        setSwarmMiddleware(middlewareKeys);
+      } else {
+        setSwarmMiddleware([]);
+      }
+      
+      // Sync orchestration memory reference
+      const orchMemory = app?.orchestration?.memory as unknown;
+      if (orchMemory) {
+        if (typeof orchMemory === 'string' && orchMemory.startsWith('*')) {
+          setOrchestrationMemoryRef(orchMemory.slice(1));
+        } else if (config.memory?.refName) {
+          setOrchestrationMemoryRef(config.memory.refName);
+        } else {
+          setOrchestrationMemoryRef('memory');
+        }
+      } else {
+        setOrchestrationMemoryRef('');
+      }
     }
     
     // Sync tags
@@ -882,25 +923,59 @@ export default function AppConfigSection() {
       setHandoffs([...handoffs, { 
         agentName: unusedAgentsForHandoffs[0], 
         type: 'any', 
-        targets: [] 
+        targets: [] as HandoffTarget[]
       }]);
     }
   };
 
   const removeHandoff = (index: number) => {
-    setHandoffs(handoffs.filter((_, i) => i !== index));
+    setHandoffs(prev => prev.filter((_, i) => i !== index));
   };
 
   const updateHandoff = (index: number, updates: Partial<HandoffConfig>) => {
-    setHandoffs(handoffs.map((h, i) => i === index ? { ...h, ...updates } : h));
+    setHandoffs(prev => prev.map((h, i) => i === index ? { ...h, ...updates } : h));
   };
 
   const toggleTarget = (handoffIndex: number, targetAgent: string) => {
-    const handoff = handoffs[handoffIndex];
-    const newTargets = handoff.targets.includes(targetAgent)
-      ? handoff.targets.filter(t => t !== targetAgent)
-      : [...handoff.targets, targetAgent];
-    updateHandoff(handoffIndex, { targets: newTargets });
+    setHandoffs(prev => prev.map((h, i) => {
+      if (i !== handoffIndex) return h;
+      const exists = h.targets.some(t => t.agent === targetAgent);
+      const isDet = h.targets.some(t => t.isDeterministic);
+
+      if (exists) {
+        // Removing a target
+        return { ...h, targets: h.targets.filter(t => t.agent !== targetAgent) };
+      }
+
+      // Adding a target: if this rule is deterministic, replace the existing target
+      if (isDet) {
+        return { ...h, targets: [{ agent: targetAgent, isDeterministic: true }] };
+      }
+      return { ...h, targets: [...h.targets, { agent: targetAgent, isDeterministic: false }] };
+    }));
+  };
+
+  const toggleDeterministic = (handoffIndex: number) => {
+    setHandoffs(prev => prev.map((h, i) => {
+      if (i !== handoffIndex) return h;
+      const isCurrentlyDeterministic = h.targets.some(t => t.isDeterministic);
+
+      if (isCurrentlyDeterministic) {
+        // Turning off deterministic: keep all targets but mark them as agentic
+        return {
+          ...h,
+          targets: h.targets.map(t => ({ ...t, isDeterministic: false })),
+        };
+      }
+
+      // Turning on deterministic: keep only the first target and mark it deterministic
+      const firstTarget = h.targets[0];
+      if (!firstTarget) return h;
+      return {
+        ...h,
+        targets: [{ agent: firstTarget.agent, isDeterministic: true }],
+      };
+    }));
   };
 
   // Handler for generating supervisor prompt with AI
@@ -968,14 +1043,19 @@ export default function AppConfigSection() {
       };
     } else if (pattern === 'swarm') {
       // Swarm no longer uses a model - each agent uses its own model
-      const handoffsDict: Record<string, string[] | null> = {};
+      const handoffsDict: Record<string, (string | { agent: string; is_deterministic: boolean })[] | null> = {};
       handoffs.forEach(h => {
         if (h.type === 'any') {
           handoffsDict[h.agentName] = null;
         } else if (h.type === 'none') {
           handoffsDict[h.agentName] = [];
         } else {
-          handoffsDict[h.agentName] = h.targets;
+          // Emit HandoffRouteModel objects for deterministic targets, plain strings otherwise
+          handoffsDict[h.agentName] = h.targets.map(t =>
+            t.isDeterministic
+              ? { agent: t.agent, is_deterministic: true }
+              : t.agent
+          );
         }
       });
 
@@ -1756,30 +1836,77 @@ export default function AppConfigSection() {
                         </Button>
                       </div>
 
-                      {handoff.type === 'specific' && (
-                        <div className="pt-1">
-                          <p className="text-xs text-slate-400 mb-2">Select target agents:</p>
-                          <div className="flex flex-wrap gap-2">
-                            {availableAgentsForSwarm
-                              .filter(name => name !== handoff.agentName)
-                              .map(name => (
-                                <button
-                                  key={name}
-                                  type="button"
-                                  onClick={() => toggleTarget(index, name)}
-                                  className={clsx(
-                                    'px-2.5 py-1 rounded-lg text-xs transition-colors',
-                                    handoff.targets.includes(name)
-                                      ? 'bg-purple-500/30 text-purple-300 border border-purple-500/50'
-                                      : 'bg-slate-700 text-slate-400 border border-slate-600 hover:border-slate-500'
-                                  )}
-                                >
-                                  {agents[name]?.name || name}
-                                </button>
-                              ))}
+                      {handoff.type === 'specific' && (() => {
+                        const isDeterministicRule = handoff.targets.some(t => t.isDeterministic);
+                        return (
+                          <div className="pt-1 space-y-3">
+                            {/* Deterministic toggle - shown first to set context */}
+                            <label className="flex items-center gap-2 cursor-pointer group">
+                              <input
+                                type="checkbox"
+                                checked={isDeterministicRule}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  toggleDeterministic(index);
+                                }}
+                                className="w-3.5 h-3.5 rounded border-slate-600 bg-slate-700 text-amber-500 focus:ring-amber-500/30 focus:ring-offset-0 cursor-pointer"
+                              />
+                              <span className={clsx(
+                                'text-xs transition-colors',
+                                isDeterministicRule
+                                  ? 'text-amber-400 font-medium'
+                                  : 'text-slate-400 group-hover:text-slate-300'
+                              )}>
+                                Deterministic route
+                              </span>
+                            </label>
+
+                            {isDeterministicRule && (
+                              <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-2.5">
+                                <p className="text-[10px] text-amber-400/80">
+                                  This agent will <span className="font-semibold">always</span> route to the selected target after completing its turn. Only one target is allowed.
+                                </p>
+                              </div>
+                            )}
+
+                            {/* Target agent selection */}
+                            <div>
+                              <p className="text-xs text-slate-400 mb-2">
+                                {isDeterministicRule ? 'Select the target agent:' : 'Select target agents:'}
+                              </p>
+                              <div className="flex flex-wrap gap-2">
+                                {availableAgentsForSwarm
+                                  .filter(name => name !== handoff.agentName)
+                                  .map(name => {
+                                    const isSelected = handoff.targets.some(t => t.agent === name);
+                                    // In deterministic mode, disable unselected agents if one is already selected
+                                    const isDisabled = isDeterministicRule && !isSelected && handoff.targets.length > 0;
+                                    return (
+                                      <button
+                                        key={name}
+                                        type="button"
+                                        onClick={() => !isDisabled && toggleTarget(index, name)}
+                                        className={clsx(
+                                          'px-2.5 py-1 rounded-lg text-xs transition-colors',
+                                          isSelected && isDeterministicRule
+                                            ? 'bg-amber-500/30 text-amber-300 border border-amber-500/50'
+                                            : isSelected
+                                            ? 'bg-purple-500/30 text-purple-300 border border-purple-500/50'
+                                            : isDisabled
+                                            ? 'bg-slate-800 text-slate-600 border border-slate-700 cursor-not-allowed'
+                                            : 'bg-slate-700 text-slate-400 border border-slate-600 hover:border-slate-500'
+                                        )}
+                                        disabled={isDisabled}
+                                      >
+                                        {agents[name]?.name || name}
+                                      </button>
+                                    );
+                                  })}
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                      )}
+                        );
+                      })()}
 
                       {handoff.type === 'any' && (
                         <p className="text-xs text-emerald-400">
