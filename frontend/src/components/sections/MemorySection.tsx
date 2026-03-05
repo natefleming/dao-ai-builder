@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { Database, HardDrive, Info, Plus, Edit2, Trash2 } from 'lucide-react';
+import { Database, HardDrive, Info, Plus, Edit2, Trash2, Sparkles } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 import Select from '@/components/ui/Select';
+import Textarea from '@/components/ui/Textarea';
 import Modal from '@/components/ui/Modal';
 import Badge from '@/components/ui/Badge';
 import { useConfigStore } from '@/stores/configStore';
@@ -11,6 +12,9 @@ import {
   MemoryModel,
   CheckpointerModel,
   StoreModel,
+  MemoryExtractionModel,
+  MemorySchemaName,
+  LLMModel,
 } from '@/types/dao-ai-types';
 import { normalizeRefNameWhileTyping, normalizeRefName } from '@/utils/name-utils';
 import { safeDelete } from '@/utils/safe-delete';
@@ -23,11 +27,23 @@ const storageTypeOptions = [
   { value: 'postgres', label: 'Lakebase/PostgreSQL' },
 ];
 
+const MEMORY_SCHEMA_OPTIONS: { value: MemorySchemaName; label: string; description: string }[] = [
+  { value: 'user_profile', label: 'User Profile', description: 'Consolidated profile per user (name, preferences, goals)' },
+  { value: 'preference', label: 'Preference', description: 'Individual preference records searchable by category' },
+  { value: 'episode', label: 'Episode', description: 'Notable interaction records (situation, approach, outcome)' },
+];
+
 export function MemorySection() {
   const { config, updateMemory } = useConfigStore();
   const memory = config.memory;
   const databases = config.resources?.databases || {};
+  const llms = config.resources?.llms || {};
   const { scrollToAsset } = useYamlScrollStore();
+  
+  const llmOptions = Object.entries(llms).map(([key, llm]) => ({
+    value: key,
+    label: `${key} (${llm.name})`,
+  }));
   
   // Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -62,7 +78,26 @@ export function MemorySection() {
   const [storeDims, setStoreDims] = useState(1536);
   const [storeNamespace, setStoreNamespace] = useState('{user_id}');
   const [storeEmbeddingModel, setStoreEmbeddingModel] = useState('databricks-gte-large-en');
+  // Extraction state
+  const [extractionEnabled, setExtractionEnabled] = useState(false);
+  const [extractionSchemas, setExtractionSchemas] = useState<MemorySchemaName[]>([]);
+  const [extractionInstructions, setExtractionInstructions] = useState('');
+  const [extractionAutoInject, setExtractionAutoInject] = useState(true);
+  const [extractionAutoInjectLimit, setExtractionAutoInjectLimit] = useState(5);
+  const [extractionBackgroundExtraction, setExtractionBackgroundExtraction] = useState(false);
+  const [extractionModelKey, setExtractionModelKey] = useState('');
+  const [extractionQueryModelKey, setExtractionQueryModelKey] = useState('');
   
+  // Helper to find LLM key by matching model name
+  const findLlmKey = (model: LLMModel | string | undefined): string => {
+    if (!model) return '';
+    const modelName = typeof model === 'string' ? model : model.name;
+    for (const [key, llm] of Object.entries(llms)) {
+      if (llm.name === modelName) return key;
+    }
+    return '';
+  };
+
   // Reset form to defaults
   const resetForm = () => {
     setRefName('memory');
@@ -77,6 +112,14 @@ export function MemorySection() {
     setStoreDims(1536);
     setStoreNamespace('{user_id}');
     setStoreEmbeddingModel('databricks-gte-large-en');
+    setExtractionEnabled(false);
+    setExtractionSchemas([]);
+    setExtractionInstructions('');
+    setExtractionAutoInject(true);
+    setExtractionAutoInjectLimit(5);
+    setExtractionBackgroundExtraction(false);
+    setExtractionModelKey('');
+    setExtractionQueryModelKey('');
   };
   
   // Load form from existing memory config
@@ -115,6 +158,26 @@ export function MemorySection() {
       setStoreDims(1536);
       setStoreNamespace('{user_id}');
       setStoreEmbeddingModel('databricks-gte-large-en');
+    }
+    
+    if (mem.extraction) {
+      setExtractionEnabled(true);
+      setExtractionSchemas(mem.extraction.schemas ?? []);
+      setExtractionInstructions(mem.extraction.instructions || '');
+      setExtractionAutoInject(mem.extraction.auto_inject ?? true);
+      setExtractionAutoInjectLimit(mem.extraction.auto_inject_limit ?? 5);
+      setExtractionBackgroundExtraction(mem.extraction.background_extraction ?? false);
+      setExtractionModelKey(findLlmKey(mem.extraction.extraction_model));
+      setExtractionQueryModelKey(findLlmKey(mem.extraction.query_model));
+    } else {
+      setExtractionEnabled(false);
+      setExtractionSchemas([]);
+      setExtractionInstructions('');
+      setExtractionAutoInject(true);
+      setExtractionAutoInjectLimit(5);
+      setExtractionBackgroundExtraction(false);
+      setExtractionModelKey('');
+      setExtractionQueryModelKey('');
     }
   };
   
@@ -179,6 +242,28 @@ export function MemorySection() {
       newMemory.store = store;
     }
     
+    if (extractionEnabled) {
+      const extraction: MemoryExtractionModel = {};
+      
+      if (extractionSchemas.length > 0) {
+        extraction.schemas = [...extractionSchemas];
+      }
+      if (extractionInstructions.trim()) {
+        extraction.instructions = extractionInstructions.trim();
+      }
+      extraction.auto_inject = extractionAutoInject;
+      extraction.auto_inject_limit = extractionAutoInjectLimit;
+      extraction.background_extraction = extractionBackgroundExtraction;
+      if (extractionModelKey && llms[extractionModelKey]) {
+        extraction.extraction_model = llms[extractionModelKey];
+      }
+      if (extractionQueryModelKey && llms[extractionQueryModelKey]) {
+        extraction.query_model = llms[extractionQueryModelKey];
+      }
+      
+      newMemory.extraction = extraction;
+    }
+    
     return (checkpointerEnabled || storeEnabled) ? newMemory : undefined;
   };
   
@@ -232,6 +317,9 @@ export function MemorySection() {
       // Infer type from database presence (dao-ai 0.1.2 pattern)
       const storeType = mem.store.database ? 'postgres' : 'memory';
       parts.push(`Store: ${storeType}`);
+    }
+    if (mem.extraction) {
+      parts.push('Extraction: enabled');
     }
     return parts.join(' • ') || 'No components configured';
   };
@@ -299,6 +387,12 @@ export function MemorySection() {
                   Store
                 </Badge>
               )}
+              {memory.extraction && (
+                <Badge variant="info">
+                  <Sparkles className="w-3 h-3 mr-1" />
+                  Extraction
+                </Badge>
+              )}
               <Button
                 variant="ghost"
                 size="sm"
@@ -352,6 +446,7 @@ export function MemorySection() {
                 <ul className="mt-2 space-y-1 text-blue-400/80">
                   <li>• <strong>Checkpointer</strong>: Saves conversation state for resumable sessions</li>
                   <li>• <strong>Store</strong>: Long-term semantic memory with embeddings for context</li>
+                  <li>• <strong>Extraction</strong>: Automatically extract and inject memories from conversations</li>
                 </ul>
                 {databaseNames.length === 0 && (
                   <p className="mt-3 text-amber-400">
@@ -523,6 +618,136 @@ export function MemorySection() {
                   placeholder="{user_id}"
                   hint="Template for partitioning memories. Use {user_id}, {thread_id}, etc."
                 />
+              </div>
+            )}
+          </div>
+
+          {/* Extraction Section */}
+          <div className="p-5 bg-slate-800/50 border border-slate-700 rounded-lg">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center space-x-3">
+                <Sparkles className="w-5 h-5 text-teal-400" />
+                <h3 className="text-lg font-semibold text-slate-100">Memory Extraction</h3>
+              </div>
+              <label className="flex items-center space-x-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={extractionEnabled}
+                  onChange={(e) => setExtractionEnabled(e.target.checked)}
+                  className="rounded border-slate-600 bg-slate-800 text-teal-500 focus:ring-teal-500"
+                />
+                <span className="text-sm text-slate-300">Enable</span>
+              </label>
+            </div>
+            
+            {extractionEnabled && (
+              <div className="space-y-4">
+                <p className="text-sm text-slate-400">
+                  Automatically extract memories from conversations and inject relevant context into prompts.
+                </p>
+                
+                {!storeEnabled && (
+                  <div className="p-3 bg-amber-900/20 border border-amber-500/30 rounded-lg">
+                    <p className="text-sm text-amber-300">
+                      <strong>Requires Store:</strong> Memory extraction needs a Store enabled to persist and retrieve memories.
+                    </p>
+                  </div>
+                )}
+                
+                <div className="space-y-1.5">
+                  <label className="block text-sm font-medium text-slate-300">Schemas</label>
+                  <div className="space-y-2">
+                    {MEMORY_SCHEMA_OPTIONS.map((option) => (
+                      <label key={option.value} className="flex items-start space-x-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={extractionSchemas.includes(option.value)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setExtractionSchemas([...extractionSchemas, option.value]);
+                            } else {
+                              setExtractionSchemas(extractionSchemas.filter((s) => s !== option.value));
+                            }
+                          }}
+                          className="mt-0.5 rounded border-slate-600 bg-slate-800 text-teal-500 focus:ring-teal-500"
+                        />
+                        <div>
+                          <span className="text-sm text-slate-200">{option.label}</span>
+                          <p className="text-xs text-slate-500">{option.description}</p>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                  <p className="text-xs text-slate-500">Select schema types for structured extraction. Leave all unchecked for unstructured string memories.</p>
+                </div>
+                
+                <Textarea
+                  label="Extraction Instructions"
+                  value={extractionInstructions}
+                  onChange={(e) => setExtractionInstructions(e.target.value)}
+                  placeholder="Extract the user's name, role, preferences, and any notable interaction patterns..."
+                  hint="Custom instructions guiding what the system should remember. Leave empty for default behavior."
+                  rows={4}
+                />
+                
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={extractionAutoInject}
+                        onChange={(e) => setExtractionAutoInject(e.target.checked)}
+                        className="rounded border-slate-600 bg-slate-800 text-teal-500 focus:ring-teal-500"
+                      />
+                      <span className="text-sm font-medium text-slate-300">Auto Inject</span>
+                    </label>
+                    <p className="text-xs text-slate-500">Inject relevant memories into prompts before each model call</p>
+                  </div>
+                  <Input
+                    label="Auto Inject Limit"
+                    type="number"
+                    value={extractionAutoInjectLimit}
+                    onChange={(e) => setExtractionAutoInjectLimit(parseInt(e.target.value) || 5)}
+                    hint="Maximum memories to inject per turn"
+                    disabled={!extractionAutoInject}
+                  />
+                </div>
+                
+                <div className="space-y-1.5">
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={extractionBackgroundExtraction}
+                      onChange={(e) => setExtractionBackgroundExtraction(e.target.checked)}
+                      className="rounded border-slate-600 bg-slate-800 text-teal-500 focus:ring-teal-500"
+                    />
+                    <span className="text-sm font-medium text-slate-300">Background Extraction</span>
+                  </label>
+                  <p className="text-xs text-slate-500">Extract memories in a background thread after each turn (no latency impact)</p>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-4">
+                  <Select
+                    label="Extraction Model"
+                    options={[
+                      { value: '', label: 'Use agent primary model' },
+                      ...llmOptions,
+                    ]}
+                    value={extractionModelKey}
+                    onChange={(e) => setExtractionModelKey(e.target.value)}
+                    hint="Separate LLM for memory extraction (can be smaller/cheaper)"
+                  />
+                  <Select
+                    label="Query Model"
+                    options={[
+                      { value: '', label: 'Use raw message embedding' },
+                      ...llmOptions,
+                    ]}
+                    value={extractionQueryModelKey}
+                    onChange={(e) => setExtractionQueryModelKey(e.target.value)}
+                    hint="LLM for optimizing memory search queries"
+                  />
+                </div>
               </div>
             )}
           </div>

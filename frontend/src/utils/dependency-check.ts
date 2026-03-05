@@ -244,6 +244,20 @@ export function findLlmDependencies(config: AppConfig, llmKey: string): Dependen
     }
   }
   
+  // Check memory extraction models
+  if (config.memory?.extraction?.extraction_model) {
+    if (valueContainsRef(config.memory.extraction.extraction_model, llmKey) ||
+        objectMatchesKey(config.memory.extraction.extraction_model, llmKey, config, 'llm')) {
+      deps.push({ type: 'memory', name: 'extraction', field: 'extraction_model' });
+    }
+  }
+  if (config.memory?.extraction?.query_model) {
+    if (valueContainsRef(config.memory.extraction.query_model, llmKey) ||
+        objectMatchesKey(config.memory.extraction.query_model, llmKey, config, 'llm')) {
+      deps.push({ type: 'memory', name: 'extraction', field: 'query_model' });
+    }
+  }
+  
   // Check orchestration
   if (config.app?.orchestration?.supervisor) {
     if (valueContainsRef(config.app.orchestration.supervisor.model, llmKey) ||

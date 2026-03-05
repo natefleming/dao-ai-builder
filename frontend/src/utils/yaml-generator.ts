@@ -2199,6 +2199,29 @@ export function generateYAML(config: AppConfig): string {
         ...(config.memory.store.namespace && { namespace: config.memory.store.namespace }),
       };
     }
+    
+    if (config.memory.extraction) {
+      const ext = config.memory.extraction;
+      const definedLLMs = config.resources?.llms || {};
+      
+      const extractionModel = ext.extraction_model
+        ? formatModelReference(ext.extraction_model, definedLLMs, 'memory.extraction.extraction_model')
+        : undefined;
+      
+      const queryModel = ext.query_model
+        ? formatModelReference(ext.query_model, definedLLMs, 'memory.extraction.query_model')
+        : undefined;
+      
+      yamlConfig.memory.extraction = {
+        ...(ext.schemas && ext.schemas.length > 0 && { schemas: ext.schemas }),
+        ...(ext.instructions && { instructions: ext.instructions }),
+        ...(ext.auto_inject !== undefined && { auto_inject: ext.auto_inject }),
+        ...(ext.auto_inject_limit !== undefined && { auto_inject_limit: ext.auto_inject_limit }),
+        ...(ext.background_extraction !== undefined && { background_extraction: ext.background_extraction }),
+        ...(extractionModel && { extraction_model: extractionModel }),
+        ...(queryModel && { query_model: queryModel }),
+      };
+    }
   }
 
   // Prompts

@@ -480,10 +480,23 @@ export interface SwarmModel {
   middleware?: MiddlewareModel[];
 }
 
+export type MemorySchemaName = 'user_profile' | 'preference' | 'episode';
+
+export interface MemoryExtractionModel {
+  schemas?: MemorySchemaName[];
+  instructions?: string;
+  auto_inject?: boolean;
+  auto_inject_limit?: number;
+  background_extraction?: boolean;
+  extraction_model?: LLMModel | string;
+  query_model?: LLMModel | string;
+}
+
 export interface MemoryModel {
   refName?: string;  // Reference name for YAML anchor (e.g., &memory)
   checkpointer?: CheckpointerModel;
   store?: StoreModel;
+  extraction?: MemoryExtractionModel;
 }
 
 export interface CheckpointerModel {
