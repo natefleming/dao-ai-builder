@@ -132,6 +132,70 @@ function quoteWildcardPatterns(yamlString: string): string {
 }
 
 /**
+ * Post-process YAML to ensure all values in operators: lists are double-quoted.
+ * js-yaml leaves plain-safe scalars like "<" and "<=" unquoted, while quoting
+ * ">" and ">=" (because ">" is a YAML folded-scalar indicator). This function
+ * normalizes them so every operator value is consistently double-quoted.
+ */
+function quoteOperatorValues(yamlString: string): string {
+  const lines = yamlString.split('\n');
+  const result: string[] = [];
+  let inOperatorsList = false;
+  let operatorsIndent = -1;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Detect "operators:" followed by a block list (no inline value)
+    const operatorsMatch = line.match(/^(\s+)operators:\s*$/);
+    if (operatorsMatch) {
+      inOperatorsList = true;
+      operatorsIndent = operatorsMatch[1].length;
+      result.push(line);
+      continue;
+    }
+
+    if (inOperatorsList) {
+      // Still inside the list if this is a list item indented deeper than the key
+      if (/^\s+-\s/.test(line)) {
+        const itemIndent = line.search(/\S/);
+        if (itemIndent > operatorsIndent) {
+          // Match unquoted or single-quoted list items: "  - value"
+          const itemMatch = line.match(/^(\s+-\s+)(['"]?)(.*)$/);
+          if (itemMatch) {
+            const [, prefix, existingQuote, rest] = itemMatch;
+            if (existingQuote === '"') {
+              // Already double-quoted, keep as-is
+              result.push(line);
+            } else if (existingQuote === "'") {
+              // Single-quoted – convert to double quotes
+              const value = rest.replace(/'(\s*(?:#.*)?)$/, '');
+              const suffix = rest.slice(value.length).replace(/^'/, '');
+              result.push(`${prefix}"${value}"${suffix}`);
+            } else {
+              // Unquoted – add double quotes
+              const trimmed = rest.trimEnd();
+              const trailing = rest.slice(trimmed.length);
+              result.push(`${prefix}"${trimmed}"${trailing}`);
+            }
+            continue;
+          }
+        } else {
+          inOperatorsList = false;
+        }
+      } else if (line.trim() !== '') {
+        // Non-list, non-empty line means we've left the operators block
+        inOperatorsList = false;
+      }
+    }
+
+    result.push(line);
+  }
+
+  return result.join('\n');
+}
+
+/**
  * Find if a schema value matches any defined schema.
  * Returns the schema name if found, null otherwise.
  */
@@ -2677,6 +2741,9 @@ export function generateYAML(config: AppConfig): string {
   
   // Quote wildcard patterns in tool filters to prevent YAML alias interpretation
   yamlString = quoteWildcardPatterns(yamlString);
+
+  // Ensure all operator values (e.g. <, <=, >, >=) are consistently double-quoted
+  yamlString = quoteOperatorValues(yamlString);
   
   return yamlString;
 }

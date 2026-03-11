@@ -84,7 +84,7 @@ export function MemorySection() {
   const [extractionInstructions, setExtractionInstructions] = useState('');
   const [extractionAutoInject, setExtractionAutoInject] = useState(true);
   const [extractionAutoInjectLimit, setExtractionAutoInjectLimit] = useState(5);
-  const [extractionBackgroundExtraction, setExtractionBackgroundExtraction] = useState(false);
+  const [extractionBackgroundExtraction, setExtractionBackgroundExtraction] = useState(true);
   const [extractionModelKey, setExtractionModelKey] = useState('');
   const [extractionQueryModelKey, setExtractionQueryModelKey] = useState('');
   
@@ -117,7 +117,7 @@ export function MemorySection() {
     setExtractionInstructions('');
     setExtractionAutoInject(true);
     setExtractionAutoInjectLimit(5);
-    setExtractionBackgroundExtraction(false);
+    setExtractionBackgroundExtraction(true);
     setExtractionModelKey('');
     setExtractionQueryModelKey('');
   };
@@ -166,7 +166,7 @@ export function MemorySection() {
       setExtractionInstructions(mem.extraction.instructions || '');
       setExtractionAutoInject(mem.extraction.auto_inject ?? true);
       setExtractionAutoInjectLimit(mem.extraction.auto_inject_limit ?? 5);
-      setExtractionBackgroundExtraction(mem.extraction.background_extraction ?? false);
+      setExtractionBackgroundExtraction(mem.extraction.background_extraction ?? true);
       setExtractionModelKey(findLlmKey(mem.extraction.extraction_model));
       setExtractionQueryModelKey(findLlmKey(mem.extraction.query_model));
     } else {
@@ -175,7 +175,7 @@ export function MemorySection() {
       setExtractionInstructions('');
       setExtractionAutoInject(true);
       setExtractionAutoInjectLimit(5);
-      setExtractionBackgroundExtraction(false);
+      setExtractionBackgroundExtraction(true);
       setExtractionModelKey('');
       setExtractionQueryModelKey('');
     }
