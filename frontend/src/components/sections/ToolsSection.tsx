@@ -1,5 +1,5 @@
 import { useState, ChangeEvent } from 'react';
-import { Plus, Trash2, Wrench, RefreshCw, Database, MessageSquare, Search, Clock, Bot, Link2, UserCheck, ChevronDown, ChevronUp, Pencil, Mail, Table2, Timer, Calculator, Code } from 'lucide-react';
+import { Plus, Trash2, Wrench, RefreshCw, Database, MessageSquare, Search, Clock, Bot, Link2, UserCheck, ChevronDown, ChevronUp, Pencil, Mail, Table2, Timer, Calculator, Code, BarChart3 } from 'lucide-react';
 import { useConfigStore } from '@/stores/configStore';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
@@ -278,6 +278,12 @@ const FACTORY_TOOLS = [
     label: 'Agent Endpoint Tool',
     description: 'Call another deployed agent endpoint',
     icon: Bot,
+  },
+  { 
+    value: 'dao_ai.tools.create_visualization_tool', 
+    label: 'Visualization Tool',
+    description: 'Generate Vega-Lite chart specs from structured data',
+    icon: BarChart3,
   },
   { 
     value: 'custom', 

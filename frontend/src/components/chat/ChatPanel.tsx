@@ -22,6 +22,7 @@ import { useCredentialStore } from '@/stores/credentialStore';
 import { generateYAML } from '@/utils/yaml-generator';
 import yaml from 'js-yaml';
 import Button from '../ui/Button';
+import VegaLiteChart from './VegaLiteChart';
 
 /**
  * Remove internal-only fields (like refName) from a config object.
@@ -565,6 +566,14 @@ export default function ChatPanel({ onClose }: ChatPanelProps) {
                     <span className="text-[10px] text-slate-500 mt-1 px-1">
                       {formatTime(message.timestamp)}
                     </span>
+                    {/* Render visualizations after the last assistant message */}
+                    {message.role === 'assistant' &&
+                      index === displayMessages.length - 1 &&
+                      customOutputs &&
+                      Array.isArray((customOutputs as Record<string, unknown>).visualizations) &&
+                      ((customOutputs as Record<string, unknown>).visualizations as Array<{ spec: object }>).map((viz, vizIdx) => (
+                        <VegaLiteChart key={vizIdx} spec={viz.spec as any} />
+                      ))}
                   </div>
                 </div>
               ))
