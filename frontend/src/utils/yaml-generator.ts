@@ -1419,19 +1419,28 @@ function formatToolFunction(func: ToolFunctionModel, toolKey?: string, definedCo
 
 /**
  * Format a DatabaseModel for YAML output.
- * This creates a properly structured database configuration.
+ * Type is inferred by dao-ai from: project → Autoscaling Lakebase, instance_name → Provisioned Lakebase, host → PostgreSQL
  */
 function formatDatabaseRef(database: DatabaseModel, basePath?: string): any {
   const db: any = {
     name: database.name,
   };
-  
-  // NOTE: type field removed in dao-ai 0.1.2
-  // Type is inferred from: instance_name → Lakebase, host → PostgreSQL
-  
-  // Lakebase-specific fields
-  if (database.instance_name) db.instance_name = database.instance_name;
-  
+
+  // Autoscaling Lakebase fields
+  if (database.project) {
+    db.project = database.project;
+    if (database.branch) db.branch = database.branch;
+    if (database.autoscaling_min_cu != null && database.autoscaling_min_cu !== 2) db.autoscaling_min_cu = database.autoscaling_min_cu;
+    if (database.autoscaling_max_cu != null && database.autoscaling_max_cu !== 4) db.autoscaling_max_cu = database.autoscaling_max_cu;
+  }
+
+  // Provisioned Lakebase fields
+  if (database.instance_name) {
+    db.instance_name = database.instance_name;
+    if (database.capacity) db.capacity = database.capacity;
+    if (database.node_count) db.node_count = database.node_count;
+  }
+
   // PostgreSQL-specific fields
   if (database.host) {
     db.host = formatCredentialWithPath(database.host, basePath ? `${basePath}.host` : undefined);
@@ -1439,27 +1448,23 @@ function formatDatabaseRef(database: DatabaseModel, basePath?: string): any {
   
   // Common fields
   if (database.description) db.description = database.description;
-  if (database.capacity) db.capacity = database.capacity;
   if (database.max_pool_size) db.max_pool_size = database.max_pool_size;
   if (database.timeout_seconds) db.timeout_seconds = database.timeout_seconds;
   
   // Service Principal reference (takes precedence over inline credentials)
   if (database.service_principal) {
     if (typeof database.service_principal === 'string') {
-      // It's already a reference string like "*my_sp"
       if (database.service_principal.startsWith('*')) {
         db.service_principal = createReference(database.service_principal.slice(1));
       } else {
         db.service_principal = createReference(database.service_principal);
       }
       } else {
-        // Check if service_principal was originally a reference
         const spPath = basePath ? `${basePath}.service_principal` : 'service_principal';
         const spRef = findOriginalReference(spPath, database.service_principal);
         if (spRef) {
           db.service_principal = createReference(spRef);
         } else {
-          // It's an inline ServicePrincipalModel object
           db.service_principal = {
             client_id: formatCredentialWithPath(database.service_principal.client_id, basePath ? `${basePath}.service_principal.client_id` : undefined),
             client_secret: formatCredentialWithPath(database.service_principal.client_secret, basePath ? `${basePath}.service_principal.client_secret` : undefined),
@@ -1467,8 +1472,6 @@ function formatDatabaseRef(database: DatabaseModel, basePath?: string): any {
         }
       }
   } else {
-    // OAuth credentials (only if no service_principal)
-    // Check if these were originally references to variables
     if (database.client_id) {
       db.client_id = formatCredentialWithPath(database.client_id, basePath ? `${basePath}.client_id` : undefined);
     }
@@ -1488,8 +1491,8 @@ function formatDatabaseRef(database: DatabaseModel, basePath?: string): any {
     db.password = formatCredentialWithPath(database.password, basePath ? `${basePath}.password` : undefined);
   }
   
-  // On Behalf of User flag (only for Lakebase - determined by instance_name presence)
-  if (database.on_behalf_of_user && database.instance_name) {
+  // On Behalf of User flag (for both autoscaling and provisioned Lakebase)
+  if (database.on_behalf_of_user && (database.instance_name || database.project)) {
     db.on_behalf_of_user = database.on_behalf_of_user;
   }
   
@@ -2205,10 +2208,15 @@ export function generateYAML(config: AppConfig): string {
         if (dbRef) {
           checkpointerDatabase = createReference(dbRef);
         } else {
-          // Also check if it matches a defined database by instance_name
           const definedDatabases = config.resources?.databases || {};
+          const cpDb = config.memory?.checkpointer?.database;
           const matchingDbKey = Object.entries(definedDatabases).find(
-            ([, db]) => (db as DatabaseModel).instance_name === config.memory?.checkpointer?.database?.instance_name
+            ([, db]) => {
+              const d = db as DatabaseModel;
+              if (cpDb?.instance_name && d.instance_name === cpDb.instance_name) return true;
+              if (cpDb?.project && d.project === cpDb.project) return true;
+              return false;
+            }
           )?.[0];
           if (matchingDbKey) {
             checkpointerDatabase = createReference(matchingDbKey);
@@ -2234,10 +2242,15 @@ export function generateYAML(config: AppConfig): string {
         if (dbRef) {
           storeDatabase = createReference(dbRef);
         } else {
-          // Also check if it matches a defined database by instance_name
           const definedDatabases = config.resources?.databases || {};
+          const stDb = config.memory?.store?.database;
           const matchingDbKey = Object.entries(definedDatabases).find(
-            ([, db]) => (db as DatabaseModel).instance_name === config.memory?.store?.database?.instance_name
+            ([, db]) => {
+              const d = db as DatabaseModel;
+              if (stDb?.instance_name && d.instance_name === stDb.instance_name) return true;
+              if (stDb?.project && d.project === stDb.project) return true;
+              return false;
+            }
           )?.[0];
           if (matchingDbKey) {
             storeDatabase = createReference(matchingDbKey);
@@ -2295,6 +2308,7 @@ export function generateYAML(config: AppConfig): string {
         ...(ext.instructions && { instructions: ext.instructions }),
         ...(ext.auto_inject !== undefined && { auto_inject: ext.auto_inject }),
         ...(ext.auto_inject_limit !== undefined && { auto_inject_limit: ext.auto_inject_limit }),
+        ...(ext.supervisor_auto_inject !== undefined && { supervisor_auto_inject: ext.supervisor_auto_inject }),
         ...(ext.background_extraction !== undefined && { background_extraction: ext.background_extraction }),
         ...(extractionModel && { extraction_model: extractionModel }),
         ...(queryModel && { query_model: queryModel }),
@@ -2694,7 +2708,6 @@ export function generateYAML(config: AppConfig): string {
       ...(config.app.log_level && { log_level: config.app.log_level }),
       ...(appServicePrincipal && { service_principal: appServicePrincipal }),
       ...(config.app.deployment_target && { deployment_target: config.app.deployment_target }),
-      // Model Serving specific fields - only include if deployment_target is model_serving or not set (defaults to model_serving)
       ...((config.app.deployment_target === 'model_serving' || !config.app.deployment_target) && config.app.endpoint_name && { endpoint_name: config.app.endpoint_name }),
       ...((config.app.deployment_target === 'model_serving' || !config.app.deployment_target) && config.app.workload_size && { workload_size: config.app.workload_size }),
       ...((config.app.deployment_target === 'model_serving' || !config.app.deployment_target) && config.app.scale_to_zero !== undefined && { scale_to_zero: config.app.scale_to_zero }),

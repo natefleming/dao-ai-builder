@@ -84,6 +84,7 @@ export function MemorySection() {
   const [extractionInstructions, setExtractionInstructions] = useState('');
   const [extractionAutoInject, setExtractionAutoInject] = useState(true);
   const [extractionAutoInjectLimit, setExtractionAutoInjectLimit] = useState(5);
+  const [extractionSupervisorAutoInject, setExtractionSupervisorAutoInject] = useState(false);
   const [extractionBackgroundExtraction, setExtractionBackgroundExtraction] = useState(true);
   const [extractionModelKey, setExtractionModelKey] = useState('');
   const [extractionQueryModelKey, setExtractionQueryModelKey] = useState('');
@@ -117,6 +118,7 @@ export function MemorySection() {
     setExtractionInstructions('');
     setExtractionAutoInject(true);
     setExtractionAutoInjectLimit(5);
+    setExtractionSupervisorAutoInject(false);
     setExtractionBackgroundExtraction(true);
     setExtractionModelKey('');
     setExtractionQueryModelKey('');
@@ -166,6 +168,7 @@ export function MemorySection() {
       setExtractionInstructions(mem.extraction.instructions || '');
       setExtractionAutoInject(mem.extraction.auto_inject ?? true);
       setExtractionAutoInjectLimit(mem.extraction.auto_inject_limit ?? 5);
+      setExtractionSupervisorAutoInject(mem.extraction.supervisor_auto_inject ?? false);
       setExtractionBackgroundExtraction(mem.extraction.background_extraction ?? true);
       setExtractionModelKey(findLlmKey(mem.extraction.extraction_model));
       setExtractionQueryModelKey(findLlmKey(mem.extraction.query_model));
@@ -175,6 +178,7 @@ export function MemorySection() {
       setExtractionInstructions('');
       setExtractionAutoInject(true);
       setExtractionAutoInjectLimit(5);
+      setExtractionSupervisorAutoInject(false);
       setExtractionBackgroundExtraction(true);
       setExtractionModelKey('');
       setExtractionQueryModelKey('');
@@ -253,6 +257,7 @@ export function MemorySection() {
       }
       extraction.auto_inject = extractionAutoInject;
       extraction.auto_inject_limit = extractionAutoInjectLimit;
+      extraction.supervisor_auto_inject = extractionSupervisorAutoInject;
       extraction.background_extraction = extractionBackgroundExtraction;
       if (extractionModelKey && llms[extractionModelKey]) {
         extraction.extraction_model = llms[extractionModelKey];
@@ -711,6 +716,19 @@ export function MemorySection() {
                     hint="Maximum memories to inject per turn"
                     disabled={!extractionAutoInject}
                   />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={extractionSupervisorAutoInject}
+                      onChange={(e) => setExtractionSupervisorAutoInject(e.target.checked)}
+                      className="rounded border-slate-600 bg-slate-800 text-teal-500 focus:ring-teal-500"
+                    />
+                    <span className="text-sm font-medium text-slate-300">Supervisor Auto Inject</span>
+                  </label>
+                  <p className="text-xs text-slate-500">Inject memories into the supervisor&apos;s context (disabled by default since the supervisor only routes requests)</p>
                 </div>
                 
                 <div className="space-y-1.5">

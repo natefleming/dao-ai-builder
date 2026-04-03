@@ -662,6 +662,18 @@ export default function AppConfigSection() {
   if (pattern === 'supervisor' && !selectedLLM) {
     validationErrors.push('Supervisor orchestration requires an LLM');
   }
+
+  // Required: Model registration schema (backend enforces this for deployment)
+  const hasSchema = (schemaSource === 'configured' && !!formData.modelSchema) ||
+    (schemaSource === 'select' && !!formData.directCatalog && !!formData.directSchema);
+  if (!hasSchema) {
+    validationErrors.push('Model registration schema is required');
+  }
+
+  // Target-specific: endpoint_name recommended for model_serving
+  if (formData.deploymentTarget === 'model_serving' && !formData.endpointName.trim()) {
+    validationErrors.push('Endpoint name is recommended for Model Serving');
+  }
   
   const isValid = validationErrors.length === 0;
   const canSave = hasChanges && isValid;
@@ -1320,6 +1332,7 @@ export default function AppConfigSection() {
               setFormData(updates);
             }}
             required
+            error={!formData.name.trim() ? 'Application name is required' : undefined}
           />
           <Select
             label="Log Level"
@@ -1375,7 +1388,8 @@ export default function AppConfigSection() {
             placeholder="e.g., my_agent_endpoint"
             value={formData.endpointName}
             onChange={(e) => setFormData({ ...formData, endpointName: e.target.value })}
-            hint="The name of the model serving endpoint"
+            hint={formData.endpointName.trim() ? 'The name of the model serving endpoint' : undefined}
+            error={!formData.endpointName.trim() ? 'Endpoint name is recommended for Model Serving' : undefined}
           />
         )}
 
@@ -2101,6 +2115,7 @@ export default function AppConfigSection() {
             value={formData.modelName}
             onChange={(e) => setFormData({ ...formData, modelName: normalizeRefName(e.target.value) })}
             required
+            error={!formData.modelName.trim() ? 'Model name is required' : undefined}
           />
           
           <div className="space-y-1.5">
@@ -2143,6 +2158,7 @@ export default function AppConfigSection() {
                 ]}
                 value={formData.modelSchema}
                 onChange={(e) => setFormData({ ...formData, modelSchema: e.target.value })}
+                error={!hasSchema ? 'Model registration schema is required' : undefined}
               />
             ) : (
               <div className="grid grid-cols-2 gap-2">
@@ -2153,6 +2169,7 @@ export default function AppConfigSection() {
                   ]}
                   value={formData.directCatalog}
                   onChange={(e) => setFormData({ ...formData, directCatalog: e.target.value, directSchema: '' })}
+                  error={!hasSchema && !formData.directCatalog ? 'Catalog is required' : undefined}
                 />
                 <Select
                   options={[
@@ -2162,6 +2179,7 @@ export default function AppConfigSection() {
                   value={formData.directSchema}
                   onChange={(e) => setFormData({ ...formData, directSchema: e.target.value })}
                   disabled={!formData.directCatalog}
+                  error={!hasSchema && formData.directCatalog && !formData.directSchema ? 'Schema is required' : undefined}
                 />
               </div>
             )}
@@ -2999,7 +3017,7 @@ export default function AppConfigSection() {
         {!hasChanges && isValid && (
           <span className="text-sm text-slate-500">No unsaved changes</span>
         )}
-        {!isValid && hasChanges && (
+        {!isValid && (
           <div className="text-sm text-amber-400 flex items-center gap-2">
             <span>Missing required fields:</span>
             <span>{validationErrors.join(', ')}</span>

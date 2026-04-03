@@ -38,6 +38,16 @@ export default function Header({ showPreview, onTogglePreview }: HeaderProps) {
   const canChat = hasValidConfig && !hasUnsavedAppChanges;
   const canVisualize = hasValidConfig;
 
+  const getDeployTooltip = (): string => {
+    if (canDeploy) return 'Deploy to Databricks';
+    const reasons: string[] = [];
+    if (!hasApp) reasons.push('Application name is required');
+    if (!hasAgents) reasons.push('At least one agent is required');
+    if (!hasOrchestration) reasons.push('Orchestration pattern is required');
+    if (hasUnsavedAppChanges) reasons.push('Save Application Configuration before deploying');
+    return reasons.join('. ');
+  };
+
   const handleExport = () => {
     const appName = config.app?.name || 'model_config';
     downloadYAML(config, `${appName}.yaml`);
@@ -225,7 +235,7 @@ export default function Header({ showPreview, onTogglePreview }: HeaderProps) {
           size="sm"
           onClick={() => setShowDeployment(true)}
           disabled={!canDeploy}
-          title={canDeploy ? 'Deploy to Databricks' : 'Save Application Configuration first'}
+          title={getDeployTooltip()}
           className="bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500"
         >
           <Rocket className="w-4 h-4" />

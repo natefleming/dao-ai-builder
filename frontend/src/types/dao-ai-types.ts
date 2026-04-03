@@ -204,18 +204,30 @@ export interface GenieInMemoryContextAwareCacheParametersModel {
   max_context_tokens?: number;  // Default: 2000 - Maximum context length to prevent extremely long embeddings
 }
 
-// Database type is inferred from fields:
-// - instance_name provided → Lakebase
+// Database connection type is inferred from fields:
+// - project provided → Autoscaling Lakebase
+// - instance_name provided → Provisioned Lakebase
 // - host provided → PostgreSQL
-// NOTE: type field removed in dao-ai 0.1.2, type is inferred from instance_name vs host
+// NOTE: type field removed in dao-ai 0.1.2, type is inferred from project/instance_name/host
 export type DatabaseType = "postgres" | "lakebase";
+export type LakebaseMode = "provisioned" | "autoscaling";
 
 export interface DatabaseModel {
   on_behalf_of_user?: boolean;
-  name?: string;  // Optional - auto-populated from instance_name for Lakebase
-  // NOTE: type field is for UI only, not included in YAML output (inferred from instance_name vs host)
+  name?: string;  // Optional - auto-populated from project or instance_name for Lakebase
+  // NOTE: _ui fields are for UI only, not included in YAML output
   _uiType?: DatabaseType;
-  instance_name?: string;  // Lakebase instance name
+  _uiLakebaseMode?: LakebaseMode;
+  // --- Autoscaling Lakebase fields (mutually exclusive with instance_name) ---
+  project?: string;  // Autoscaling Lakebase project name
+  branch?: string;  // Autoscaling Lakebase branch (auto-resolved if omitted)
+  autoscaling_min_cu?: number;  // Min compute units (default: 2)
+  autoscaling_max_cu?: number;  // Max compute units (default: 4)
+  // --- Provisioned Lakebase fields (mutually exclusive with project) ---
+  instance_name?: string;  // Provisioned Lakebase instance name
+  capacity?: "CU_1" | "CU_2";
+  node_count?: number;  // Horizontal scaling node count
+  // --- Common fields ---
   description?: string;
   host?: VariableValue;  // PostgreSQL hostname (can be variable or string)
   database?: VariableValue;  // Database name (default: "databricks_postgres")
@@ -223,8 +235,6 @@ export interface DatabaseModel {
   connection_kwargs?: Record<string, any>;
   max_pool_size?: number;
   timeout_seconds?: number;
-  capacity?: "CU_1" | "CU_2";
-  node_count?: number;
   user?: VariableValue;
   password?: VariableValue;
   service_principal?: ServicePrincipalModel | string;  // Can be inline or reference
@@ -496,6 +506,7 @@ export interface MemoryExtractionModel {
   instructions?: string;
   auto_inject?: boolean;
   auto_inject_limit?: number;
+  supervisor_auto_inject?: boolean;
   background_extraction?: boolean;
   extraction_model?: LLMModel | string;
   query_model?: LLMModel | string;
@@ -563,7 +574,7 @@ export interface AppModel {
   budget_policy_id?: string;
   python_version?: string;  // Python version for the deployment environment
   workload_size?: "Small" | "Medium" | "Large";
-  deployment_target?: "model_serving" | "apps";
+  deployment_target?: "model_serving" | "apps" | "both";
   permissions?: AppPermissionModel[];
   agents: AgentModel[];
   orchestration?: OrchestrationModel;

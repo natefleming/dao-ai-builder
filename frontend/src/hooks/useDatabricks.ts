@@ -35,6 +35,8 @@ import {
   VectorSearchIndex,
   RegisteredModel,
   LakebaseDatabase,
+  LakebaseProject,
+  LakebaseBranch,
   MLflowPrompt,
   PromptDetails,
 } from '../services/databricksNativeApi';
@@ -302,12 +304,36 @@ export function useServingEndpoints(): UseAsyncState<ServingEndpoint[]> {
 }
 
 /**
- * Hook to list Lakebase databases.
+ * Hook to list Lakebase databases (provisioned instances).
  */
 export function useDatabases(): UseAsyncState<LakebaseDatabase[]> {
   return useAsync(
     () => databricksNativeApi.listDatabases(),
     []
+  );
+}
+
+/**
+ * Hook to list autoscaling Lakebase projects.
+ */
+export function useLakebaseProjects(): UseAsyncState<LakebaseProject[]> {
+  return useAsync(
+    () => databricksNativeApi.listLakebaseProjects(),
+    []
+  );
+}
+
+/**
+ * Hook to list branches for an autoscaling Lakebase project.
+ */
+export function useLakebaseBranches(project: string | null): UseAsyncState<LakebaseBranch[]> {
+  return useAsync(
+    async () => {
+      if (!project) return [];
+      return databricksNativeApi.listLakebaseBranches(project);
+    },
+    [project],
+    !project
   );
 }
 

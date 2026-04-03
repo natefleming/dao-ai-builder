@@ -2520,6 +2520,72 @@ def list_databases():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/uc/postgres/projects')
+def list_lakebase_projects():
+    """List autoscaling Lakebase projects using WorkspaceClient Postgres API."""
+    try:
+        w = get_workspace_client()
+        current_user = get_current_user_email()
+        log('debug', f"Listing Lakebase projects for user: {current_user}")
+
+        result = []
+        try:
+            projects = list(w.postgres.list_projects())
+            result = [
+                {
+                    'name': p.name.replace('projects/', '') if p.name and p.name.startswith('projects/') else p.name,
+                    'state': 'AVAILABLE',
+                    'creator': p.status.owner if p.status else None,
+                    'owner': p.status.owner if p.status else None,
+                }
+                for p in projects
+            ]
+            log('info', f"Listed {len(result)} Lakebase projects via postgres.list_projects()")
+        except Exception as e:
+            log('error', f"postgres.list_projects() failed: {e}")
+
+        result = sort_by_owner(result, current_user)
+        return jsonify({'projects': result, 'current_user': current_user})
+    except Exception as e:
+        log('error', f"Error listing Lakebase projects: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/uc/postgres/branches')
+def list_lakebase_branches():
+    """List branches for an autoscaling Lakebase project."""
+    try:
+        project = request.args.get('project')
+        if not project:
+            return jsonify({'error': 'project query parameter is required'}), 400
+
+        w = get_workspace_client()
+        log('debug', f"Listing branches for Lakebase project: {project}")
+
+        project_name = f"projects/{project}" if not project.startswith('projects/') else project
+
+        result = []
+        try:
+            branches = list(w.postgres.list_branches(project_name))
+            result = [
+                {
+                    'name': b.name.split('/branches/')[-1] if b.name and '/branches/' in b.name else b.name,
+                    'full_name': b.name,
+                    'is_default': b.status.default if b.status else False,
+                    'state': b.status.current_state if b.status else None,
+                }
+                for b in branches
+            ]
+            log('info', f"Listed {len(result)} branches for project '{project}'")
+        except Exception as e:
+            log('debug', f"postgres.list_branches() failed: {e}")
+
+        return jsonify({'branches': result})
+    except Exception as e:
+        log('error', f"Error listing Lakebase branches: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/uc/connections')
 def list_uc_connections():
     """List Unity Catalog connections using WorkspaceClient."""

@@ -506,6 +506,20 @@ export interface LakebaseDatabase {
   read_write_dns?: string;
 }
 
+export interface LakebaseProject {
+  name: string;
+  state?: string;
+  creator?: string;
+  owner?: string;
+}
+
+export interface LakebaseBranch {
+  name: string;
+  full_name?: string;
+  is_default?: boolean;
+  state?: string;
+}
+
 export interface UCConnection {
   name: string;
   connection_type?: string;
@@ -764,6 +778,45 @@ export const databricksNativeApi = {
       return data.databases || [];
     } catch (err) {
       console.error('[listDatabases] Error:', err);
+      return [];
+    }
+  },
+
+  /**
+   * List autoscaling Lakebase projects.
+   * Uses WorkspaceClient Postgres API.
+   */
+  async listLakebaseProjects(): Promise<LakebaseProject[]> {
+    try {
+      const response = await fetch('/api/uc/postgres/projects', { credentials: 'include' });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: response.statusText }));
+        console.error('[listLakebaseProjects] Error:', error);
+        return [];
+      }
+      const data = await response.json();
+      return data.projects || [];
+    } catch (err) {
+      console.error('[listLakebaseProjects] Error:', err);
+      return [];
+    }
+  },
+
+  /**
+   * List branches for an autoscaling Lakebase project.
+   */
+  async listLakebaseBranches(project: string): Promise<LakebaseBranch[]> {
+    try {
+      const response = await fetch(`/api/uc/postgres/branches?project=${encodeURIComponent(project)}`, { credentials: 'include' });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: response.statusText }));
+        console.error('[listLakebaseBranches] Error:', error);
+        return [];
+      }
+      const data = await response.json();
+      return data.branches || [];
+    } catch (err) {
+      console.error('[listLakebaseBranches] Error:', err);
       return [];
     }
   },

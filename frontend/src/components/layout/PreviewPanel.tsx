@@ -170,6 +170,15 @@ export default function PreviewPanel() {
       
       // Parse and apply the YAML
       const parsed = yaml.load(editedYaml) as AppConfig;
+
+      // Restore memory.refName from anchor (matching Header.tsx import logic)
+      if (parsed.memory && references.anchors) {
+        const memoryAnchor = references.anchors.find(a => a.path === 'memory');
+        if (memoryAnchor) {
+          parsed.memory.refName = memoryAnchor.name;
+        }
+      }
+
       setConfig(parsed);
       setHasUnsavedChanges(false);
       

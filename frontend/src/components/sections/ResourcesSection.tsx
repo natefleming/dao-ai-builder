@@ -117,6 +117,7 @@ import {
   DatabricksAppModel,
   LLMModel,
   DatabaseModel,
+  LakebaseMode,
   VariableModel,
   VectorStoreModel,
   SchemaModel,
@@ -133,6 +134,8 @@ import {
   useServingEndpoints,
   useUCConnections,
   useDatabases,
+  useLakebaseProjects,
+  useLakebaseBranches,
   useVectorSearchEndpoints,
   useVectorSearchIndexes,
 } from '@/hooks/useDatabricks';
@@ -3406,17 +3409,29 @@ interface DatabaseFormData {
   refName: string;
   name: string;
   type: 'postgres' | 'lakebase';
+  lakebaseMode: LakebaseMode;
+  // --- Provisioned Lakebase fields ---
   instanceSource: 'existing' | 'manual';
   instance_name: string;
-  hostSource: CredentialSource;  // PostgreSQL hostname source
-  host: string;  // PostgreSQL hostname (manual)
-  hostVariable: string;  // PostgreSQL hostname (variable)
-  description: string;
   capacity: 'CU_1' | 'CU_2';
+  node_count: number | undefined;
+  // --- Autoscaling Lakebase fields ---
+  projectSource: 'existing' | 'manual';
+  project: string;
+  branchSource: 'existing' | 'manual';
+  branch: string;
+  autoscaling_min_cu: number;
+  autoscaling_max_cu: number;
+  // --- PostgreSQL fields ---
+  hostSource: CredentialSource;
+  host: string;
+  hostVariable: string;
+  // --- Common fields ---
+  description: string;
   max_pool_size: number;
   timeout_seconds: number;
   authMethod: 'oauth' | 'user' | 'service_principal';
-  servicePrincipalRef: string;  // Reference to configured service principal
+  servicePrincipalRef: string;
   clientIdSource: CredentialSource;
   clientSecretSource: CredentialSource;
   workspaceHostSource: CredentialSource;
@@ -3439,13 +3454,21 @@ const defaultDatabaseForm: DatabaseFormData = {
   refName: '',
   name: '',
   type: 'lakebase',
+  lakebaseMode: 'autoscaling',
   instanceSource: 'existing',
   instance_name: '',
+  capacity: 'CU_2',
+  node_count: undefined,
+  projectSource: 'existing',
+  project: '',
+  branchSource: 'existing',
+  branch: '',
+  autoscaling_min_cu: 2,
+  autoscaling_max_cu: 4,
   hostSource: 'manual',
   host: '',
   hostVariable: '',
   description: '',
-  capacity: 'CU_2',
   max_pool_size: 10,
   timeout_seconds: 10,
   authMethod: 'service_principal',
@@ -3471,6 +3494,11 @@ const defaultDatabaseForm: DatabaseFormData = {
 const databaseTypeOptions = [
   { value: 'lakebase', label: 'Lakebase (Databricks-managed PostgreSQL)' },
   { value: 'postgres', label: 'PostgreSQL (External)' },
+];
+
+const lakebaseModeOptions = [
+  { value: 'autoscaling', label: 'Autoscaling' },
+  { value: 'provisioned', label: 'Provisioned' },
 ];
 
 const authMethodOptions = [
@@ -3584,14 +3612,21 @@ function DatabasesPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
   const databases = config.resources?.databases || {};
   const variables = config.variables || {};
   const variableNames = Object.keys(variables);
+
+  const [formData, setFormData] = useState<DatabaseFormData>(defaultDatabaseForm);
   
   const { data: lakebaseInstances, loading: loadingInstances, refetch: refetchInstances } = useDatabases();
+  const { data: lakebaseProjects, loading: loadingProjects, refetch: refetchProjects } = useLakebaseProjects();
+  const { data: lakebaseBranches, loading: loadingBranches, refetch: refetchBranches } = useLakebaseBranches(
+    formData.type === 'lakebase' && formData.lakebaseMode === 'autoscaling' && formData.project ? formData.project : null
+  );
 
-  // Status mapper for Lakebase instances (same pattern as SQL warehouses)
+  // Status mapper for Lakebase instances and projects
   const getDatabaseStatus = (state: string | undefined): StatusType => {
     switch (state?.toUpperCase()) {
       case 'AVAILABLE':
       case 'RUNNING':
+      case 'ACTIVE':
         return 'ready';
       case 'CREATING':
       case 'STARTING':
@@ -3617,8 +3652,23 @@ function DatabasesPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
       status: getDatabaseStatus(inst.state),
     })),
   ];
-  
-  const [formData, setFormData] = useState<DatabaseFormData>(defaultDatabaseForm);
+
+  const projectOptions: StatusSelectOption[] = [
+    { value: '', label: loadingProjects ? 'Loading...' : 'Select a project...' },
+    ...(lakebaseProjects || []).map((proj) => ({
+      value: proj.name,
+      label: proj.name,
+      status: getDatabaseStatus(proj.state),
+    })),
+  ];
+
+  const branchOptions = [
+    { value: '', label: loadingBranches ? 'Loading...' : 'Auto-resolve default branch' },
+    ...(lakebaseBranches || []).map((b) => ({
+      value: b.name,
+      label: `${b.name}${b.is_default ? ' (default)' : ''}`,
+    })),
+  ];
 
   const handleEdit = (key: string) => {
     scrollToAsset(key);
@@ -3630,18 +3680,28 @@ function DatabasesPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
         return str.startsWith('*') ? str.slice(1) : '';
       };
       
+      const inferredType = db._uiType || (db.project || db.instance_name ? 'lakebase' : 'postgres');
+      const inferredMode: LakebaseMode = db._uiLakebaseMode || (db.project ? 'autoscaling' : 'provisioned');
+
       setFormData({
         refName: key,
-        name: db.name || db.instance_name || '',  // name is optional, falls back to instance_name for Lakebase
-        // Infer type from instance_name (Lakebase) or host (PostgreSQL)
-        type: db._uiType || (db.instance_name ? 'lakebase' : 'postgres'),
-        instanceSource: 'existing',
+        name: db.name || db.project || db.instance_name || '',
+        type: inferredType,
+        lakebaseMode: inferredMode,
+        instanceSource: db.instance_name ? 'manual' : 'existing',
         instance_name: db.instance_name || '',
+        capacity: db.capacity || 'CU_2',
+        node_count: db.node_count,
+        projectSource: db.project ? 'manual' : 'existing',
+        project: db.project || '',
+        branchSource: db.branch ? 'manual' : 'existing',
+        branch: db.branch || '',
+        autoscaling_min_cu: db.autoscaling_min_cu ?? 2,
+        autoscaling_max_cu: db.autoscaling_max_cu ?? 4,
         hostSource: isVariableRef(db.host) ? 'variable' : 'manual',
         host: isVariableRef(db.host) ? '' : safeString(db.host),
         hostVariable: getVarSlice(db.host),
         description: db.description || '',
-        capacity: db.capacity || 'CU_2',
         max_pool_size: db.max_pool_size || 10,
         timeout_seconds: db.timeout_seconds || 10,
         authMethod: db.service_principal ? 'service_principal' : (db.client_id ? 'oauth' : 'user'),
@@ -3680,20 +3740,29 @@ function DatabasesPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
   };
 
   const handleSave = () => {
-    // NOTE: type field removed in dao-ai 0.1.2 - type is inferred from instance_name vs host
-    // instance_name provided → Lakebase, host provided → PostgreSQL
+    const isLakebase = formData.type === 'lakebase';
+    const isAutoscaling = isLakebase && formData.lakebaseMode === 'autoscaling';
+    const isProvisioned = isLakebase && formData.lakebaseMode === 'provisioned';
+
     const db: DatabaseModel = {
       name: formData.name,
-      // _uiType is for UI display only, not included in YAML output
       _uiType: formData.type,
-      instance_name: formData.type === 'lakebase' ? (formData.instance_name || undefined) : undefined,
+      _uiLakebaseMode: isLakebase ? formData.lakebaseMode : undefined,
+      // Autoscaling Lakebase fields
+      project: isAutoscaling ? (formData.project || undefined) : undefined,
+      branch: isAutoscaling ? (formData.branch || undefined) : undefined,
+      autoscaling_min_cu: isAutoscaling ? formData.autoscaling_min_cu : undefined,
+      autoscaling_max_cu: isAutoscaling ? formData.autoscaling_max_cu : undefined,
+      // Provisioned Lakebase fields
+      instance_name: isProvisioned ? (formData.instance_name || undefined) : undefined,
+      capacity: isProvisioned ? formData.capacity : undefined,
+      node_count: isProvisioned ? (formData.node_count || undefined) : undefined,
+      // PostgreSQL fields
       host: formData.type === 'postgres' ? (getCredentialValue(formData.hostSource, formData.host, formData.hostVariable) || undefined) : undefined,
       description: formData.description || undefined,
-      capacity: formData.capacity,
       max_pool_size: formData.max_pool_size,
       timeout_seconds: formData.timeout_seconds,
-      // OBO only supported for Lakebase
-      on_behalf_of_user: formData.type === 'lakebase' ? (formData.on_behalf_of_user || undefined) : undefined,
+      on_behalf_of_user: isLakebase ? (formData.on_behalf_of_user || undefined) : undefined,
     };
     
     if (formData.authMethod === 'service_principal') {
@@ -3761,7 +3830,11 @@ function DatabasesPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
                 <div>
                   <p className="font-medium text-slate-200">{key}</p>
                   <p className="text-xs text-slate-500">
-                    {db.instance_name || db.name || 'Default instance'} • {db.capacity || 'CU_2'}
+                    {db.project
+                      ? `${db.project}${db.branch ? ` / ${db.branch}` : ''} • Autoscaling`
+                      : db.instance_name
+                        ? `${db.instance_name} • ${db.capacity || 'CU_2'}`
+                        : db.name || 'PostgreSQL'}
                     {db.client_id ? ' • OAuth' : db.user ? ' • User auth' : ''}
                   </p>
                 </div>
@@ -3820,80 +3893,279 @@ function DatabasesPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
             hint={formData.type === 'lakebase' ? 'Databricks-managed Lakebase supports ambient/OBO authentication' : 'External PostgreSQL requires explicit credentials'}
           />
           
-          {/* Lakebase Instance Selection - Only for Lakebase type */}
+          {/* Lakebase Configuration - Only for Lakebase type */}
           {formData.type === 'lakebase' && (
-            <div className="space-y-3 p-3 bg-slate-900/50 rounded border border-slate-600">
-              <div className="flex items-center justify-between">
-                <p className="text-sm text-slate-300 font-medium flex items-center">
-                  <CloudCog className="w-4 h-4 mr-2 text-emerald-400" />
-                  Lakebase Instance
-                </p>
-                <div className="flex items-center space-x-2">
-                  <button
-                    type="button"
-                    onClick={() => setFormData({ ...formData, instanceSource: 'existing' })}
-                    className={`px-2 py-1 text-xs rounded ${formData.instanceSource === 'existing' ? 'bg-emerald-500/30 text-emerald-300' : 'bg-slate-700 text-slate-400'}`}
-                  >
-                    Use Existing
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFormData({ ...formData, instanceSource: 'manual' })}
-                    className={`px-2 py-1 text-xs rounded ${formData.instanceSource === 'manual' ? 'bg-emerald-500/30 text-emerald-300' : 'bg-slate-700 text-slate-400'}`}
-                  >
-                    Manual
-                  </button>
-                </div>
-              </div>
-              
-              {formData.instanceSource === 'existing' ? (
-                <div className="flex items-center space-x-2">
-                  <div className="flex-1">
-                    <label className="block text-sm font-medium text-slate-300 mb-1.5">Select Lakebase Instance</label>
-                    <StatusSelect
-                      value={formData.instance_name}
-                      onChange={(value) => {
-                        setFormData({ 
-                          ...formData, 
-                          instance_name: value,
-                          name: value || formData.name,
-                          refName: editingKey ? formData.refName : generateRefName(value),
+            <div className="space-y-3">
+              {/* Lakebase Mode Toggle */}
+              <Select
+                label="Lakebase Mode"
+                value={formData.lakebaseMode}
+                onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                  const newMode = e.target.value as LakebaseMode;
+                  setFormData({
+                    ...formData,
+                    lakebaseMode: newMode,
+                    instance_name: '',
+                    project: '',
+                    branch: '',
+                  });
+                }}
+                options={lakebaseModeOptions}
+                hint={formData.lakebaseMode === 'autoscaling'
+                  ? 'Serverless autoscaling with project/branch model'
+                  : 'Dedicated provisioned instances with fixed capacity'}
+              />
+
+              {/* Autoscaling Lakebase: Project + Branch */}
+              {formData.lakebaseMode === 'autoscaling' && (
+                <div className="space-y-3 p-3 bg-slate-900/50 rounded border border-slate-600">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm text-slate-300 font-medium flex items-center">
+                      <CloudCog className="w-4 h-4 mr-2 text-emerald-400" />
+                      Lakebase Project
+                    </p>
+                    <div className="flex items-center space-x-2">
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, projectSource: 'existing' })}
+                        className={`px-2 py-1 text-xs rounded ${formData.projectSource === 'existing' ? 'bg-emerald-500/30 text-emerald-300' : 'bg-slate-700 text-slate-400'}`}
+                      >
+                        Use Existing
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, projectSource: 'manual' })}
+                        className={`px-2 py-1 text-xs rounded ${formData.projectSource === 'manual' ? 'bg-emerald-500/30 text-emerald-300' : 'bg-slate-700 text-slate-400'}`}
+                      >
+                        Manual
+                      </button>
+                    </div>
+                  </div>
+
+                  {formData.projectSource === 'existing' ? (
+                    <div className="flex items-center space-x-2">
+                      <div className="flex-1">
+                        <label className="block text-sm font-medium text-slate-300 mb-1.5">Select Project</label>
+                        <StatusSelect
+                          value={formData.project}
+                          onChange={(value) => {
+                            setFormData({
+                              ...formData,
+                              project: value,
+                              name: value || formData.name,
+                              refName: editingKey ? formData.refName : generateRefName(value),
+                              branch: '',
+                            });
+                          }}
+                          options={projectOptions}
+                          placeholder="Select a project..."
+                        />
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => refetchProjects()}
+                        disabled={loadingProjects}
+                        className="mt-6"
+                      >
+                        {loadingProjects ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="w-4 h-4" />
+                        )}
+                      </Button>
+                    </div>
+                  ) : (
+                    <Input
+                      label="Project Name"
+                      value={formData.project}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                        const projectName = e.target.value;
+                        setFormData({
+                          ...formData,
+                          project: projectName,
+                          name: projectName || formData.name,
+                          refName: editingKey ? formData.refName : generateRefName(projectName),
                         });
                       }}
-                      options={databaseOptions}
-                      placeholder="Select an instance..."
+                      placeholder="my-lakebase-project"
+                      hint="Enter the autoscaling Lakebase project name"
+                    />
+                  )}
+
+                  {/* Branch Selection */}
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm text-slate-300 font-medium">Branch (Optional)</p>
+                    <div className="flex items-center space-x-2">
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, branchSource: 'existing' })}
+                        className={`px-2 py-1 text-xs rounded ${formData.branchSource === 'existing' ? 'bg-emerald-500/30 text-emerald-300' : 'bg-slate-700 text-slate-400'}`}
+                      >
+                        Use Existing
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, branchSource: 'manual' })}
+                        className={`px-2 py-1 text-xs rounded ${formData.branchSource === 'manual' ? 'bg-emerald-500/30 text-emerald-300' : 'bg-slate-700 text-slate-400'}`}
+                      >
+                        Manual
+                      </button>
+                    </div>
+                  </div>
+
+                  {formData.branchSource === 'existing' ? (
+                    <div className="flex items-center space-x-2">
+                      <div className="flex-1">
+                        <Select
+                          value={formData.branch}
+                          onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, branch: e.target.value })}
+                          options={branchOptions}
+                          hint={!formData.project ? 'Select a project first' : 'Leave blank to auto-resolve the default branch'}
+                          disabled={!formData.project}
+                        />
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => refetchBranches()}
+                        disabled={loadingBranches || !formData.project}
+                        className="mt-1"
+                      >
+                        {loadingBranches ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="w-4 h-4" />
+                        )}
+                      </Button>
+                    </div>
+                  ) : (
+                    <Input
+                      value={formData.branch}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, branch: e.target.value })}
+                      placeholder="main"
+                      hint="Leave blank to auto-resolve the default branch"
+                    />
+                  )}
+
+                  {/* Autoscaling Compute Units */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <Input
+                      label="Min Compute Units"
+                      type="number"
+                      value={formData.autoscaling_min_cu}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, autoscaling_min_cu: parseInt(e.target.value) || 2 })}
+                      hint="Minimum CU (default: 2)"
+                    />
+                    <Input
+                      label="Max Compute Units"
+                      type="number"
+                      value={formData.autoscaling_max_cu}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, autoscaling_max_cu: parseInt(e.target.value) || 4 })}
+                      hint="Maximum CU (default: 4)"
                     />
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => refetchInstances()}
-                    disabled={loadingInstances}
-                    className="mt-6"
-                  >
-                    {loadingInstances ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <RefreshCw className="w-4 h-4" />
-                    )}
-                  </Button>
                 </div>
-              ) : (
-                <Input
-                  label="Instance Name"
-                  value={formData.instance_name}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                    const instanceName = e.target.value;
-                    setFormData({ 
-                      ...formData, 
-                      instance_name: instanceName,
-                      name: instanceName || formData.name,
-                      refName: editingKey ? formData.refName : generateRefName(instanceName),
-                    });
-                  }}
-                  placeholder="my-lakebase-instance"
-                  hint="Enter the Lakebase instance name directly"
-                />
+              )}
+
+              {/* Provisioned Lakebase: Instance + Capacity */}
+              {formData.lakebaseMode === 'provisioned' && (
+                <div className="space-y-3 p-3 bg-slate-900/50 rounded border border-slate-600">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm text-slate-300 font-medium flex items-center">
+                      <CloudCog className="w-4 h-4 mr-2 text-emerald-400" />
+                      Lakebase Instance
+                    </p>
+                    <div className="flex items-center space-x-2">
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, instanceSource: 'existing' })}
+                        className={`px-2 py-1 text-xs rounded ${formData.instanceSource === 'existing' ? 'bg-emerald-500/30 text-emerald-300' : 'bg-slate-700 text-slate-400'}`}
+                      >
+                        Use Existing
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, instanceSource: 'manual' })}
+                        className={`px-2 py-1 text-xs rounded ${formData.instanceSource === 'manual' ? 'bg-emerald-500/30 text-emerald-300' : 'bg-slate-700 text-slate-400'}`}
+                      >
+                        Manual
+                      </button>
+                    </div>
+                  </div>
+
+                  {formData.instanceSource === 'existing' ? (
+                    <div className="flex items-center space-x-2">
+                      <div className="flex-1">
+                        <label className="block text-sm font-medium text-slate-300 mb-1.5">Select Lakebase Instance</label>
+                        <StatusSelect
+                          value={formData.instance_name}
+                          onChange={(value) => {
+                            setFormData({
+                              ...formData,
+                              instance_name: value,
+                              name: value || formData.name,
+                              refName: editingKey ? formData.refName : generateRefName(value),
+                            });
+                          }}
+                          options={databaseOptions}
+                          placeholder="Select an instance..."
+                        />
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => refetchInstances()}
+                        disabled={loadingInstances}
+                        className="mt-6"
+                      >
+                        {loadingInstances ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="w-4 h-4" />
+                        )}
+                      </Button>
+                    </div>
+                  ) : (
+                    <Input
+                      label="Instance Name"
+                      value={formData.instance_name}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                        const instanceName = e.target.value;
+                        setFormData({
+                          ...formData,
+                          instance_name: instanceName,
+                          name: instanceName || formData.name,
+                          refName: editingKey ? formData.refName : generateRefName(instanceName),
+                        });
+                      }}
+                      placeholder="my-lakebase-instance"
+                      hint="Enter the Lakebase instance name directly"
+                    />
+                  )}
+
+                  {/* Capacity and Node Count */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <Select
+                      label="Capacity"
+                      value={formData.capacity}
+                      onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, capacity: e.target.value as 'CU_1' | 'CU_2' })}
+                      options={[
+                        { value: 'CU_1', label: 'CU_1' },
+                        { value: 'CU_2', label: 'CU_2' },
+                      ]}
+                      hint="Compute capacity tier"
+                    />
+                    <Input
+                      label="Node Count"
+                      type="number"
+                      value={formData.node_count ?? ''}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, node_count: e.target.value ? parseInt(e.target.value) : undefined })}
+                      placeholder="Auto"
+                      hint="Horizontal scaling nodes (optional)"
+                    />
+                  </div>
+                </div>
               )}
             </div>
           )}
