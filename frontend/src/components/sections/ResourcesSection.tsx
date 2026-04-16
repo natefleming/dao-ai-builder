@@ -548,6 +548,7 @@ function LLMsPanel() {
     maxTokens: '8192',
     onBehalfOfUser: false,
     useResponseApi: false,
+    disableStreaming: false,
     fallbacks: [] as string[],
     // Authentication fields
     authMethod: 'default' as 'default' | 'service_principal' | 'oauth' | 'pat',
@@ -579,6 +580,7 @@ function LLMsPanel() {
       maxTokens: '8192',
       onBehalfOfUser: false,
       useResponseApi: false,
+      disableStreaming: false,
       fallbacks: [],
       authMethod: 'default',
       servicePrincipalRef: '',
@@ -624,6 +626,7 @@ function LLMsPanel() {
       maxTokens: String(llm.max_tokens ?? 8192),
       onBehalfOfUser: llm.on_behalf_of_user ?? false,
       useResponseApi: llm.use_responses_api ?? false,
+      disableStreaming: llm.disable_streaming ?? false,
       fallbacks: convertedFallbacks,
       ...authData,
     });
@@ -638,7 +641,7 @@ function LLMsPanel() {
     }
     
     const hasAuth = authData.authMethod !== 'default';
-    setShowAdvanced(!!(llm.on_behalf_of_user || llm.use_responses_api || (llm.fallbacks && llm.fallbacks.length > 0) || hasAuth));
+    setShowAdvanced(!!(llm.on_behalf_of_user || llm.use_responses_api || llm.disable_streaming || (llm.fallbacks && llm.fallbacks.length > 0) || hasAuth));
     setIsModalOpen(true);
   };
 
@@ -671,6 +674,10 @@ function LLMsPanel() {
 
       if (formData.useResponseApi) {
         llmConfig.use_responses_api = true;
+      }
+
+      if (formData.disableStreaming) {
+        llmConfig.disable_streaming = true;
       }
 
       if (formData.fallbacks.length > 0) {
@@ -948,9 +955,9 @@ function LLMsPanel() {
           >
             {showAdvanced ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
             <span>Advanced Options</span>
-            {(formData.onBehalfOfUser || formData.useResponseApi || formData.fallbacks.length > 0 || formData.authMethod !== 'default') && (
+            {(formData.onBehalfOfUser || formData.useResponseApi || formData.disableStreaming || formData.fallbacks.length > 0 || formData.authMethod !== 'default') && (
               <Badge variant="info" className="ml-2">
-                {(formData.onBehalfOfUser ? 1 : 0) + (formData.useResponseApi ? 1 : 0) + (formData.fallbacks.length > 0 ? 1 : 0) + (formData.authMethod !== 'default' ? 1 : 0)} configured
+                {(formData.onBehalfOfUser ? 1 : 0) + (formData.useResponseApi ? 1 : 0) + (formData.disableStreaming ? 1 : 0) + (formData.fallbacks.length > 0 ? 1 : 0) + (formData.authMethod !== 'default' ? 1 : 0)} configured
               </Badge>
             )}
           </button>
@@ -979,6 +986,21 @@ function LLMsPanel() {
                 </label>
                 <p className="text-xs text-slate-500 ml-6">
                   Enable when using the Databricks response API for streaming and enhanced features
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="flex items-center space-x-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.disableStreaming}
+                    onChange={(e) => setFormData({ ...formData, disableStreaming: e.target.checked })}
+                    className="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500"
+                  />
+                  <span className="text-sm text-slate-300">Disable streaming</span>
+                </label>
+                <p className="text-xs text-slate-500 ml-6">
+                  Required when the Foundation Model serving endpoint has output guardrails enabled (non-streaming only).
                 </p>
               </div>
 
@@ -3430,6 +3452,8 @@ interface DatabaseFormData {
   description: string;
   max_pool_size: number;
   timeout_seconds: number;
+  /** Autoscaling Lakebase: inactivity before suspend (seconds); 0 or negative = always on */
+  suspend_timeout_seconds: number;
   authMethod: 'oauth' | 'user' | 'service_principal';
   servicePrincipalRef: string;
   clientIdSource: CredentialSource;
@@ -3471,6 +3495,7 @@ const defaultDatabaseForm: DatabaseFormData = {
   description: '',
   max_pool_size: 10,
   timeout_seconds: 10,
+  suspend_timeout_seconds: 600,
   authMethod: 'service_principal',
   servicePrincipalRef: '',
   clientIdSource: 'variable',
@@ -3704,6 +3729,7 @@ function DatabasesPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
         description: db.description || '',
         max_pool_size: db.max_pool_size || 10,
         timeout_seconds: db.timeout_seconds || 10,
+        suspend_timeout_seconds: db.suspend_timeout_seconds ?? 600,
         authMethod: db.service_principal ? 'service_principal' : (db.client_id ? 'oauth' : 'user'),
         servicePrincipalRef: safeStartsWith(db.service_principal, '*') ? safeString(db.service_principal).slice(1) : '',
         clientIdSource: isVariableRef(db.client_id) ? 'variable' : 'manual',
@@ -3762,6 +3788,7 @@ function DatabasesPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
       description: formData.description || undefined,
       max_pool_size: formData.max_pool_size,
       timeout_seconds: formData.timeout_seconds,
+      suspend_timeout_seconds: isAutoscaling ? formData.suspend_timeout_seconds : undefined,
       on_behalf_of_user: isLakebase ? (formData.on_behalf_of_user || undefined) : undefined,
     };
     
@@ -4065,6 +4092,21 @@ function DatabasesPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
                       hint="Maximum CU (default: 4)"
                     />
                   </div>
+
+                  <Input
+                    label="Suspend timeout (seconds)"
+                    type="number"
+                    value={formData.suspend_timeout_seconds}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setFormData({
+                        ...formData,
+                        suspend_timeout_seconds: Number.isNaN(parseInt(e.target.value, 10))
+                          ? 600
+                          : parseInt(e.target.value, 10),
+                      })
+                    }
+                    hint="Inactivity before autoscaling Lakebase suspends (60–604800). Use 0 or a negative value to keep the endpoint always on."
+                  />
                 </div>
               )}
 

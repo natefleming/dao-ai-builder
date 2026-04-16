@@ -11,7 +11,26 @@ import Badge from '../ui/Badge';
 import { normalizeRefNameWhileTyping } from '@/utils/name-utils';
 import { safeDelete } from '@/utils/safe-delete';
 import { useYamlScrollStore } from '@/stores/yamlScrollStore';
-import { GuardrailMode } from '@/types/dao-ai-types';
+import { GuardrailMode, PromptModel } from '@/types/dao-ai-types';
+
+/** Preview text for guardrail list cards (prompt may be string or MLflow PromptModel). */
+function guardrailPromptSnippet(prompt: unknown): string | null {
+  if (prompt == null) return null;
+  if (typeof prompt === 'string') {
+    const t = prompt.trim();
+    if (!t) return null;
+    return t.length > 100 ? `${t.slice(0, 100)}...` : t;
+  }
+  if (typeof prompt === 'object' && prompt !== null && 'name' in prompt) {
+    const p = prompt as PromptModel;
+    const schema = p.schema;
+    const loc = schema
+      ? `${String(schema.catalog_name)}.${String(schema.schema_name)}.${p.name}`
+      : p.name;
+    return `MLflow prompt: ${loc}`;
+  }
+  return 'Custom prompt (structured)';
+}
 
 async function generateGuardrailPromptWithAI(params: {
   context?: string;
@@ -72,7 +91,7 @@ const APPLY_TO_OPTIONS = [
   { value: 'output', label: 'Output only' },
 ];
 
-function detectGuardrailMode(guardrail: { scorer?: string; model?: any; prompt?: string }): GuardrailMode {
+function detectGuardrailMode(guardrail: { scorer?: string; model?: any; prompt?: unknown }): GuardrailMode {
   if (guardrail.scorer) return 'scorer';
   return 'llm_judge';
 }
@@ -161,7 +180,7 @@ export default function GuardrailsSection() {
 
   const { scrollToAsset } = useYamlScrollStore();
 
-  const handleEdit = (key: string, guardrail: { name: string; model?: any; prompt?: string; scorer?: string; scorer_args?: Record<string, any>; hub?: string; num_retries?: number; fail_on_error?: boolean; max_context_length?: number; apply_to?: 'input' | 'output' | 'both' }) => {
+  const handleEdit = (key: string, guardrail: { name: string; model?: any; prompt?: unknown; scorer?: string; scorer_args?: Record<string, any>; hub?: string; num_retries?: number; fail_on_error?: boolean; max_context_length?: number; apply_to?: 'input' | 'output' | 'both' }) => {
     scrollToAsset(key);
     setEditingKey(key);
     setRefNameManuallyEdited(true);
@@ -175,11 +194,18 @@ export default function GuardrailsSection() {
       llmKey = Object.entries(llms).find(([, llm]) => llm.name === modelName)?.[0] || '';
     }
     
+    const promptForForm =
+      typeof guardrail.prompt === 'string'
+        ? guardrail.prompt || DEFAULT_GUARDRAIL_PROMPT
+        : guardrail.prompt && typeof guardrail.prompt === 'object'
+          ? JSON.stringify(guardrail.prompt, null, 2)
+          : DEFAULT_GUARDRAIL_PROMPT;
+
     setFormData({
       refName: key,
       name: guardrail.name,
       modelKey: llmKey,
-      prompt: guardrail.prompt || DEFAULT_GUARDRAIL_PROMPT,
+      prompt: promptForForm,
       scorer: guardrail.scorer || '',
       scorerArgs: guardrail.scorer_args ? JSON.stringify(guardrail.scorer_args, null, 2) : '',
       hub: guardrail.hub || '',
@@ -205,10 +231,25 @@ export default function GuardrailsSection() {
     if (guardrailMode === 'llm_judge') {
       if (!formData.modelKey || !llms[formData.modelKey]) return;
       
+      let promptField: string | PromptModel = formData.prompt;
+      try {
+        const parsed: unknown = JSON.parse(formData.prompt);
+        if (
+          parsed &&
+          typeof parsed === 'object' &&
+          !Array.isArray(parsed) &&
+          typeof (parsed as PromptModel).name === 'string'
+        ) {
+          promptField = parsed as PromptModel;
+        }
+      } catch {
+        // keep inline string prompt
+      }
+
       const guardrailConfig = {
         name: formData.name,
         model: llms[formData.modelKey],
-        prompt: formData.prompt,
+        prompt: promptField,
         num_retries: parseInt(formData.numRetries),
         fail_on_error: formData.failOnError,
         max_context_length: parseInt(formData.maxContextLength),
@@ -263,7 +304,7 @@ export default function GuardrailsSection() {
     setIsModalOpen(false);
   };
 
-  const getGuardrailSummary = (guardrail: { name: string; model?: any; prompt?: string; scorer?: string; apply_to?: string }) => {
+  const getGuardrailSummary = (guardrail: { name: string; model?: any; prompt?: unknown; scorer?: string; apply_to?: string }) => {
     if (guardrail.scorer) {
       const shortScorer = guardrail.scorer.split('.').pop() || guardrail.scorer;
       return { type: 'Scorer', detail: shortScorer };
@@ -303,6 +344,7 @@ export default function GuardrailsSection() {
         <div className="grid gap-4">
           {Object.entries(guardrails).map(([key, guardrail]) => {
             const summary = getGuardrailSummary(guardrail);
+            const promptPreview = guardrailPromptSnippet(guardrail.prompt);
             return (
               <Card 
                 key={key} 
@@ -323,9 +365,9 @@ export default function GuardrailsSection() {
                       <p className="text-sm text-slate-400">
                         {summary.type}: {summary.detail}
                       </p>
-                      {guardrail.prompt && (
+                      {promptPreview && (
                         <p className="text-xs text-slate-500 mt-2 line-clamp-2 font-mono">
-                          {guardrail.prompt.substring(0, 100)}...
+                          {promptPreview}
                         </p>
                       )}
                     </div>

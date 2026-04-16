@@ -55,6 +55,8 @@ export interface LLMModel {
   max_tokens?: number;
   on_behalf_of_user?: boolean;
   use_responses_api?: boolean;  // Use Responses API for ResponsesAgent endpoints
+  /** Required when the Foundation Model endpoint has output guardrails enabled */
+  disable_streaming?: boolean;
   fallbacks?: (string | LLMModel)[];
   // Authentication fields
   service_principal?: ServicePrincipalModel | string;
@@ -235,6 +237,8 @@ export interface DatabaseModel {
   connection_kwargs?: Record<string, any>;
   max_pool_size?: number;
   timeout_seconds?: number;
+  /** Autoscaling Lakebase: seconds of inactivity before suspend (60–604800; 0 or negative disables) */
+  suspend_timeout_seconds?: number | null;
   user?: VariableValue;
   password?: VariableValue;
   service_principal?: ServicePrincipalModel | string;  // Can be inline or reference
@@ -425,8 +429,8 @@ export type GuardrailMode = 'llm_judge' | 'scorer';
 export interface GuardrailModel {
   name: string;
   // LLM Judge mode fields (provide model + prompt)
-  model?: LLMModel;
-  prompt?: string;
+  model?: LLMModel | string;
+  prompt?: string | PromptModel;
   // Scorer mode fields (provide scorer, optionally scorer_args + hub)
   scorer?: string;
   scorer_args?: Record<string, any>;

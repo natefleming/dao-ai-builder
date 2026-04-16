@@ -1,5 +1,5 @@
 import { useState, ChangeEvent } from 'react';
-import { Plus, Trash2, Wrench, RefreshCw, Database, MessageSquare, Search, Clock, Bot, Link2, UserCheck, ChevronDown, ChevronUp, Pencil, Mail, Table2, Timer, Calculator, Code, BarChart3 } from 'lucide-react';
+import { Plus, Trash2, Wrench, RefreshCw, Database, MessageSquare, Search, Clock, Bot, Link2, UserCheck, ChevronDown, ChevronUp, Pencil, Mail, Table2, Timer, Calculator, Code, BarChart3, Users } from 'lucide-react';
 import { useConfigStore } from '@/stores/configStore';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
@@ -239,8 +239,14 @@ const TOOL_TYPES = [
 const FACTORY_TOOLS = [
   { 
     value: 'dao_ai.tools.create_genie_tool', 
-    label: 'Genie Tool',
-    description: 'Query data using natural language via Databricks Genie',
+    label: 'Genie Tool (Simple)',
+    description: 'Simple Genie query tool with no caching',
+    icon: MessageSquare,
+  },
+  { 
+    value: 'dao_ai.tools.create_genie_toolkit', 
+    label: 'Genie Toolkit',
+    description: 'Genie query + feedback tools with caching and circuit breaker',
     icon: MessageSquare,
   },
   { 
@@ -272,6 +278,12 @@ const FACTORY_TOOLS = [
     label: 'Slack Message Tool',
     description: 'Send messages to Slack channels',
     icon: MessageSquare,
+  },
+  { 
+    value: 'dao_ai.tools.create_send_teams_message_tool', 
+    label: 'Microsoft Teams Message Tool',
+    description: 'Send messages to Microsoft Teams channels via Graph API',
+    icon: Users,
   },
   { 
     value: 'dao_ai.tools.create_agent_endpoint_tool', 
@@ -641,6 +653,9 @@ export default function ToolsSection() {
     genieInMemoryCacheWarehouseSource: 'configured' as ResourceSource,
     genieInMemoryCacheWarehouseRefName: '',
     genieInMemoryCacheWarehouseId: '',
+    // Genie Toolkit circuit breaker
+    genieMaxConsecutiveCacheHitsEnabled: false,
+    genieMaxConsecutiveCacheHits: 3,
     // For Warehouse - with resource source
     warehouseSource: 'configured' as ResourceSource, // Default to configured
     warehouseRefName: '', // Reference to configured warehouse
@@ -673,6 +688,13 @@ export default function ToolsSection() {
     slackConnectionRefName: '',
     slackChannelId: '',
     slackChannelName: '',
+    // For Microsoft Teams Message tool
+    teamsConnectionSource: 'configured' as ResourceSource,
+    teamsConnectionRefName: '',
+    teamId: '',
+    teamsChannelId: '',
+    teamsChannelName: '',
+    teamsToolDescription: '',
     // For Agent Endpoint tool
     agentLlmSource: 'configured' as ResourceSource,
     agentLlmRefName: '',
@@ -1047,30 +1069,37 @@ export default function ToolsSection() {
       
       // Build args based on selected factory tool
       if (formData.functionName === 'dao_ai.tools.create_genie_tool') {
-        // Build base args
         const genieArgs: Record<string, unknown> = {
           name: formData.name,
           description: `Tool for querying via Genie`,
           persist_conversation: formData.geniePersistConversation,
           truncate_results: formData.genieTruncateResults,
         };
-
-        // Add genie_room reference or inline
         if (formData.genieSource === 'configured' && formData.genieRefName) {
           genieArgs.genie_room = `__REF__${formData.genieRefName}`;
         } else {
-          genieArgs.genie_room = {
-          space_id: formData.genieSpaceId,
-          };
+          genieArgs.genie_room = { space_id: formData.genieSpaceId };
+        }
+        parsedArgs = genieArgs;
+      } else if (formData.functionName === 'dao_ai.tools.create_genie_toolkit') {
+        const genieArgs: Record<string, unknown> = {
+          name: formData.name,
+          description: `Tool for querying via Genie`,
+          persist_conversation: formData.geniePersistConversation,
+          truncate_results: formData.genieTruncateResults,
+        };
+        if (formData.genieSource === 'configured' && formData.genieRefName) {
+          genieArgs.genie_room = `__REF__${formData.genieRefName}`;
+        } else {
+          genieArgs.genie_room = { space_id: formData.genieSpaceId };
         }
 
-        // Add LRU cache parameters if enabled
+        // LRU cache parameters
         if (formData.genieLruCacheEnabled) {
           const lruCacheParams: Record<string, unknown> = {
             capacity: formData.genieLruCacheCapacity,
             time_to_live_seconds: formData.genieLruCacheTtlNeverExpires ? null : formData.genieLruCacheTtl,
           };
-          // Add warehouse reference or inline
           if (formData.genieLruCacheWarehouseSource === 'configured' && formData.genieLruCacheWarehouseRefName) {
             lruCacheParams.warehouse = `__REF__${formData.genieLruCacheWarehouseRefName}`;
           } else if (formData.genieLruCacheWarehouseId) {
@@ -1082,7 +1111,7 @@ export default function ToolsSection() {
           genieArgs.lru_cache_parameters = lruCacheParams;
         }
 
-        // Add semantic cache parameters if enabled
+        // Context-aware (PostgreSQL-backed) cache parameters
         if (formData.genieSemanticCacheEnabled) {
           const semanticCacheParams: Record<string, unknown> = {
             time_to_live_seconds: formData.genieSemanticCacheTtlNeverExpires ? null : formData.genieSemanticCacheTtl,
@@ -1094,7 +1123,6 @@ export default function ToolsSection() {
             max_context_tokens: formData.genieSemanticCacheMaxContextTokens,
             table_name: formData.genieSemanticCacheTableName,
           };
-          // Prompt history settings
           if (formData.genieSemanticCachePromptHistoryTable !== 'genie_prompt_history') {
             semanticCacheParams.prompt_history_table = formData.genieSemanticCachePromptHistoryTable;
           }
@@ -1107,7 +1135,6 @@ export default function ToolsSection() {
           if (formData.genieSemanticCachePromptHistoryTtlEnabled) {
             semanticCacheParams.prompt_history_ttl_seconds = formData.genieSemanticCachePromptHistoryTtl;
           }
-          // IVFFlat index tuning settings (only include non-default values)
           if (!formData.genieSemanticCacheIvfflatListsAuto) {
             semanticCacheParams.ivfflat_lists = formData.genieSemanticCacheIvfflatLists;
           }
@@ -1117,17 +1144,14 @@ export default function ToolsSection() {
           if (formData.genieSemanticCacheIvfflatCandidates !== 20) {
             semanticCacheParams.ivfflat_candidates = formData.genieSemanticCacheIvfflatCandidates;
           }
-          // Add embedding model - configured LLM reference or manual string
           if (formData.genieSemanticCacheEmbeddingModelSource === 'configured' && formData.genieSemanticCacheEmbeddingModelRefName) {
             semanticCacheParams.embedding_model = `__REF__${formData.genieSemanticCacheEmbeddingModelRefName}`;
           } else if (formData.genieSemanticCacheEmbeddingModelManual) {
             semanticCacheParams.embedding_model = formData.genieSemanticCacheEmbeddingModelManual;
           }
-          // Add database reference
           if (formData.genieSemanticCacheDatabaseSource === 'configured' && formData.genieSemanticCacheDatabaseRefName) {
             semanticCacheParams.database = `__REF__${formData.genieSemanticCacheDatabaseRefName}`;
           }
-          // Add warehouse reference or inline
           if (formData.genieSemanticCacheWarehouseSource === 'configured' && formData.genieSemanticCacheWarehouseRefName) {
             semanticCacheParams.warehouse = `__REF__${formData.genieSemanticCacheWarehouseRefName}`;
           } else if (formData.genieSemanticCacheWarehouseId) {
@@ -1139,7 +1163,7 @@ export default function ToolsSection() {
           genieArgs.context_aware_cache_parameters = semanticCacheParams;
         }
 
-        // Add in-memory semantic cache parameters if enabled (new in dao-ai 0.1.21)
+        // In-memory context-aware cache parameters
         if (formData.genieInMemoryCacheEnabled) {
           const inMemoryCacheParams: Record<string, unknown> = {
             time_to_live_seconds: formData.genieInMemoryCacheTtlNeverExpires ? null : formData.genieInMemoryCacheTtl,
@@ -1151,13 +1175,11 @@ export default function ToolsSection() {
             max_context_tokens: formData.genieInMemoryCacheMaxContextTokens,
             capacity: formData.genieInMemoryCacheCapacityUnlimited ? null : formData.genieInMemoryCacheCapacity,
           };
-          // Add embedding model - configured LLM reference or manual string
           if (formData.genieInMemoryCacheEmbeddingModelSource === 'configured' && formData.genieInMemoryCacheEmbeddingModelRefName) {
             inMemoryCacheParams.embedding_model = `__REF__${formData.genieInMemoryCacheEmbeddingModelRefName}`;
           } else if (formData.genieInMemoryCacheEmbeddingModelManual) {
             inMemoryCacheParams.embedding_model = formData.genieInMemoryCacheEmbeddingModelManual;
           }
-          // Add warehouse reference or inline (required)
           if (formData.genieInMemoryCacheWarehouseSource === 'configured' && formData.genieInMemoryCacheWarehouseRefName) {
             inMemoryCacheParams.warehouse = `__REF__${formData.genieInMemoryCacheWarehouseRefName}`;
           } else if (formData.genieInMemoryCacheWarehouseId) {
@@ -1167,6 +1189,11 @@ export default function ToolsSection() {
             };
           }
           genieArgs.in_memory_context_aware_cache_parameters = inMemoryCacheParams;
+        }
+
+        // Circuit breaker
+        if (formData.genieMaxConsecutiveCacheHitsEnabled) {
+          genieArgs.max_consecutive_cache_hits = formData.genieMaxConsecutiveCacheHits;
         }
 
         parsedArgs = genieArgs;
@@ -1233,6 +1260,25 @@ export default function ToolsSection() {
         }
         
         parsedArgs = slackArgs;
+      } else if (formData.functionName === 'dao_ai.tools.create_send_teams_message_tool') {
+        const teamsArgs: Record<string, unknown> = {
+          name: formData.name,
+        };
+        if (formData.teamsConnectionSource === 'configured' && formData.teamsConnectionRefName) {
+          teamsArgs.connection = `__REF__${formData.teamsConnectionRefName}`;
+        }
+        if (formData.teamId.trim()) {
+          teamsArgs.team_id = formData.teamId.trim();
+        }
+        if (formData.teamsChannelId.trim()) {
+          teamsArgs.channel_id = formData.teamsChannelId.trim();
+        } else if (formData.teamsChannelName.trim()) {
+          teamsArgs.channel_name = formData.teamsChannelName.trim();
+        }
+        if (formData.teamsToolDescription.trim()) {
+          teamsArgs.description = formData.teamsToolDescription.trim();
+        }
+        parsedArgs = teamsArgs;
       } else if (formData.functionName === 'dao_ai.tools.create_agent_endpoint_tool') {
         // Agent endpoint tool configuration
         const agentArgs: Record<string, unknown> = {
@@ -1480,6 +1526,8 @@ export default function ToolsSection() {
       genieInMemoryCacheWarehouseSource: 'configured',
       genieInMemoryCacheWarehouseRefName: '',
       genieInMemoryCacheWarehouseId: '',
+      genieMaxConsecutiveCacheHitsEnabled: false,
+      genieMaxConsecutiveCacheHits: 3,
       warehouseSource: 'configured',
       warehouseRefName: '',
       warehouseId: '',
@@ -1505,6 +1553,12 @@ export default function ToolsSection() {
       slackConnectionRefName: '',
       slackChannelId: '',
       slackChannelName: '',
+      teamsConnectionSource: 'configured',
+      teamsConnectionRefName: '',
+      teamId: '',
+      teamsChannelId: '',
+      teamsChannelName: '',
+      teamsToolDescription: '',
       agentLlmSource: 'configured',
       agentLlmRefName: '',
       vectorSearchDescription: '',
@@ -1678,15 +1732,14 @@ export default function ToolsSection() {
           retrieverSource = 'select';
         }
         
-        // Slack tool config
+        // Slack tool config (only for Slack factory — avoids clobbering Teams `connection`)
         let slackConnectionSource: ResourceSource = 'configured';
         let slackConnectionRefName = '';
-        if (args.connection) {
+        if (funcName === 'dao_ai.tools.create_send_slack_message_tool' && args.connection) {
           if (typeof args.connection === 'string' && args.connection.startsWith('__REF__')) {
             slackConnectionRefName = args.connection.replace('__REF__', '');
             slackConnectionSource = 'configured';
           } else if (typeof args.connection === 'object' && args.connection !== null) {
-            // Try to find a matching configured connection
             const matchingKey = findConfiguredConnection(args.connection as { name?: string });
             if (matchingKey) {
               slackConnectionRefName = matchingKey;
@@ -1694,6 +1747,42 @@ export default function ToolsSection() {
             } else {
               slackConnectionSource = 'select';
             }
+          }
+        }
+
+        // Microsoft Teams message tool config
+        let teamsConnectionSource: ResourceSource = 'configured';
+        let teamsConnectionRefName = '';
+        let teamId = '';
+        let teamsChannelId = '';
+        let teamsChannelName = '';
+        let teamsToolDescription = '';
+        if (funcName === 'dao_ai.tools.create_send_teams_message_tool') {
+          if (args.connection) {
+            if (typeof args.connection === 'string' && args.connection.startsWith('__REF__')) {
+              teamsConnectionRefName = args.connection.replace('__REF__', '');
+              teamsConnectionSource = 'configured';
+            } else if (typeof args.connection === 'object' && args.connection !== null) {
+              const matchingKey = findConfiguredConnection(args.connection as { name?: string });
+              if (matchingKey) {
+                teamsConnectionRefName = matchingKey;
+                teamsConnectionSource = 'configured';
+              } else {
+                teamsConnectionSource = 'select';
+              }
+            }
+          }
+          if (args.team_id != null) {
+            teamId = String(args.team_id);
+          }
+          if (args.channel_id != null) {
+            teamsChannelId = String(args.channel_id);
+          }
+          if (args.channel_name != null) {
+            teamsChannelName = String(args.channel_name);
+          }
+          if (args.description != null && typeof args.description === 'string') {
+            teamsToolDescription = args.description;
           }
         }
         
@@ -1776,12 +1865,14 @@ export default function ToolsSection() {
           }
         }
         
-        // Parse tool name and description
-        if (args.name && typeof args.name === 'string') {
-          emailToolName = args.name;
-        }
-        if (args.description && typeof args.description === 'string') {
-          emailToolDescription = args.description;
+        // Parse tool name and description (email factory only — other factories use args.name differently)
+        if (funcName === 'dao_ai.tools.create_send_email_tool') {
+          if (args.name && typeof args.name === 'string') {
+            emailToolName = args.name;
+          }
+          if (args.description && typeof args.description === 'string') {
+            emailToolDescription = args.description;
+          }
         }
         
         // Agent endpoint LLM config
@@ -2085,6 +2176,12 @@ export default function ToolsSection() {
           }
         }
 
+        // Circuit breaker (toolkit only)
+        const genieMaxConsecutiveCacheHitsEnabled = args.max_consecutive_cache_hits != null;
+        const genieMaxConsecutiveCacheHits = typeof args.max_consecutive_cache_hits === 'number'
+          ? args.max_consecutive_cache_hits
+          : 3;
+
         setFormData(prev => ({
           ...prev,
           refName: key, // YAML key (reference name)
@@ -2154,6 +2251,9 @@ export default function ToolsSection() {
           genieInMemoryCacheWarehouseSource,
           genieInMemoryCacheWarehouseRefName,
           genieInMemoryCacheWarehouseId,
+          // Circuit breaker
+          genieMaxConsecutiveCacheHitsEnabled,
+          genieMaxConsecutiveCacheHits,
           vectorSearchSourceType,
           retrieverSource,
           retrieverRefName,
@@ -2168,6 +2268,12 @@ export default function ToolsSection() {
           slackConnectionRefName,
           slackChannelId: args.channel_id as string || '',
           slackChannelName: args.channel_name as string || '',
+          teamsConnectionSource,
+          teamsConnectionRefName,
+          teamId,
+          teamsChannelId,
+          teamsChannelName,
+          teamsToolDescription,
           agentLlmSource,
           agentLlmRefName,
           // Email tool fields
@@ -2771,10 +2877,11 @@ export default function ToolsSection() {
                 </div>
               </div>
 
-              {/* Genie Tool Configuration */}
+              {/* Genie Tool Configuration (simple, no caching) */}
               {formData.functionName === 'dao_ai.tools.create_genie_tool' && (
                 <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
                   <h4 className="text-sm font-medium text-slate-300">Genie Tool Configuration</h4>
+                  <p className="text-xs text-slate-500">Simple query tool with no caching. For caching and feedback support, use Genie Toolkit instead.</p>
                   <ResourceSelector
                     label="Genie Room"
                     resourceType="Genie room"
@@ -2787,22 +2894,19 @@ export default function ToolsSection() {
                   <GenieSpaceSelect
                     value={formData.genieSpaceId}
                     onChange={(value) => {
-                      // Auto-populate Genie tool name from selected space
                       const space = genieSpaces?.find(s => s.space_id === value);
                       const spaceName = space?.title || '';
-                      
                       setFormData({ 
                         ...formData, 
                         genieSpaceId: value, 
                         genieRefName: '',
-                        name: editingKey ? formData.name : spaceName // Only auto-fill when creating new
+                        name: editingKey ? formData.name : spaceName
                       });
                     }}
                     required
                   />
                   </ResourceSelector>
                   
-                  {/* Genie Tool Options */}
                   <div className="space-y-3 pt-2 border-t border-slate-700">
                     <h5 className="text-xs font-medium text-slate-400 uppercase tracking-wider">Options</h5>
                     
@@ -2831,6 +2935,97 @@ export default function ToolsSection() {
                         <p className="text-xs text-slate-500">Truncate large query results to fit within token limits</p>
                       </div>
                     </label>
+                  </div>
+                </div>
+              )}
+
+              {/* Genie Toolkit Configuration (with caching + feedback + circuit breaker) */}
+              {formData.functionName === 'dao_ai.tools.create_genie_toolkit' && (
+                <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+                  <h4 className="text-sm font-medium text-slate-300">Genie Toolkit Configuration</h4>
+                  <p className="text-xs text-slate-500">Creates a query tool and a feedback tool with caching and circuit breaker support.</p>
+                  <ResourceSelector
+                    label="Genie Room"
+                    resourceType="Genie room"
+                    configuredOptions={configuredGenieOptions}
+                    configuredValue={formData.genieRefName}
+                    onConfiguredChange={(value) => setFormData({ ...formData, genieRefName: value, genieSpaceId: '' })}
+                    source={formData.genieSource}
+                    onSourceChange={(source) => setFormData({ ...formData, genieSource: source })}
+                  >
+                  <GenieSpaceSelect
+                    value={formData.genieSpaceId}
+                    onChange={(value) => {
+                      const space = genieSpaces?.find(s => s.space_id === value);
+                      const spaceName = space?.title || '';
+                      setFormData({ 
+                        ...formData, 
+                        genieSpaceId: value, 
+                        genieRefName: '',
+                        name: editingKey ? formData.name : spaceName
+                      });
+                    }}
+                    required
+                  />
+                  </ResourceSelector>
+                  
+                  {/* Toolkit Options */}
+                  <div className="space-y-3 pt-2 border-t border-slate-700">
+                    <h5 className="text-xs font-medium text-slate-400 uppercase tracking-wider">Options</h5>
+                    
+                    <label className="flex items-start gap-3 cursor-pointer group">
+                      <input
+                        type="checkbox"
+                        checked={formData.geniePersistConversation}
+                        onChange={(e) => setFormData({ ...formData, geniePersistConversation: e.target.checked })}
+                        className="mt-0.5 w-4 h-4 rounded border-slate-600 bg-slate-800 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-900"
+                      />
+                      <div>
+                        <span className="text-sm text-slate-200 group-hover:text-white">Persist Conversation</span>
+                        <p className="text-xs text-slate-500">Keep conversation context across tool calls for multi-turn conversations within the same Genie space</p>
+                      </div>
+                    </label>
+                    
+                    <label className="flex items-start gap-3 cursor-pointer group">
+                      <input
+                        type="checkbox"
+                        checked={formData.genieTruncateResults}
+                        onChange={(e) => setFormData({ ...formData, genieTruncateResults: e.target.checked })}
+                        className="mt-0.5 w-4 h-4 rounded border-slate-600 bg-slate-800 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-900"
+                      />
+                      <div>
+                        <span className="text-sm text-slate-200 group-hover:text-white">Truncate Results</span>
+                        <p className="text-xs text-slate-500">Truncate large query results to fit within token limits</p>
+                      </div>
+                    </label>
+
+                    {/* Circuit Breaker */}
+                    <div className="space-y-3">
+                      <label className="flex items-start gap-3 cursor-pointer group">
+                        <input
+                          type="checkbox"
+                          checked={formData.genieMaxConsecutiveCacheHitsEnabled}
+                          onChange={(e) => setFormData({ ...formData, genieMaxConsecutiveCacheHitsEnabled: e.target.checked })}
+                          className="mt-0.5 w-4 h-4 rounded border-slate-600 bg-slate-800 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-900"
+                        />
+                        <div>
+                          <span className="text-sm text-slate-200 group-hover:text-white">Enable Circuit Breaker</span>
+                          <p className="text-xs text-slate-500">Auto-invalidate cached SQL after N identical consecutive cache hits and re-query Genie directly</p>
+                        </div>
+                      </label>
+                      
+                      {formData.genieMaxConsecutiveCacheHitsEnabled && (
+                        <div className="ml-7 space-y-3 p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
+                          <Input
+                            label="Max Consecutive Cache Hits"
+                            type="number"
+                            value={formData.genieMaxConsecutiveCacheHits.toString()}
+                            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, genieMaxConsecutiveCacheHits: parseInt(e.target.value) || 3 })}
+                            hint="Suggested value: 3. When this many identical cache hits occur consecutively, the entry is invalidated and a fresh query is sent to Genie."
+                          />
+                        </div>
+                      )}
+                    </div>
                     
                     {/* LRU Cache */}
                     <div className="space-y-3">
@@ -3572,6 +3767,65 @@ export default function ToolsSection() {
                       hint="Slack channel name. Used to lookup channel ID if not provided above."
                     />
                   </div>
+                </div>
+              )}
+
+              {formData.functionName === 'dao_ai.tools.create_send_teams_message_tool' && (
+                <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+                  <h4 className="text-sm font-medium text-slate-300">Microsoft Teams Message Tool Configuration</h4>
+                  <p className="text-xs text-slate-500">
+                    Uses a Unity Catalog HTTP connection to Microsoft Graph. With on-behalf-of-user on the connection, you must provide{' '}
+                    <strong className="text-slate-400">channel ID</strong> (channel name lookup is not available at startup).
+                  </p>
+
+                  <ResourceSelector
+                    label="Teams / Graph Connection"
+                    resourceType="Connection"
+                    configuredOptions={configuredConnectionOptions}
+                    configuredValue={formData.teamsConnectionRefName}
+                    onConfiguredChange={(value) => setFormData({ ...formData, teamsConnectionRefName: value })}
+                    source={formData.teamsConnectionSource}
+                    onSourceChange={(source) => setFormData({ ...formData, teamsConnectionSource: source })}
+                    hint="UC connection targeting https://graph.microsoft.com (see dao-ai teams_integration example)"
+                  >
+                    <p className="text-sm text-slate-400">
+                      Select a configured connection or create one in the Resources section
+                    </p>
+                  </ResourceSelector>
+
+                  <Input
+                    label="Team ID"
+                    placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                    value={formData.teamId}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, teamId: e.target.value })}
+                    hint="Microsoft Teams team ID (GUID)"
+                    required
+                  />
+
+                  <div className="space-y-3 pt-2 border-t border-slate-700">
+                    <h5 className="text-xs font-medium text-slate-400 uppercase tracking-wider">Channel</h5>
+                    <p className="text-xs text-slate-500">Provide channel ID or channel name (ID takes precedence). Name-based lookup requires a non-OBO connection.</p>
+                    <Input
+                      label="Channel ID"
+                      placeholder="Channel ID from Graph"
+                      value={formData.teamsChannelId}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, teamsChannelId: e.target.value })}
+                    />
+                    <Input
+                      label="Channel name"
+                      placeholder="e.g., General"
+                      value={formData.teamsChannelName}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, teamsChannelName: e.target.value })}
+                    />
+                  </div>
+
+                  <Input
+                    label="Tool description (optional)"
+                    placeholder="Shown to the model for this tool"
+                    value={formData.teamsToolDescription}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, teamsToolDescription: e.target.value })}
+                    hint="Overrides the default description passed to the LLM"
+                  />
                 </div>
               )}
 

@@ -177,6 +177,7 @@ const defaultConfig: AppConfig = {
   retrievers: {},
   tools: {},
   guardrails: {},
+  middleware: {},
   prompts: {},
   agents: {},
   // App starts undefined - user configures it in Application section
