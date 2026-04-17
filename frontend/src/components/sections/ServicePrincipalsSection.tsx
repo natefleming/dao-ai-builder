@@ -4,6 +4,7 @@ import { useConfigStore } from '@/stores/configStore';
 import { ServicePrincipalModel, AppConfig } from '@/types/dao-ai-types';
 import { normalizeRefNameWhileTyping } from '@/utils/name-utils';
 import { safeDelete } from '@/utils/safe-delete';
+import { findOriginalReferenceForPath } from '@/utils/yaml-references';
 import { useYamlScrollStore } from '@/stores/yamlScrollStore';
 import Card from '../ui/Card';
 import Button from '../ui/Button';
@@ -109,15 +110,38 @@ export default function ServicePrincipalsSection() {
         const str = safeString(val);
         return str.startsWith('*') ? str.slice(1) : '';
       };
-      
+
+      // Resolve each credential field: anchor map first (for imported *alias
+      // values that yaml.load() resolved into objects), then "*name" string,
+      // then fall back to plain values.
+      const resolveField = (field: 'client_id' | 'client_secret') => {
+        const anchor = findOriginalReferenceForPath(`service_principals.${key}.${field}`);
+        if (anchor) return { source: 'variable' as const, manual: '', variable: anchor };
+        const v = sp[field];
+        if (isVariableRef(v)) return { source: 'variable' as const, manual: '', variable: getVarSlice(v) };
+        if (typeof v === 'string') return { source: 'manual' as const, manual: v, variable: '' };
+        if (v != null) {
+          // Inline variable model object — best-effort display
+          const obj = v as unknown as Record<string, unknown>;
+          let display = '';
+          if ('default_value' in obj && obj.default_value !== undefined) display = String(obj.default_value);
+          else if ('value' in obj && obj.value !== undefined) display = String(obj.value);
+          return { source: 'manual' as const, manual: display, variable: '' };
+        }
+        return { source: 'variable' as const, manual: '', variable: '' };
+      };
+
+      const ci = resolveField('client_id');
+      const cs = resolveField('client_secret');
+
       setFormData({
         refName: key,
-        clientIdSource: isVariableRef(sp.client_id) ? 'variable' : 'manual',
-        clientSecretSource: isVariableRef(sp.client_secret) ? 'variable' : 'manual',
-        client_id: isVariableRef(sp.client_id) ? '' : safeString(sp.client_id),
-        client_secret: isVariableRef(sp.client_secret) ? '' : safeString(sp.client_secret),
-        clientIdVariable: isVariableRef(sp.client_id) ? getVarSlice(sp.client_id) : '',
-        clientSecretVariable: isVariableRef(sp.client_secret) ? getVarSlice(sp.client_secret) : '',
+        clientIdSource: ci.source,
+        clientSecretSource: cs.source,
+        client_id: ci.manual,
+        client_secret: cs.manual,
+        clientIdVariable: ci.variable,
+        clientSecretVariable: cs.variable,
       });
       setEditingKey(key);
       setShowForm(true);

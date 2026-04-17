@@ -1055,9 +1055,14 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
       config: {
         ...state.config,
         app: {
-          // Provide defaults if app doesn't exist
+          // Provide defaults if app doesn't exist.
+          // NOTE: `registered_model` used to default to `{ name: '' }` here,
+          // which caused the YAML generator to suppress the whole app: block
+          // because its guard saw an empty model name. dao-ai 0.1.55 made
+          // `registered_model` optional (required only for deployment_target:
+          // model_serving), so we leave it undefined here and let the generator
+          // emit it only when configured.
           name: state.config.app?.name || '',
-          registered_model: state.config.app?.registered_model || { name: '' },
           agents: state.config.app?.agents || [],
           ...state.config.app,
           ...updates,

@@ -2612,8 +2612,12 @@ export function generateYAML(config: AppConfig): string {
     });
   }
 
-  // App configuration - only include if it has meaningful content
-  if (config.app && config.app.name && config.app.registered_model?.name) {
+  // App configuration - only include if it has meaningful content.
+  // registered_model became optional in dao-ai 0.1.55 for deployment_target: apps
+  // (MLflow registration happens at App runtime, or is skipped). We emit the
+  // app: block as long as there's an app name; registered_model is added below
+  // only when actually configured.
+  if (config.app && config.app.name) {
     // Format app.agents as references to defined agents - use YAML key (not name)
     const definedAgents = config.agents || {};
     let appAgentsValue: string[] | undefined;
@@ -2669,16 +2673,19 @@ export function generateYAML(config: AppConfig): string {
       }).filter((ref): ref is string => ref !== null);
     }
     
-    // Format registered_model with schema reference
-    let registeredModel: any = { name: config.app.registered_model.name };
-    if (config.app.registered_model.schema) {
-      const regModelSchema = formatSchemaReference(
-        config.app.registered_model.schema,
-        definedSchemas,
-        'app.registered_model.schema'
-      );
-      if (regModelSchema) {
-        registeredModel.schema = regModelSchema;
+    // Format registered_model with schema reference (optional in 0.1.55+)
+    let registeredModel: any = undefined;
+    if (config.app.registered_model?.name) {
+      registeredModel = { name: config.app.registered_model.name };
+      if (config.app.registered_model.schema) {
+        const regModelSchema = formatSchemaReference(
+          config.app.registered_model.schema,
+          definedSchemas,
+          'app.registered_model.schema'
+        );
+        if (regModelSchema) {
+          registeredModel.schema = regModelSchema;
+        }
       }
     }
     
@@ -2703,7 +2710,7 @@ export function generateYAML(config: AppConfig): string {
     yamlConfig.app = {
       name: config.app.name,
       ...(config.app.alias && { alias: config.app.alias }),
-      registered_model: registeredModel,
+      ...(registeredModel && { registered_model: registeredModel }),
       ...(config.app.description && { description: config.app.description }),
       ...(config.app.log_level && { log_level: config.app.log_level }),
       ...(appServicePrincipal && { service_principal: appServicePrincipal }),

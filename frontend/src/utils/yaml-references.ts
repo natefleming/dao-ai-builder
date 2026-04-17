@@ -480,3 +480,37 @@ export function getSectionAnchor(sectionName: string): string | null {
 export function clearSectionAnchors(): void {
   sectionAnchorOverrides = {};
 }
+
+/**
+ * Look up the original YAML anchor name for a given path.
+ *
+ * When `yaml.load()` resolves an alias it drops the alias name entirely, so
+ * section `handleEdit` logic needs this map to decide whether a field was
+ * originally an anchor reference (and thus should round-trip back as `*name`)
+ * vs. an inline literal.
+ *
+ * Uses suffix-matching so callers don't need to produce a perfectly normalized
+ * path (paths can drift across `tools.<key>.function.args.foo` vs.
+ * `tools.<key>.args.foo` style variations).
+ */
+export function findOriginalReferenceForPath(path: string): string | null {
+  const refs = getYamlReferences();
+  if (!refs) return null;
+
+  const normalizedPath = path.toLowerCase().replace(/-/g, '_');
+
+  for (const [anchorName, usagePaths] of Object.entries(refs.aliasUsage)) {
+    for (const usagePath of usagePaths) {
+      const normalizedUsagePath = usagePath.toLowerCase().replace(/-/g, '_');
+      if (
+        normalizedPath === normalizedUsagePath ||
+        normalizedPath.endsWith(normalizedUsagePath) ||
+        normalizedUsagePath.endsWith(normalizedPath)
+      ) {
+        return anchorName;
+      }
+    }
+  }
+
+  return null;
+}

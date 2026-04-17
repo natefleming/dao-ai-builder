@@ -2,6 +2,35 @@ import { ChangeEvent } from 'react';
 import { User } from 'lucide-react';
 import Select from './Select';
 import Input from './Input';
+import { findOriginalReferenceForPath } from '@/utils/yaml-references';
+
+// Extract a displayable primitive from a resolved variable-model object.
+// Handles EnvironmentVariableModel / SecretVariableModel / PrimitiveVariableModel
+// shapes plus plain primitives. Returns '' if the shape is unrecognized
+// (e.g. a composite `{ options: [...] }` — those only round-trip through the
+// anchor-map path and we leave them blank otherwise).
+const resolveVariableDisplay = (value: unknown): string => {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    if ('default_value' in obj && obj.default_value !== undefined && obj.default_value !== null) {
+      return String(obj.default_value);
+    }
+    if ('value' in obj && obj.value !== undefined) {
+      return String(obj.value);
+    }
+    if ('env' in obj && typeof obj.env === 'string') {
+      return `$${obj.env}`;
+    }
+    if ('scope' in obj && 'secret' in obj) {
+      return `{{secrets/${String(obj.scope)}/${String(obj.secret)}}}`;
+    }
+  }
+  return '';
+};
 
 // Type for credential source
 export type CredentialSource = 'variable' | 'manual';
@@ -350,19 +379,58 @@ export const getCredentialValue = (
   return manualValue || undefined;
 };
 
-// Helper to parse resource auth from model
+// Helper to parse resource auth from model.
+//
+// `basePath` is optional but strongly recommended — pass something like
+// `resources.llms.<key>` or `resources.genie_rooms.<key>`. When provided, the
+// parser consults the YAML anchor map so aliased credentials (which
+// `yaml.load()` resolves into objects) round-trip as variable references
+// rather than being silently lost.
 export const parseResourceAuth = (
   resource: any,
   safeStartsWith: (val: unknown, prefix: string) => boolean,
   safeString: (val: unknown) => string,
-  servicePrincipals?: Record<string, any>
+  servicePrincipals?: Record<string, any>,
+  basePath?: string
 ): ResourceAuthFormData => {
   const isVariableRef = (val?: unknown): boolean => safeStartsWith(val, '*');
   const getVarSlice = (val?: unknown): string => {
     const str = safeString(val);
     return str.startsWith('*') ? str.slice(1) : '';
   };
-  
+
+  // Resolve the anchor for a specific field via the YAML anchor map.
+  // Returns '' (falsy) if no anchor was recorded for that path.
+  const anchorFor = (field: string): string => {
+    if (!basePath) return '';
+    return findOriginalReferenceForPath(`${basePath}.${field}`) || '';
+  };
+
+  // Build a three-way resolution for a credential field:
+  //   1. YAML anchor map → variable source, anchor name as the variable
+  //   2. "*name" literal string → variable source, slice off the leading *
+  //   3. primitive/object fallback → manual source with a displayable value
+  const resolveCredential = (
+    field: 'client_id' | 'client_secret' | 'workspace_host' | 'pat',
+  ): { source: CredentialSource; manual: string; variable: string } => {
+    const anchor = anchorFor(field);
+    if (anchor) {
+      return { source: 'variable', manual: '', variable: anchor };
+    }
+    const val = resource[field];
+    if (isVariableRef(val)) {
+      return { source: 'variable', manual: '', variable: getVarSlice(val) };
+    }
+    if (typeof val === 'string') {
+      return { source: 'manual', manual: val, variable: '' };
+    }
+    if (val != null) {
+      const display = resolveVariableDisplay(val);
+      return { source: 'manual', manual: display, variable: '' };
+    }
+    return { source: 'variable', manual: '', variable: '' };
+  };
+
   // Determine auth method
   let authMethod: AuthMethod = 'default';
   if (resource.service_principal) {
@@ -372,10 +440,13 @@ export const parseResourceAuth = (
   } else if (resource.pat) {
     authMethod = 'pat';
   }
-  
+
   // Determine service principal ref
   let servicePrincipalRef = '';
-  if (resource.service_principal) {
+  const spAnchor = anchorFor('service_principal');
+  if (spAnchor) {
+    servicePrincipalRef = spAnchor;
+  } else if (resource.service_principal) {
     if (safeStartsWith(resource.service_principal, '*')) {
       // It's a string reference like "*retail_sp"
       servicePrincipalRef = safeString(resource.service_principal).slice(1);
@@ -393,22 +464,27 @@ export const parseResourceAuth = (
       }
     }
   }
-  
+
+  const clientId = resolveCredential('client_id');
+  const clientSecret = resolveCredential('client_secret');
+  const workspaceHost = resolveCredential('workspace_host');
+  const pat = resolveCredential('pat');
+
   return {
     authMethod,
     servicePrincipalRef,
-    clientIdSource: isVariableRef(resource.client_id) ? 'variable' : 'manual',
-    clientSecretSource: isVariableRef(resource.client_secret) ? 'variable' : 'manual',
-    workspaceHostSource: isVariableRef(resource.workspace_host) ? 'variable' : 'manual',
-    patSource: isVariableRef(resource.pat) ? 'variable' : 'manual',
-    client_id: isVariableRef(resource.client_id) ? '' : safeString(resource.client_id),
-    client_secret: isVariableRef(resource.client_secret) ? '' : safeString(resource.client_secret),
-    workspace_host: isVariableRef(resource.workspace_host) ? '' : safeString(resource.workspace_host),
-    pat: isVariableRef(resource.pat) ? '' : safeString(resource.pat),
-    clientIdVariable: getVarSlice(resource.client_id),
-    clientSecretVariable: getVarSlice(resource.client_secret),
-    workspaceHostVariable: getVarSlice(resource.workspace_host),
-    patVariable: getVarSlice(resource.pat),
+    clientIdSource: clientId.source,
+    clientSecretSource: clientSecret.source,
+    workspaceHostSource: workspaceHost.source,
+    patSource: pat.source,
+    client_id: clientId.manual,
+    client_secret: clientSecret.manual,
+    workspace_host: workspaceHost.manual,
+    pat: pat.manual,
+    clientIdVariable: clientId.variable,
+    clientSecretVariable: clientSecret.variable,
+    workspaceHostVariable: workspaceHost.variable,
+    patVariable: pat.variable,
     on_behalf_of_user: resource.on_behalf_of_user || false,
   };
 };

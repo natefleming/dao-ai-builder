@@ -179,6 +179,11 @@ export interface GenieContextAwareCacheParametersModel {
   table_name?: string;  // Default: "genie_context_aware_cache"
   context_window_size?: number;  // Default: 4 - Number of previous turns to include for context
   max_context_tokens?: number;  // Default: 2000 - Maximum context length to prevent extremely long embeddings
+  /**
+   * When true, cached SQL that returns an empty result set is invalidated
+   * and the question is re-sent to Genie. New in dao-ai 0.1.55. Default: false.
+   */
+  invalidate_on_empty_result?: boolean;
   // Prompt history fields
   prompt_history_table?: string;  // Default: "genie_prompt_history"
   max_prompt_history_length?: number;  // Default: 50
@@ -236,7 +241,16 @@ export interface DatabaseModel {
   port?: VariableValue;  // Port number (default: 5432)
   connection_kwargs?: Record<string, any>;
   max_pool_size?: number;
-  timeout_seconds?: number;
+  /**
+   * Pool-level timeout: how long to wait for a free connection from the pool.
+   * Defaults (dao-ai 0.1.55): 120s for autoscaling Lakebase, 30s otherwise.
+   */
+  timeout_seconds?: number | null;
+  /**
+   * TCP-level libpq connection timeout (new in dao-ai 0.1.55).
+   * Defaults: 30s for autoscaling Lakebase, 10s otherwise.
+   */
+  connect_timeout?: number | null;
   /** Autoscaling Lakebase: seconds of inactivity before suspend (60–604800; 0 or negative disables) */
   suspend_timeout_seconds?: number | null;
   user?: VariableValue;
@@ -417,6 +431,102 @@ export interface ToolModel {
   function: ToolFunctionModel;
 }
 
+// ---------------------------------------------------------------------------
+// Strongly typed args for first-class dao_ai.tools factories.
+// These mirror the keyword arguments each factory accepts and are the canonical
+// shape the UI serializes into FactoryFunctionModel.args. Keeping them here
+// means any consumer of ToolsSection can typecheck factory-specific data.
+// ---------------------------------------------------------------------------
+
+/** Auth modes supported by dao_ai.tools.create_a2a_agent_tool */
+export type A2AAuthType = "bearer" | "gcp_service_account" | "none";
+
+export interface A2AAgentToolArgs {
+  name?: string;
+  description?: string;
+  endpoint: VariableValue;
+  auth?: VariableValue;
+  auth_type?: A2AAuthType;          // default: "bearer"
+  streaming?: boolean;              // default: true
+  timeout_seconds?: number;         // default: 300
+  card_path?: VariableValue;        // default: "/.well-known/agent-card.json"
+  card_fallback_path?: VariableValue; // default: "/.well-known/agent.json"
+  user_id?: VariableValue;
+  extra_metadata?: Record<string, any>;
+}
+
+/** Auth modes supported by dao_ai.tools.create_vertex_agent_engine_tool */
+export type VertexAuthType = "gcp_service_account" | "bearer" | "adc";
+
+export interface VertexAgentEngineToolArgs {
+  name?: string;
+  description?: string;
+  endpoint: VariableValue;
+  /** Omit when auth_type === "adc" */
+  credentials?: VariableValue;
+  auth_type?: VertexAuthType;       // default: "gcp_service_account"
+  user_id?: VariableValue;
+  class_method?: string;            // default: "stream_query"
+  http_method?: string;             // default: "streamQuery"
+  timeout_seconds?: number;         // default: 300
+}
+
+/**
+ * Args for dao_ai.tools.create_rest_api_tool. Exactly one of `connection`
+ * or `base_url` must be provided.
+ */
+export interface RestApiToolArgs {
+  name?: string;
+  description?: string;
+  connection?: ConnectionModel | string;
+  base_url?: VariableValue;
+  auth_token?: VariableValue;
+  default_headers?: Record<string, VariableValue>;
+}
+
+export interface AppInfoAgentEntry {
+  name: string;
+  description?: string;
+}
+
+export interface AppInfoToolArgs {
+  app_name: string;
+  description: string;
+  agents: AppInfoAgentEntry[];
+  sample_prompts?: string[];
+}
+
+/**
+ * Shared args shape for the three memory factories:
+ *   - dao_ai.tools.create_search_memory_tool
+ *   - dao_ai.tools.create_manage_memory_tool
+ *   - dao_ai.tools.create_search_user_profile_tool
+ * The BaseStore is injected at runtime from orchestration.memory.store;
+ * only `namespace` is user-configurable from YAML.
+ */
+export interface MemoryToolArgs {
+  namespace: string[];
+}
+
+export interface ExecuteStatementToolArgs {
+  name?: string;
+  description?: string;
+  warehouse: WarehouseModel | string;
+  statement: string;
+}
+
+/** Chart type literals supported by create_visualization_tool (dao-ai ChartType). */
+export type VegaChartType = "bar" | "line" | "scatter" | "area" | "arc" | "heatmap";
+
+export interface VisualizationToolArgs {
+  name?: string;
+  description?: string;
+  default_chart_type?: VegaChartType;  // default: "bar"
+  width?: number | "container";        // default: "container"
+  height?: number;                     // default: 400
+  color_scheme?: string;               // default: "tableau10"
+}
+
 export type HumanInTheLoopDecision = "approve" | "edit" | "reject";
 
 export interface HumanInTheLoopModel {
@@ -462,6 +572,11 @@ export interface AgentModel {
   handoff_prompt?: string;
   middleware?: MiddlewareModel[];
   response_format?: ResponseFormatModel | string;
+  /**
+   * Max LangGraph supersteps (LLM + tool cycles) per agent invocation.
+   * Added in dao-ai 0.1.55. Defaults to LangGraph's 25 when null/omitted.
+   */
+  recursion_limit?: number | null;
 }
 
 export interface PromptModel {
@@ -568,17 +683,23 @@ export interface AppModel {
   description?: string;
   log_level?: LogLevel;
   service_principal?: ServicePrincipalModel | string;  // Can be inline or reference
-  registered_model: RegisteredModelModel;
+  registered_model?: RegisteredModelModel;  // Optional in dao-ai 0.1.55+
   endpoint_name?: string;
   trace_location?: TraceLocationModel;
   monitoring?: MonitoringModel;
   tags?: Record<string, any>;
   scale_to_zero?: boolean;
+  /**
+   * Whether the MLflow AgentServer enables the chat proxy endpoint for
+   * Databricks Apps. Added in dao-ai 0.1.55. Default: true.
+   */
+  enable_chat_proxy?: boolean | null;
   environment_vars?: Record<string, any>;
   budget_policy_id?: string;
   python_version?: string;  // Python version for the deployment environment
   workload_size?: "Small" | "Medium" | "Large";
-  deployment_target?: "model_serving" | "apps" | "both";
+  // "both" is intentionally unsupported in the builder — pick one target.
+  deployment_target?: "model_serving" | "apps";
   permissions?: AppPermissionModel[];
   agents: AgentModel[];
   orchestration?: OrchestrationModel;

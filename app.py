@@ -3348,18 +3348,19 @@ def validate_deployment():
         if not app_config.get('name'):
             errors.append('app.name is required')
         
-        # Check registered model
-        registered_model = app_config.get('registered_model')
-        if not registered_model:
-            errors.append('app.registered_model is required for deployment')
-        else:
-            if not registered_model.get('name'):
-                errors.append('app.registered_model.name is required')
-            if not registered_model.get('schema'):
-                errors.append('app.registered_model.schema is required')
-        
-        # Check endpoint name (only for Model Serving deployments)
+        # Check registered model — only required for model_serving (dao-ai 0.1.55
+        # made it optional for deployment_target: apps where the App process
+        # handles MLflow registration at runtime, or skips it entirely).
         deployment_target = app_config.get('deployment_target', 'model_serving')
+        registered_model = app_config.get('registered_model')
+        if deployment_target != 'apps':
+            if not registered_model:
+                errors.append('app.registered_model is required for Model Serving deployment')
+            else:
+                if not registered_model.get('name'):
+                    errors.append('app.registered_model.name is required')
+                if not registered_model.get('schema'):
+                    errors.append('app.registered_model.schema is required')
         if deployment_target == 'model_serving' and not app_config.get('endpoint_name'):
             warnings.append('app.endpoint_name not set - will default to app name')
         
@@ -3911,8 +3912,8 @@ def deploy_quick():
                         status['status'] = 'completed'
                         status['completed_at'] = datetime.now().isoformat()
                         status['result'] = {
-                            'endpoint_name': app_config.app.endpoint_name,
-                            'model_name': app_config.app.registered_model.full_name,
+                            'endpoint_name': app_config.app.endpoint_name or app_config.app.name,
+                            'model_name': app_config.app.registered_model.full_name if app_config.app.registered_model else None,
                             'message': 'Deployment completed successfully'
                         }
                     

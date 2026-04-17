@@ -13,6 +13,7 @@
 import { useState, useEffect, ChangeEvent } from 'react';
 import { normalizeRefNameWhileTyping } from '@/utils/name-utils';
 import { safeDelete } from '@/utils/safe-delete';
+import { findOriginalReferenceForPath } from '@/utils/yaml-references';
 import { useYamlScrollStore } from '@/stores/yamlScrollStore';
 
 // Helper to scroll YAML preview to a specific asset
@@ -616,7 +617,7 @@ function LLMsPanel() {
     });
     
     // Parse authentication data
-    const authData = parseResourceAuth(llm, safeStartsWith, safeString, config.service_principals || {});
+    const authData = parseResourceAuth(llm, safeStartsWith, safeString, config.service_principals || {}, `resources.llms.${key}`);
     
     setFormData({
       name: key,
@@ -1129,7 +1130,15 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
     let spaceIdValue = '';
     let variableName = '';
     
-    if (!room.space_id) {
+    // Consult the YAML anchor map first so an imported "*some_var" alias
+    // round-trips as a variable reference even after yaml.load resolved it
+    // to an object.
+    const spaceIdAnchor = findOriginalReferenceForPath(`resources.genie_rooms.${key}.space_id`);
+
+    if (spaceIdAnchor) {
+      source = 'variable';
+      variableName = spaceIdAnchor;
+    } else if (!room.space_id) {
       source = 'manual';
     } else if (typeof room.space_id === 'string') {
       if (safeStartsWith(room.space_id, '*')) {
@@ -1155,7 +1164,7 @@ function GenieRoomsPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
     }
     
     // Parse authentication data
-    const authData = parseResourceAuth(room, safeStartsWith, safeString, servicePrincipals);
+    const authData = parseResourceAuth(room, safeStartsWith, safeString, servicePrincipals, `resources.genie_rooms.${key}`);
     
     // Auto-populate name and description from Genie space if not provided
     let name = room.name || '';
@@ -1598,7 +1607,7 @@ function WarehousesPanel({ showForm, setShowForm, editingKey, setEditingKey, onC
     }
     
     // Parse authentication data
-    const authData = parseResourceAuth(wh, safeStartsWith, safeString, servicePrincipals);
+    const authData = parseResourceAuth(wh, safeStartsWith, safeString, servicePrincipals, `resources.warehouses.${key}`);
     
     // Auto-populate name from SQL warehouse if not provided
     let name = wh.name || '';
@@ -2109,7 +2118,7 @@ function TablesPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose
       schema_name: tableSchemaDisplay,
       name: table.name || '',
       // Parse authentication data (includes on_behalf_of_user)
-      ...parseResourceAuth(table, safeStartsWith, safeString, servicePrincipals),
+      ...parseResourceAuth(table, safeStartsWith, safeString, servicePrincipals, `resources.tables.${key}`),
     });
     setEditingKey(key);
     setShowForm(true);
@@ -3248,7 +3257,7 @@ function ConnectionsPanel({ showForm, setShowForm, editingKey, setEditingKey, on
     const conn = connections[key];
     
     // Parse authentication data
-    const authData = parseResourceAuth(conn, safeStartsWith, safeString, servicePrincipals);
+    const authData = parseResourceAuth(conn, safeStartsWith, safeString, servicePrincipals, `resources.connections.${key}`);
     
     setFormData({
       refName: key,
@@ -5121,7 +5130,7 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
         checkpointPathVolumeName,
         checkpointPathPath,
         // Parse authentication data (includes on_behalf_of_user)
-        ...parseResourceAuth(vs, safeStartsWith, safeString, servicePrincipals),
+        ...parseResourceAuth(vs, safeStartsWith, safeString, servicePrincipals, `resources.vector_stores.${key}`),
       });
       setColumnsInput((vs.columns || []).join(', '));
       setEditingKey(key);
@@ -6049,7 +6058,7 @@ function DatabricksAppsPanel({ showForm, setShowForm, editingKey, setEditingKey,
     const app = apps[key];
     
     // Parse authentication data
-    const authData = parseResourceAuth(app, safeStartsWith, safeString, servicePrincipals);
+    const authData = parseResourceAuth(app, safeStartsWith, safeString, servicePrincipals, `resources.apps.${key}`);
     
     setFormData({
       refName: key,

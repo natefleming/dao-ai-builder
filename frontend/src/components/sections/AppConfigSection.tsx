@@ -640,34 +640,38 @@ export default function AppConfigSection() {
     return false;
   })();
 
-  // Validation - check if all required fields are present
+  // Validation - check if all required fields are present.
+  // dao-ai 0.1.55 made `registered_model` optional for `deployment_target: apps`
+  // (MLflow registration happens at App runtime, or is skipped). Model-serving
+  // deployments still require the registered model + schema.
   const validationErrors: string[] = [];
-  
+  const requiresModelRegistration = formData.deploymentTarget !== 'apps';
+
   // Required: App name
   if (!formData.name.trim()) {
     validationErrors.push('Application name is required');
   }
-  
-  // Required: Model name (for registered_model)
-  if (!formData.modelName.trim()) {
-    validationErrors.push('Model name is required');
+
+  // Required for model_serving: Model name (for registered_model)
+  if (requiresModelRegistration && !formData.modelName.trim()) {
+    validationErrors.push('Model name is required for Model Serving deployments');
   }
-  
+
   // Required: At least one agent must be selected
   if (selectedAgents.length === 0) {
     validationErrors.push('At least one agent must be selected');
   }
-  
+
   // For Supervisor pattern, an LLM must be selected (swarm doesn't use a model)
   if (pattern === 'supervisor' && !selectedLLM) {
     validationErrors.push('Supervisor orchestration requires an LLM');
   }
 
-  // Required: Model registration schema (backend enforces this for deployment)
+  // Required for model_serving: Model registration schema
   const hasSchema = (schemaSource === 'configured' && !!formData.modelSchema) ||
     (schemaSource === 'select' && !!formData.directCatalog && !!formData.directSchema);
-  if (!hasSchema) {
-    validationErrors.push('Model registration schema is required');
+  if (requiresModelRegistration && !hasSchema) {
+    validationErrors.push('Model registration schema is required for Model Serving deployments');
   }
 
   // Target-specific: endpoint_name recommended for model_serving
@@ -1244,16 +1248,22 @@ export default function AppConfigSection() {
       };
     }
 
+    // registered_model is optional in dao-ai 0.1.55 for `deployment_target: apps`.
+    // Only emit it when the user actually filled in a model name.
+    const registeredModel = formData.modelName.trim()
+      ? {
+          name: formData.modelName,
+          ...(selectedSchema && { schema: selectedSchema }),
+        }
+      : undefined;
+
     updateApp({
       name: formData.name,
       description: formData.description || undefined,
       log_level: formData.logLevel as LogLevel,
       endpoint_name: formData.endpointName || undefined,
       service_principal: formData.servicePrincipalRef ? `*${formData.servicePrincipalRef}` : undefined,
-      registered_model: {
-        name: formData.modelName,
-        ...(selectedSchema && { schema: selectedSchema }),
-      },
+      ...(registeredModel && { registered_model: registeredModel }),
       trace_location: traceLocation,
       monitoring,
       workload_size: formData.workloadSize as 'Small' | 'Medium' | 'Large',

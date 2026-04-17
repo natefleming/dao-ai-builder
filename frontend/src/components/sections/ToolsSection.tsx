@@ -1,5 +1,5 @@
 import { useState, ChangeEvent } from 'react';
-import { Plus, Trash2, Wrench, RefreshCw, Database, MessageSquare, Search, Clock, Bot, Link2, UserCheck, ChevronDown, ChevronUp, Pencil, Mail, Table2, Timer, Calculator, Code, BarChart3, Users } from 'lucide-react';
+import { Plus, Trash2, Wrench, RefreshCw, Database, MessageSquare, Search, Clock, Bot, Link2, UserCheck, ChevronDown, ChevronUp, Pencil, Mail, Table2, Timer, Calculator, Code, BarChart3, Users, Globe, Cloud, Network, Info, Brain } from 'lucide-react';
 import { useConfigStore } from '@/stores/configStore';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
@@ -8,13 +8,21 @@ import Textarea from '../ui/Textarea';
 import Card from '../ui/Card';
 import Modal from '../ui/Modal';
 import Badge from '../ui/Badge';
-import { ToolFunctionModel, McpFunctionModel, HumanInTheLoopModel, UnityCatalogFunctionModel } from '@/types/dao-ai-types';
+import {
+  ToolFunctionModel,
+  McpFunctionModel,
+  HumanInTheLoopModel,
+  UnityCatalogFunctionModel,
+  A2AAuthType,
+  VertexAuthType,
+  VegaChartType,
+} from '@/types/dao-ai-types';
 import { CatalogSelect, SchemaSelect, GenieSpaceSelect, VectorSearchEndpointSelect, UCConnectionSelect, DatabricksAppSelect } from '../ui/DatabricksSelect';
 import { useFunctions, useVectorSearchIndexes, useConnectionStatus, useGenieSpaces } from '@/hooks/useDatabricks';
 import { normalizeRefNameWhileTyping } from '@/utils/name-utils';
 import { safeDelete } from '@/utils/safe-delete';
 import { useYamlScrollStore } from '@/stores/yamlScrollStore';
-import { getYamlReferences } from '@/utils/yaml-references';
+import { findOriginalReferenceForPath } from '@/utils/yaml-references';
 
 // Resource source toggle type
 type ResourceSource = 'configured' | 'select';
@@ -235,125 +243,264 @@ const TOOL_TYPES = [
   { value: 'mcp', label: 'MCP Server' },
 ];
 
-// Factory tools available in dao_ai.tools
-const FACTORY_TOOLS = [
-  { 
-    value: 'dao_ai.tools.create_genie_tool', 
+// Tool picker categories. Keep `custom` last.
+type FactoryToolCategory =
+  | 'data'
+  | 'communication'
+  | 'agents'
+  | 'external'
+  | 'memory'
+  | 'visualization'
+  | 'custom';
+
+type PythonToolCategory = 'time' | 'custom';
+
+interface FactoryToolDef {
+  value: string;
+  label: string;
+  description: string;
+  icon: typeof Wrench;
+  category: FactoryToolCategory;
+}
+
+interface PythonToolDef {
+  value: string;
+  label: string;
+  description: string;
+  icon: typeof Wrench;
+  category: PythonToolCategory;
+}
+
+const FACTORY_CATEGORY_ORDER: FactoryToolCategory[] = [
+  'data',
+  'communication',
+  'agents',
+  'external',
+  'memory',
+  'visualization',
+  'custom',
+];
+
+const FACTORY_CATEGORY_LABELS: Record<FactoryToolCategory, string> = {
+  data: 'Data & Analytics',
+  communication: 'Communication',
+  agents: 'Agent Integrations',
+  external: 'External APIs',
+  memory: 'Memory',
+  visualization: 'Visualization',
+  custom: 'Custom',
+};
+
+const PYTHON_CATEGORY_ORDER: PythonToolCategory[] = ['time', 'custom'];
+
+const PYTHON_CATEGORY_LABELS: Record<PythonToolCategory, string> = {
+  time: 'Time & Date',
+  custom: 'Custom',
+};
+
+// Factory tools available in dao_ai.tools (dao-ai 0.1.55+)
+const FACTORY_TOOLS: FactoryToolDef[] = [
+  // -------------------- Data & Analytics --------------------
+  {
+    value: 'dao_ai.tools.create_genie_tool',
     label: 'Genie Tool (Simple)',
     description: 'Simple Genie query tool with no caching',
     icon: MessageSquare,
+    category: 'data',
   },
-  { 
-    value: 'dao_ai.tools.create_genie_toolkit', 
+  {
+    value: 'dao_ai.tools.create_genie_toolkit',
     label: 'Genie Toolkit',
     description: 'Genie query + feedback tools with caching and circuit breaker',
     icon: MessageSquare,
+    category: 'data',
   },
-  { 
-    value: 'dao_ai.tools.create_vector_search_tool', 
+  {
+    value: 'dao_ai.tools.create_vector_search_tool',
     label: 'Vector Search Tool',
     description: 'Semantic search over documents using vector embeddings',
     icon: Search,
+    category: 'data',
   },
-  { 
-    value: 'dao_ai.tools.create_search_tool', 
-    label: 'Web Search Tool',
-    description: 'Search the web using DuckDuckGo',
-    icon: Search,
-  },
-  { 
-    value: 'dao_ai.tools.create_execute_statement_tool', 
+  {
+    value: 'dao_ai.tools.create_execute_statement_tool',
     label: 'SQL Statement Tool',
     description: 'Execute a pre-configured SQL statement against a warehouse',
     icon: Table2,
+    category: 'data',
   },
-  { 
-    value: 'dao_ai.tools.create_send_email_tool', 
+
+  // -------------------- Communication --------------------
+  {
+    value: 'dao_ai.tools.create_send_email_tool',
     label: 'Email Tool',
     description: 'Send emails via SMTP',
     icon: Mail,
+    category: 'communication',
   },
-  { 
-    value: 'dao_ai.tools.create_send_slack_message_tool', 
+  {
+    value: 'dao_ai.tools.create_send_slack_message_tool',
     label: 'Slack Message Tool',
     description: 'Send messages to Slack channels',
     icon: MessageSquare,
+    category: 'communication',
   },
-  { 
-    value: 'dao_ai.tools.create_send_teams_message_tool', 
+  {
+    value: 'dao_ai.tools.create_send_teams_message_tool',
     label: 'Microsoft Teams Message Tool',
     description: 'Send messages to Microsoft Teams channels via Graph API',
     icon: Users,
+    category: 'communication',
   },
-  { 
-    value: 'dao_ai.tools.create_agent_endpoint_tool', 
+
+  // -------------------- Agent Integrations --------------------
+  {
+    value: 'dao_ai.tools.create_agent_endpoint_tool',
     label: 'Agent Endpoint Tool',
-    description: 'Call another deployed agent endpoint',
+    description: 'Call another deployed Databricks agent endpoint',
     icon: Bot,
+    category: 'agents',
   },
-  { 
-    value: 'dao_ai.tools.create_visualization_tool', 
+  {
+    value: 'dao_ai.tools.create_a2a_agent_tool',
+    label: 'A2A Agent Tool',
+    description: 'Delegate to a remote agent over the Google A2A protocol',
+    icon: Network,
+    category: 'agents',
+  },
+  {
+    value: 'dao_ai.tools.create_vertex_agent_engine_tool',
+    label: 'Vertex Agent Engine Tool',
+    description: 'Call a Google Cloud ADK agent on Vertex AI Agent Engine',
+    icon: Cloud,
+    category: 'agents',
+  },
+  {
+    value: 'dao_ai.tools.create_app_info_tool',
+    label: 'App Info Tool',
+    description: 'Expose app metadata (name, agents, sample prompts) to callers',
+    icon: Info,
+    category: 'agents',
+  },
+
+  // -------------------- External APIs --------------------
+  {
+    value: 'dao_ai.tools.create_rest_api_tool',
+    label: 'REST API Tool',
+    description: 'Make HTTP calls via a UC Connection or plain base_url',
+    icon: Globe,
+    category: 'external',
+  },
+  {
+    value: 'dao_ai.tools.create_search_tool',
+    label: 'Web Search Tool',
+    description: 'Search the web using DuckDuckGo',
+    icon: Search,
+    category: 'external',
+  },
+
+  // -------------------- Memory --------------------
+  {
+    value: 'dao_ai.tools.create_search_memory_tool',
+    label: 'Search Memory',
+    description: 'LangGraph memory search over configured store + namespace',
+    icon: Brain,
+    category: 'memory',
+  },
+  {
+    value: 'dao_ai.tools.create_manage_memory_tool',
+    label: 'Manage Memory',
+    description: 'Create, update, or delete memories in the configured store',
+    icon: Pencil,
+    category: 'memory',
+  },
+  {
+    value: 'dao_ai.tools.create_search_user_profile_tool',
+    label: 'Search User Profile',
+    description: 'Retrieve user profile memories scoped to a namespace',
+    icon: UserCheck,
+    category: 'memory',
+  },
+
+  // -------------------- Visualization --------------------
+  {
+    value: 'dao_ai.tools.create_visualization_tool',
     label: 'Visualization Tool',
     description: 'Generate Vega-Lite chart specs from structured data',
     icon: BarChart3,
+    category: 'visualization',
   },
-  { 
-    value: 'custom', 
+
+  // -------------------- Custom --------------------
+  {
+    value: 'custom',
     label: 'Custom Factory...',
     description: 'Specify a custom factory function path',
     icon: Wrench,
+    category: 'custom',
   },
 ];
 
 // Python tools (decorated with @tool, used directly without factory args)
-const PYTHON_TOOLS = [
-  { 
-    value: 'dao_ai.tools.current_time_tool', 
+const PYTHON_TOOLS: PythonToolDef[] = [
+  // -------------------- Time & Date --------------------
+  {
+    value: 'dao_ai.tools.current_time_tool',
     label: 'Current Time',
     description: 'Get the current date and time',
     icon: Clock,
+    category: 'time',
   },
-  { 
-    value: 'dao_ai.tools.time_in_timezone_tool', 
+  {
+    value: 'dao_ai.tools.time_in_timezone_tool',
     label: 'Time in Timezone',
     description: 'Get time in a specific timezone',
     icon: Clock,
+    category: 'time',
   },
-  { 
-    value: 'dao_ai.tools.add_time_tool', 
+  {
+    value: 'dao_ai.tools.add_time_tool',
     label: 'Add Time',
     description: 'Add days, hours, or minutes to a datetime',
     icon: Timer,
+    category: 'time',
   },
-  { 
-    value: 'dao_ai.tools.time_difference_tool', 
+  {
+    value: 'dao_ai.tools.time_difference_tool',
     label: 'Time Difference',
     description: 'Calculate the difference between two datetimes',
     icon: Calculator,
+    category: 'time',
   },
-  { 
-    value: 'dao_ai.tools.is_business_hours_tool', 
+  {
+    value: 'dao_ai.tools.is_business_hours_tool',
     label: 'Business Hours Check',
     description: 'Check if a time falls within business hours',
     icon: Clock,
+    category: 'time',
   },
-  { 
-    value: 'dao_ai.tools.format_time_tool', 
+  {
+    value: 'dao_ai.tools.format_time_tool',
     label: 'Format Time',
     description: 'Format datetime strings in various formats',
     icon: Clock,
+    category: 'time',
   },
-  { 
-    value: 'dao_ai.tools.time_until_tool', 
+  {
+    value: 'dao_ai.tools.time_until_tool',
     label: 'Time Until',
     description: 'Calculate time remaining until a target datetime',
     icon: Timer,
+    category: 'time',
   },
-  { 
-    value: 'custom', 
+
+  // -------------------- Custom --------------------
+  {
+    value: 'custom',
     label: 'Custom Python Function...',
     description: 'Specify a custom Python function path',
     icon: Wrench,
+    category: 'custom',
   },
 ];
 
@@ -721,8 +868,72 @@ export default function ToolsSection() {
     emailUseTls: true,
     emailToolName: '',
     emailToolDescription: '',
+    // A2A Agent tool (dao_ai.tools.create_a2a_agent_tool)
+    a2aEndpoint: '',
+    a2aEndpointSource: 'manual' as CredentialSource,
+    a2aEndpointVariable: '',
+    a2aAuth: '',
+    a2aAuthSource: 'manual' as CredentialSource,
+    a2aAuthVariable: '',
+    a2aAuthType: 'bearer' as A2AAuthType,
+    a2aStreaming: true,
+    a2aTimeoutSeconds: 300,
+    a2aCardPath: '',
+    a2aCardFallbackPath: '',
+    a2aUserId: '',
+    a2aUserIdSource: 'manual' as CredentialSource,
+    a2aUserIdVariable: '',
+    a2aExtraMetadata: '',
+    a2aToolDescription: '',
+    // Vertex Agent Engine tool (dao_ai.tools.create_vertex_agent_engine_tool)
+    vertexEndpoint: '',
+    vertexEndpointSource: 'manual' as CredentialSource,
+    vertexEndpointVariable: '',
+    vertexCredentials: '',
+    vertexCredentialsSource: 'manual' as CredentialSource,
+    vertexCredentialsVariable: '',
+    vertexAuthType: 'gcp_service_account' as VertexAuthType,
+    vertexUserId: '',
+    vertexUserIdSource: 'manual' as CredentialSource,
+    vertexUserIdVariable: '',
+    vertexClassMethod: 'stream_query',
+    vertexHttpMethod: 'streamQuery',
+    vertexTimeoutSeconds: 300,
+    vertexToolDescription: '',
+    // REST API tool (dao_ai.tools.create_rest_api_tool)
+    restApiMode: 'base_url' as 'connection' | 'base_url',
+    restApiConnectionSource: 'configured' as ResourceSource,
+    restApiConnectionRefName: '',
+    restApiBaseUrl: '',
+    restApiBaseUrlSource: 'manual' as CredentialSource,
+    restApiBaseUrlVariable: '',
+    restApiAuthToken: '',
+    restApiAuthTokenSource: 'manual' as CredentialSource,
+    restApiAuthTokenVariable: '',
+    restApiHeaders: [] as Array<{ id: string; key: string; source: CredentialSource; value: string; variable: string }>,
+    restApiToolDescription: '',
+    // App Info tool (dao_ai.tools.create_app_info_tool)
+    appInfoAppName: '',
+    appInfoDescription: '',
+    appInfoAgents: [] as Array<{ id: string; name: string; description: string }>,
+    appInfoSamplePrompts: [] as string[],
+    // Memory tools share a single namespace config
+    memoryNamespace: [] as string[],
+    // Execute statement tool (dao_ai.tools.create_execute_statement_tool)
+    sqlWarehouseSource: 'configured' as ResourceSource,
+    sqlWarehouseRefName: '',
+    sqlWarehouseId: '',
+    sqlStatement: '',
+    sqlToolDescription: '',
+    // Visualization tool (dao_ai.tools.create_visualization_tool)
+    vizDefaultChartType: 'bar' as VegaChartType,
+    vizWidthIsContainer: true,
+    vizWidth: 600,
+    vizHeight: 400,
+    vizColorScheme: 'tableau10',
+    vizToolDescription: '',
   });
-  
+
   const [mcpForm, setMcpForm] = useState<MCPFormData>(defaultMCPFormData);
   const [hitlForm, setHitlForm] = useState<HITLFormData>(defaultHITLFormData);
   const [showHitlConfig, setShowHitlConfig] = useState(false);
@@ -793,30 +1004,6 @@ export default function ToolsSection() {
     for (const [key, db] of Object.entries(configuredDatabases)) {
       if (database.name && db.name === database.name) return key;
     }
-    return null;
-  };
-
-  // Helper to find the original reference name for a path using YAML references
-  const findOriginalReferenceForPath = (path: string): string | null => {
-    const refs = getYamlReferences();
-    if (!refs) return null;
-    
-    // Normalize path for comparison
-    const normalizedPath = path.toLowerCase().replace(/-/g, '_');
-    
-    // Check aliasUsage to see if this path had a reference
-    for (const [anchorName, usagePaths] of Object.entries(refs.aliasUsage)) {
-      for (const usagePath of usagePaths) {
-        const normalizedUsagePath = usagePath.toLowerCase().replace(/-/g, '_');
-        // Check for exact match or suffix match
-        if (normalizedPath === normalizedUsagePath || 
-            normalizedPath.endsWith(normalizedUsagePath) ||
-            normalizedUsagePath.endsWith(normalizedPath)) {
-          return anchorName;
-        }
-      }
-    }
-    
     return null;
   };
 
@@ -1293,40 +1480,45 @@ export default function ToolsSection() {
         parsedArgs = agentArgs;
       } else if (formData.functionName === 'dao_ai.tools.create_send_email_tool') {
         // Email tool configuration with SMTP config
+        // NOTE: smtp_config is a sub-object inside factory args. factory args go
+        // through processObjectWithReferences which passes strings through
+        // unchanged, so raw "*name" strings would be quoted by js-yaml on dump.
+        // Emit __REF__<name> markers instead; convertReferencesToAliases will
+        // strip them into unquoted aliases in the final YAML.
         const smtpConfig: Record<string, unknown> = {};
-        
+
         // Host - manual or variable
         if (formData.emailHostSource === 'variable' && formData.emailHostVariable) {
-          smtpConfig.host = `*${formData.emailHostVariable}`;
+          smtpConfig.host = `__REF__${formData.emailHostVariable}`;
         } else {
           smtpConfig.host = formData.emailHost;
         }
-        
+
         // Port - manual or variable
         if (formData.emailPortSource === 'variable' && formData.emailPortVariable) {
-          smtpConfig.port = `*${formData.emailPortVariable}`;
+          smtpConfig.port = `__REF__${formData.emailPortVariable}`;
         } else {
           smtpConfig.port = parseInt(formData.emailPort) || 587;
         }
-        
+
         // Username - manual or variable
         if (formData.emailUsernameSource === 'variable' && formData.emailUsernameVariable) {
-          smtpConfig.username = `*${formData.emailUsernameVariable}`;
+          smtpConfig.username = `__REF__${formData.emailUsernameVariable}`;
         } else {
           smtpConfig.username = formData.emailUsername;
         }
-        
+
         // Password - manual or variable
         if (formData.emailPasswordSource === 'variable' && formData.emailPasswordVariable) {
-          smtpConfig.password = `*${formData.emailPasswordVariable}`;
+          smtpConfig.password = `__REF__${formData.emailPasswordVariable}`;
         } else {
           smtpConfig.password = formData.emailPassword;
         }
-        
+
         // Sender email (optional) - manual or variable
         if (formData.emailSenderEmail || formData.emailSenderEmailVariable) {
           if (formData.emailSenderEmailSource === 'variable' && formData.emailSenderEmailVariable) {
-            smtpConfig.sender_email = `*${formData.emailSenderEmailVariable}`;
+            smtpConfig.sender_email = `__REF__${formData.emailSenderEmailVariable}`;
           } else if (formData.emailSenderEmail) {
             smtpConfig.sender_email = formData.emailSenderEmail;
           }
@@ -1340,6 +1532,166 @@ export default function ToolsSection() {
           ...(formData.emailToolName && { name: formData.emailToolName }),
           ...(formData.emailToolDescription && { description: formData.emailToolDescription }),
         };
+      } else if (formData.functionName === 'dao_ai.tools.create_a2a_agent_tool') {
+        const a2aArgs: Record<string, unknown> = {
+          name: formData.name,
+          ...(formData.a2aToolDescription && { description: formData.a2aToolDescription }),
+        };
+        a2aArgs.endpoint =
+          formData.a2aEndpointSource === 'variable' && formData.a2aEndpointVariable
+            ? `__REF__${formData.a2aEndpointVariable}`
+            : formData.a2aEndpoint;
+        a2aArgs.auth_type = formData.a2aAuthType;
+        if (formData.a2aAuthType !== 'none') {
+          const authValue =
+            formData.a2aAuthSource === 'variable' && formData.a2aAuthVariable
+              ? `__REF__${formData.a2aAuthVariable}`
+              : formData.a2aAuth;
+          if (authValue) a2aArgs.auth = authValue;
+        }
+        a2aArgs.streaming = formData.a2aStreaming;
+        if (formData.a2aTimeoutSeconds !== 300) {
+          a2aArgs.timeout_seconds = formData.a2aTimeoutSeconds;
+        }
+        if (formData.a2aCardPath) a2aArgs.card_path = formData.a2aCardPath;
+        if (formData.a2aCardFallbackPath) a2aArgs.card_fallback_path = formData.a2aCardFallbackPath;
+        if (formData.a2aUserIdSource === 'variable' && formData.a2aUserIdVariable) {
+          a2aArgs.user_id = `__REF__${formData.a2aUserIdVariable}`;
+        } else if (formData.a2aUserId) {
+          a2aArgs.user_id = formData.a2aUserId;
+        }
+        if (formData.a2aExtraMetadata.trim()) {
+          try {
+            a2aArgs.extra_metadata = JSON.parse(formData.a2aExtraMetadata);
+          } catch {
+            // ignore invalid JSON
+          }
+        }
+        parsedArgs = a2aArgs;
+      } else if (formData.functionName === 'dao_ai.tools.create_vertex_agent_engine_tool') {
+        const vertexArgs: Record<string, unknown> = {
+          name: formData.name,
+          ...(formData.vertexToolDescription && { description: formData.vertexToolDescription }),
+        };
+        vertexArgs.endpoint =
+          formData.vertexEndpointSource === 'variable' && formData.vertexEndpointVariable
+            ? `__REF__${formData.vertexEndpointVariable}`
+            : formData.vertexEndpoint;
+        vertexArgs.auth_type = formData.vertexAuthType;
+        if (formData.vertexAuthType !== 'adc') {
+          const credsValue =
+            formData.vertexCredentialsSource === 'variable' && formData.vertexCredentialsVariable
+              ? `__REF__${formData.vertexCredentialsVariable}`
+              : formData.vertexCredentials;
+          if (credsValue) vertexArgs.credentials = credsValue;
+        }
+        if (formData.vertexUserIdSource === 'variable' && formData.vertexUserIdVariable) {
+          vertexArgs.user_id = `__REF__${formData.vertexUserIdVariable}`;
+        } else if (formData.vertexUserId) {
+          vertexArgs.user_id = formData.vertexUserId;
+        }
+        if (formData.vertexClassMethod && formData.vertexClassMethod !== 'stream_query') {
+          vertexArgs.class_method = formData.vertexClassMethod;
+        }
+        if (formData.vertexHttpMethod && formData.vertexHttpMethod !== 'streamQuery') {
+          vertexArgs.http_method = formData.vertexHttpMethod;
+        }
+        if (formData.vertexTimeoutSeconds !== 300) {
+          vertexArgs.timeout_seconds = formData.vertexTimeoutSeconds;
+        }
+        parsedArgs = vertexArgs;
+      } else if (formData.functionName === 'dao_ai.tools.create_rest_api_tool') {
+        const restArgs: Record<string, unknown> = {
+          name: formData.name,
+          ...(formData.restApiToolDescription && { description: formData.restApiToolDescription }),
+        };
+        if (formData.restApiMode === 'connection') {
+          if (formData.restApiConnectionSource === 'configured' && formData.restApiConnectionRefName) {
+            restArgs.connection = `__REF__${formData.restApiConnectionRefName}`;
+          }
+        } else {
+          restArgs.base_url =
+            formData.restApiBaseUrlSource === 'variable' && formData.restApiBaseUrlVariable
+              ? `__REF__${formData.restApiBaseUrlVariable}`
+              : formData.restApiBaseUrl;
+          if (formData.restApiAuthToken || formData.restApiAuthTokenVariable) {
+            restArgs.auth_token =
+              formData.restApiAuthTokenSource === 'variable' && formData.restApiAuthTokenVariable
+                ? `__REF__${formData.restApiAuthTokenVariable}`
+                : formData.restApiAuthToken;
+          }
+        }
+        const headers: Record<string, unknown> = {};
+        for (const h of formData.restApiHeaders) {
+          if (!h.key) continue;
+          if (h.source === 'variable' && h.variable) {
+            headers[h.key] = `__REF__${h.variable}`;
+          } else if (h.value) {
+            headers[h.key] = h.value;
+          }
+        }
+        if (Object.keys(headers).length > 0) {
+          restArgs.default_headers = headers;
+        }
+        parsedArgs = restArgs;
+      } else if (formData.functionName === 'dao_ai.tools.create_app_info_tool') {
+        parsedArgs = {
+          app_name: formData.appInfoAppName,
+          description: formData.appInfoDescription,
+          agents: formData.appInfoAgents
+            .filter((a) => a.name.trim())
+            .map((a) => ({
+              name: a.name.trim(),
+              ...(a.description.trim() && { description: a.description.trim() }),
+            })),
+          ...(formData.appInfoSamplePrompts.filter((p) => p.trim()).length > 0 && {
+            sample_prompts: formData.appInfoSamplePrompts.filter((p) => p.trim()),
+          }),
+        };
+      } else if (
+        formData.functionName === 'dao_ai.tools.create_search_memory_tool' ||
+        formData.functionName === 'dao_ai.tools.create_manage_memory_tool' ||
+        formData.functionName === 'dao_ai.tools.create_search_user_profile_tool'
+      ) {
+        parsedArgs = {
+          namespace: formData.memoryNamespace.filter((p) => p.trim()),
+        };
+      } else if (formData.functionName === 'dao_ai.tools.create_execute_statement_tool') {
+        const sqlArgs: Record<string, unknown> = {
+          name: formData.name,
+          statement: formData.sqlStatement,
+          ...(formData.sqlToolDescription && { description: formData.sqlToolDescription }),
+        };
+        if (formData.sqlWarehouseSource === 'configured' && formData.sqlWarehouseRefName) {
+          sqlArgs.warehouse = `__REF__${formData.sqlWarehouseRefName}`;
+        } else if (formData.sqlWarehouseId) {
+          sqlArgs.warehouse = {
+            name: 'sql_tool_warehouse',
+            warehouse_id: formData.sqlWarehouseId,
+          };
+        }
+        parsedArgs = sqlArgs;
+      } else if (formData.functionName === 'dao_ai.tools.create_visualization_tool') {
+        const vizArgs: Record<string, unknown> = {
+          name: formData.name,
+          ...(formData.vizToolDescription && { description: formData.vizToolDescription }),
+        };
+        if (formData.vizDefaultChartType !== 'bar') {
+          vizArgs.default_chart_type = formData.vizDefaultChartType;
+        }
+        if (!formData.vizWidthIsContainer) {
+          vizArgs.width = formData.vizWidth;
+        }
+        if (formData.vizHeight !== 400) {
+          vizArgs.height = formData.vizHeight;
+        }
+        if (formData.vizColorScheme && formData.vizColorScheme !== 'tableau10') {
+          vizArgs.color_scheme = formData.vizColorScheme;
+        }
+        parsedArgs = vizArgs;
+      } else if (formData.functionName === 'dao_ai.tools.create_search_tool') {
+        // Web search factory takes no args; keep empty object.
+        parsedArgs = {};
       } else {
         try {
           parsedArgs = JSON.parse(formData.args || '{}');
@@ -1582,6 +1934,70 @@ export default function ToolsSection() {
       emailUseTls: true,
       emailToolName: '',
       emailToolDescription: '',
+      // A2A Agent tool
+      a2aEndpoint: '',
+      a2aEndpointSource: 'manual',
+      a2aEndpointVariable: '',
+      a2aAuth: '',
+      a2aAuthSource: 'manual',
+      a2aAuthVariable: '',
+      a2aAuthType: 'bearer',
+      a2aStreaming: true,
+      a2aTimeoutSeconds: 300,
+      a2aCardPath: '',
+      a2aCardFallbackPath: '',
+      a2aUserId: '',
+      a2aUserIdSource: 'manual',
+      a2aUserIdVariable: '',
+      a2aExtraMetadata: '',
+      a2aToolDescription: '',
+      // Vertex Agent Engine tool
+      vertexEndpoint: '',
+      vertexEndpointSource: 'manual',
+      vertexEndpointVariable: '',
+      vertexCredentials: '',
+      vertexCredentialsSource: 'manual',
+      vertexCredentialsVariable: '',
+      vertexAuthType: 'gcp_service_account',
+      vertexUserId: '',
+      vertexUserIdSource: 'manual',
+      vertexUserIdVariable: '',
+      vertexClassMethod: 'stream_query',
+      vertexHttpMethod: 'streamQuery',
+      vertexTimeoutSeconds: 300,
+      vertexToolDescription: '',
+      // REST API tool
+      restApiMode: 'base_url',
+      restApiConnectionSource: 'configured',
+      restApiConnectionRefName: '',
+      restApiBaseUrl: '',
+      restApiBaseUrlSource: 'manual',
+      restApiBaseUrlVariable: '',
+      restApiAuthToken: '',
+      restApiAuthTokenSource: 'manual',
+      restApiAuthTokenVariable: '',
+      restApiHeaders: [],
+      restApiToolDescription: '',
+      // App Info tool
+      appInfoAppName: '',
+      appInfoDescription: '',
+      appInfoAgents: [],
+      appInfoSamplePrompts: [],
+      // Memory tools
+      memoryNamespace: [],
+      // Execute statement tool
+      sqlWarehouseSource: 'configured',
+      sqlWarehouseRefName: '',
+      sqlWarehouseId: '',
+      sqlStatement: '',
+      sqlToolDescription: '',
+      // Visualization tool
+      vizDefaultChartType: 'bar',
+      vizWidthIsContainer: true,
+      vizWidth: 600,
+      vizHeight: 400,
+      vizColorScheme: 'tableau10',
+      vizToolDescription: '',
     });
     // Set MCP form defaults with proper source defaults based on configured resources
     const hasConfiguredConnections = Object.keys(configuredConnections).length > 0;
@@ -1808,57 +2224,91 @@ export default function ToolsSection() {
         
         if (args.smtp_config) {
           const smtpConfig = args.smtp_config as Record<string, unknown>;
-          
-          // Parse host
-          if (typeof smtpConfig.host === 'string') {
-            if (smtpConfig.host.startsWith('*')) {
+          const smtpBasePath = `tools.${key}.function.args.smtp_config`;
+
+          // Host
+          {
+            const anchor = findOriginalReferenceForPath(`${smtpBasePath}.host`);
+            if (anchor) {
+              emailHostSource = 'variable';
+              emailHostVariable = anchor;
+            } else if (typeof smtpConfig.host === 'string' && smtpConfig.host.startsWith('*')) {
               emailHostSource = 'variable';
               emailHostVariable = smtpConfig.host.substring(1);
-            } else {
+            } else if (typeof smtpConfig.host === 'string') {
               emailHost = smtpConfig.host;
+            } else if (smtpConfig.host != null) {
+              const display = getVariableDisplayValue(smtpConfig.host);
+              if (display) emailHost = display;
             }
           }
-          
-          // Parse port
-          if (smtpConfig.port) {
-            if (typeof smtpConfig.port === 'string' && smtpConfig.port.startsWith('*')) {
+
+          // Port
+          {
+            const anchor = findOriginalReferenceForPath(`${smtpBasePath}.port`);
+            if (anchor) {
+              emailPortSource = 'variable';
+              emailPortVariable = anchor;
+            } else if (typeof smtpConfig.port === 'string' && smtpConfig.port.startsWith('*')) {
               emailPortSource = 'variable';
               emailPortVariable = smtpConfig.port.substring(1);
-            } else {
-              emailPort = String(smtpConfig.port);
+            } else if (smtpConfig.port != null) {
+              const display = getVariableDisplayValue(smtpConfig.port);
+              emailPort = display || String(smtpConfig.port);
             }
           }
-          
-          // Parse username
-          if (typeof smtpConfig.username === 'string') {
-            if (smtpConfig.username.startsWith('*')) {
+
+          // Username
+          {
+            const anchor = findOriginalReferenceForPath(`${smtpBasePath}.username`);
+            if (anchor) {
+              emailUsernameSource = 'variable';
+              emailUsernameVariable = anchor;
+            } else if (typeof smtpConfig.username === 'string' && smtpConfig.username.startsWith('*')) {
               emailUsernameSource = 'variable';
               emailUsernameVariable = smtpConfig.username.substring(1);
-            } else {
+            } else if (typeof smtpConfig.username === 'string') {
               emailUsername = smtpConfig.username;
+            } else if (smtpConfig.username != null) {
+              const display = getVariableDisplayValue(smtpConfig.username);
+              if (display) emailUsername = display;
             }
           }
-          
-          // Parse password
-          if (typeof smtpConfig.password === 'string') {
-            if (smtpConfig.password.startsWith('*')) {
+
+          // Password
+          {
+            const anchor = findOriginalReferenceForPath(`${smtpBasePath}.password`);
+            if (anchor) {
+              emailPasswordSource = 'variable';
+              emailPasswordVariable = anchor;
+            } else if (typeof smtpConfig.password === 'string' && smtpConfig.password.startsWith('*')) {
               emailPasswordSource = 'variable';
               emailPasswordVariable = smtpConfig.password.substring(1);
-            } else {
+            } else if (typeof smtpConfig.password === 'string') {
               emailPassword = smtpConfig.password;
+            } else if (smtpConfig.password != null) {
+              const display = getVariableDisplayValue(smtpConfig.password);
+              if (display) emailPassword = display;
             }
           }
-          
-          // Parse sender email (optional)
-          if (smtpConfig.sender_email) {
-            if (typeof smtpConfig.sender_email === 'string' && smtpConfig.sender_email.startsWith('*')) {
+
+          // Sender email (optional)
+          if (smtpConfig.sender_email != null) {
+            const anchor = findOriginalReferenceForPath(`${smtpBasePath}.sender_email`);
+            if (anchor) {
+              emailSenderEmailSource = 'variable';
+              emailSenderEmailVariable = anchor;
+            } else if (typeof smtpConfig.sender_email === 'string' && smtpConfig.sender_email.startsWith('*')) {
               emailSenderEmailSource = 'variable';
               emailSenderEmailVariable = smtpConfig.sender_email.substring(1);
+            } else if (typeof smtpConfig.sender_email === 'string') {
+              emailSenderEmail = smtpConfig.sender_email;
             } else {
-              emailSenderEmail = String(smtpConfig.sender_email);
+              const display = getVariableDisplayValue(smtpConfig.sender_email);
+              if (display) emailSenderEmail = display;
             }
           }
-          
+
           // Parse use_tls
           if (typeof smtpConfig.use_tls === 'boolean') {
             emailUseTls = smtpConfig.use_tls;
@@ -2182,6 +2632,331 @@ export default function ToolsSection() {
           ? args.max_consecutive_cache_hits
           : 3;
 
+        // ------------------------------------------------------------------
+        // Extract args for the first-class factory tools added in 0.1.55+
+        // ------------------------------------------------------------------
+        // A2A Agent tool
+        let a2aEndpoint = '';
+        let a2aEndpointSource: CredentialSource = 'manual';
+        let a2aEndpointVariable = '';
+        let a2aAuth = '';
+        let a2aAuthSource: CredentialSource = 'manual';
+        let a2aAuthVariable = '';
+        let a2aAuthType: A2AAuthType = 'bearer';
+        let a2aStreaming = true;
+        let a2aTimeoutSeconds = 300;
+        let a2aCardPath = '';
+        let a2aCardFallbackPath = '';
+        let a2aUserId = '';
+        let a2aUserIdSource: CredentialSource = 'manual';
+        let a2aUserIdVariable = '';
+        let a2aExtraMetadata = '';
+        let a2aToolDescription = '';
+        if (funcName === 'dao_ai.tools.create_a2a_agent_tool') {
+          // endpoint
+          {
+            const anchor = findOriginalReferenceForPath(`tools.${key}.function.args.endpoint`);
+            if (anchor) {
+              a2aEndpointSource = 'variable';
+              a2aEndpointVariable = anchor;
+            } else if (typeof args.endpoint === 'string' && args.endpoint.startsWith('*')) {
+              a2aEndpointSource = 'variable';
+              a2aEndpointVariable = args.endpoint.substring(1);
+            } else if (args.endpoint != null) {
+              const display = getVariableDisplayValue(args.endpoint);
+              a2aEndpoint = display || (typeof args.endpoint === 'string' ? args.endpoint : '');
+            }
+          }
+          if (args.auth_type === 'bearer' || args.auth_type === 'gcp_service_account' || args.auth_type === 'none') {
+            a2aAuthType = args.auth_type;
+          }
+          // auth
+          {
+            const anchor = findOriginalReferenceForPath(`tools.${key}.function.args.auth`);
+            if (anchor) {
+              a2aAuthSource = 'variable';
+              a2aAuthVariable = anchor;
+            } else if (typeof args.auth === 'string' && args.auth.startsWith('*')) {
+              a2aAuthSource = 'variable';
+              a2aAuthVariable = args.auth.substring(1);
+            } else if (args.auth != null) {
+              const display = getVariableDisplayValue(args.auth);
+              a2aAuth = display || (typeof args.auth === 'string' ? args.auth : '');
+            }
+          }
+          if (typeof args.streaming === 'boolean') a2aStreaming = args.streaming;
+          if (typeof args.timeout_seconds === 'number') a2aTimeoutSeconds = args.timeout_seconds;
+          if (typeof args.card_path === 'string') a2aCardPath = args.card_path;
+          if (typeof args.card_fallback_path === 'string') a2aCardFallbackPath = args.card_fallback_path;
+          // user_id
+          {
+            const anchor = findOriginalReferenceForPath(`tools.${key}.function.args.user_id`);
+            if (anchor) {
+              a2aUserIdSource = 'variable';
+              a2aUserIdVariable = anchor;
+            } else if (typeof args.user_id === 'string' && args.user_id.startsWith('*')) {
+              a2aUserIdSource = 'variable';
+              a2aUserIdVariable = args.user_id.substring(1);
+            } else if (args.user_id != null) {
+              const display = getVariableDisplayValue(args.user_id);
+              a2aUserId = display || (typeof args.user_id === 'string' ? args.user_id : '');
+            }
+          }
+          if (args.extra_metadata) {
+            try {
+              a2aExtraMetadata = JSON.stringify(args.extra_metadata, null, 2);
+            } catch {
+              a2aExtraMetadata = '';
+            }
+          }
+          if (typeof args.description === 'string') a2aToolDescription = args.description;
+        }
+
+        // Vertex Agent Engine tool
+        let vertexEndpoint = '';
+        let vertexEndpointSource: CredentialSource = 'manual';
+        let vertexEndpointVariable = '';
+        let vertexCredentials = '';
+        let vertexCredentialsSource: CredentialSource = 'manual';
+        let vertexCredentialsVariable = '';
+        let vertexAuthType: VertexAuthType = 'gcp_service_account';
+        let vertexUserId = '';
+        let vertexUserIdSource: CredentialSource = 'manual';
+        let vertexUserIdVariable = '';
+        let vertexClassMethod = 'stream_query';
+        let vertexHttpMethod = 'streamQuery';
+        let vertexTimeoutSeconds = 300;
+        let vertexToolDescription = '';
+        if (funcName === 'dao_ai.tools.create_vertex_agent_engine_tool') {
+          // endpoint
+          {
+            const anchor = findOriginalReferenceForPath(`tools.${key}.function.args.endpoint`);
+            if (anchor) {
+              vertexEndpointSource = 'variable';
+              vertexEndpointVariable = anchor;
+            } else if (typeof args.endpoint === 'string' && args.endpoint.startsWith('*')) {
+              vertexEndpointSource = 'variable';
+              vertexEndpointVariable = args.endpoint.substring(1);
+            } else if (args.endpoint != null) {
+              const display = getVariableDisplayValue(args.endpoint);
+              vertexEndpoint = display || (typeof args.endpoint === 'string' ? args.endpoint : '');
+            }
+          }
+          if (args.auth_type === 'gcp_service_account' || args.auth_type === 'bearer' || args.auth_type === 'adc') {
+            vertexAuthType = args.auth_type;
+          }
+          // credentials
+          {
+            const anchor = findOriginalReferenceForPath(`tools.${key}.function.args.credentials`);
+            if (anchor) {
+              vertexCredentialsSource = 'variable';
+              vertexCredentialsVariable = anchor;
+            } else if (typeof args.credentials === 'string' && args.credentials.startsWith('*')) {
+              vertexCredentialsSource = 'variable';
+              vertexCredentialsVariable = args.credentials.substring(1);
+            } else if (args.credentials != null) {
+              const display = getVariableDisplayValue(args.credentials);
+              vertexCredentials = display || (typeof args.credentials === 'string' ? args.credentials : '');
+            }
+          }
+          // user_id
+          {
+            const anchor = findOriginalReferenceForPath(`tools.${key}.function.args.user_id`);
+            if (anchor) {
+              vertexUserIdSource = 'variable';
+              vertexUserIdVariable = anchor;
+            } else if (typeof args.user_id === 'string' && args.user_id.startsWith('*')) {
+              vertexUserIdSource = 'variable';
+              vertexUserIdVariable = args.user_id.substring(1);
+            } else if (args.user_id != null) {
+              const display = getVariableDisplayValue(args.user_id);
+              vertexUserId = display || (typeof args.user_id === 'string' ? args.user_id : '');
+            }
+          }
+          if (typeof args.class_method === 'string') vertexClassMethod = args.class_method;
+          if (typeof args.http_method === 'string') vertexHttpMethod = args.http_method;
+          if (typeof args.timeout_seconds === 'number') vertexTimeoutSeconds = args.timeout_seconds;
+          if (typeof args.description === 'string') vertexToolDescription = args.description;
+        }
+
+        // REST API tool
+        let restApiMode: 'connection' | 'base_url' = 'base_url';
+        let restApiConnectionSource: ResourceSource = 'configured';
+        let restApiConnectionRefName = '';
+        let restApiBaseUrl = '';
+        let restApiBaseUrlSource: CredentialSource = 'manual';
+        let restApiBaseUrlVariable = '';
+        let restApiAuthToken = '';
+        let restApiAuthTokenSource: CredentialSource = 'manual';
+        let restApiAuthTokenVariable = '';
+        let restApiHeaders: Array<{ id: string; key: string; source: CredentialSource; value: string; variable: string }> = [];
+        let restApiToolDescription = '';
+        if (funcName === 'dao_ai.tools.create_rest_api_tool') {
+          // Connection is detected first — UC Connection mode is driven by the presence of args.connection.
+          const connectionAnchor = findOriginalReferenceForPath(`tools.${key}.function.args.connection`);
+          if (args.connection || connectionAnchor) {
+            restApiMode = 'connection';
+            if (connectionAnchor) {
+              restApiConnectionRefName = connectionAnchor;
+              restApiConnectionSource = 'configured';
+            } else if (typeof args.connection === 'string' && args.connection.startsWith('__REF__')) {
+              restApiConnectionRefName = args.connection.replace('__REF__', '');
+              restApiConnectionSource = 'configured';
+            } else if (typeof args.connection === 'object' && args.connection !== null) {
+              const matchingKey = findConfiguredConnection(args.connection as { name?: string });
+              if (matchingKey) {
+                restApiConnectionRefName = matchingKey;
+                restApiConnectionSource = 'configured';
+              } else {
+                restApiConnectionSource = 'select';
+              }
+            }
+          } else {
+            restApiMode = 'base_url';
+            // base_url
+            {
+              const anchor = findOriginalReferenceForPath(`tools.${key}.function.args.base_url`);
+              if (anchor) {
+                restApiBaseUrlSource = 'variable';
+                restApiBaseUrlVariable = anchor;
+              } else if (typeof args.base_url === 'string' && args.base_url.startsWith('*')) {
+                restApiBaseUrlSource = 'variable';
+                restApiBaseUrlVariable = args.base_url.substring(1);
+              } else if (args.base_url != null) {
+                const display = getVariableDisplayValue(args.base_url);
+                restApiBaseUrl = display || (typeof args.base_url === 'string' ? args.base_url : '');
+              }
+            }
+            // auth_token
+            {
+              const anchor = findOriginalReferenceForPath(`tools.${key}.function.args.auth_token`);
+              if (anchor) {
+                restApiAuthTokenSource = 'variable';
+                restApiAuthTokenVariable = anchor;
+              } else if (typeof args.auth_token === 'string' && args.auth_token.startsWith('*')) {
+                restApiAuthTokenSource = 'variable';
+                restApiAuthTokenVariable = args.auth_token.substring(1);
+              } else if (args.auth_token != null) {
+                const display = getVariableDisplayValue(args.auth_token);
+                restApiAuthToken = display || (typeof args.auth_token === 'string' ? args.auth_token : '');
+              }
+            }
+          }
+          if (args.default_headers && typeof args.default_headers === 'object') {
+            const headers = args.default_headers as Record<string, unknown>;
+            restApiHeaders = Object.entries(headers).map(([k, v], i) => {
+              const entry = {
+                id: `${Date.now()}-${i}`,
+                key: k,
+                source: 'manual' as CredentialSource,
+                value: '',
+                variable: '',
+              };
+              const anchor = findOriginalReferenceForPath(`tools.${key}.function.args.default_headers.${k}`);
+              if (anchor) {
+                entry.source = 'variable';
+                entry.variable = anchor;
+              } else if (typeof v === 'string' && v.startsWith('*')) {
+                entry.source = 'variable';
+                entry.variable = v.substring(1);
+              } else if (v != null) {
+                const display = getVariableDisplayValue(v);
+                entry.value = display || (typeof v === 'string' ? v : '');
+              }
+              return entry;
+            });
+          }
+          if (typeof args.description === 'string') restApiToolDescription = args.description;
+        }
+
+        // App Info tool
+        let appInfoAppName = '';
+        let appInfoDescription = '';
+        let appInfoAgents: Array<{ id: string; name: string; description: string }> = [];
+        let appInfoSamplePrompts: string[] = [];
+        if (funcName === 'dao_ai.tools.create_app_info_tool') {
+          if (typeof args.app_name === 'string') appInfoAppName = args.app_name;
+          if (typeof args.description === 'string') appInfoDescription = args.description;
+          if (Array.isArray(args.agents)) {
+            appInfoAgents = (args.agents as Array<{ name?: string; description?: string }>).map((a, i) => ({
+              id: `${Date.now()}-${i}`,
+              name: a.name || '',
+              description: a.description || '',
+            }));
+          }
+          if (Array.isArray(args.sample_prompts)) {
+            appInfoSamplePrompts = (args.sample_prompts as unknown[]).map((p) => String(p));
+          }
+        }
+
+        // Memory tools (all three share namespace)
+        let memoryNamespace: string[] = [];
+        if (
+          funcName === 'dao_ai.tools.create_search_memory_tool' ||
+          funcName === 'dao_ai.tools.create_manage_memory_tool' ||
+          funcName === 'dao_ai.tools.create_search_user_profile_tool'
+        ) {
+          if (Array.isArray(args.namespace)) {
+            memoryNamespace = (args.namespace as unknown[]).map((p) => String(p));
+          }
+        }
+
+        // Execute statement tool
+        let sqlWarehouseSource: ResourceSource = 'configured';
+        let sqlWarehouseRefName = '';
+        let sqlWarehouseId = '';
+        let sqlStatement = '';
+        let sqlToolDescription = '';
+        if (funcName === 'dao_ai.tools.create_execute_statement_tool') {
+          if (args.warehouse) {
+            if (typeof args.warehouse === 'string' && args.warehouse.startsWith('__REF__')) {
+              sqlWarehouseRefName = args.warehouse.replace('__REF__', '');
+              sqlWarehouseSource = 'configured';
+            } else if (typeof args.warehouse === 'object' && args.warehouse !== null) {
+              const wh = args.warehouse as { warehouse_id?: unknown };
+              const matchingKey = findConfiguredWarehouse(wh);
+              if (matchingKey) {
+                sqlWarehouseRefName = matchingKey;
+                sqlWarehouseSource = 'configured';
+              } else {
+                sqlWarehouseId = getVariableDisplayValue(wh.warehouse_id);
+                sqlWarehouseSource = 'select';
+              }
+            }
+          }
+          if (typeof args.statement === 'string') sqlStatement = args.statement;
+          if (typeof args.description === 'string') sqlToolDescription = args.description;
+        }
+
+        // Visualization tool
+        let vizDefaultChartType: VegaChartType = 'bar';
+        let vizWidthIsContainer = true;
+        let vizWidth = 600;
+        let vizHeight = 400;
+        let vizColorScheme = 'tableau10';
+        let vizToolDescription = '';
+        if (funcName === 'dao_ai.tools.create_visualization_tool') {
+          if (
+            args.default_chart_type === 'bar' ||
+            args.default_chart_type === 'line' ||
+            args.default_chart_type === 'scatter' ||
+            args.default_chart_type === 'area' ||
+            args.default_chart_type === 'arc' ||
+            args.default_chart_type === 'heatmap'
+          ) {
+            vizDefaultChartType = args.default_chart_type;
+          }
+          if (args.width === 'container' || args.width == null) {
+            vizWidthIsContainer = true;
+          } else if (typeof args.width === 'number') {
+            vizWidthIsContainer = false;
+            vizWidth = args.width;
+          }
+          if (typeof args.height === 'number') vizHeight = args.height;
+          if (typeof args.color_scheme === 'string') vizColorScheme = args.color_scheme;
+          if (typeof args.description === 'string') vizToolDescription = args.description;
+        }
+
         setFormData(prev => ({
           ...prev,
           refName: key, // YAML key (reference name)
@@ -2295,6 +3070,70 @@ export default function ToolsSection() {
           emailUseTls,
           emailToolName,
           emailToolDescription,
+          // A2A
+          a2aEndpoint,
+          a2aEndpointSource,
+          a2aEndpointVariable,
+          a2aAuth,
+          a2aAuthSource,
+          a2aAuthVariable,
+          a2aAuthType,
+          a2aStreaming,
+          a2aTimeoutSeconds,
+          a2aCardPath,
+          a2aCardFallbackPath,
+          a2aUserId,
+          a2aUserIdSource,
+          a2aUserIdVariable,
+          a2aExtraMetadata,
+          a2aToolDescription,
+          // Vertex
+          vertexEndpoint,
+          vertexEndpointSource,
+          vertexEndpointVariable,
+          vertexCredentials,
+          vertexCredentialsSource,
+          vertexCredentialsVariable,
+          vertexAuthType,
+          vertexUserId,
+          vertexUserIdSource,
+          vertexUserIdVariable,
+          vertexClassMethod,
+          vertexHttpMethod,
+          vertexTimeoutSeconds,
+          vertexToolDescription,
+          // REST API
+          restApiMode,
+          restApiConnectionSource,
+          restApiConnectionRefName,
+          restApiBaseUrl,
+          restApiBaseUrlSource,
+          restApiBaseUrlVariable,
+          restApiAuthToken,
+          restApiAuthTokenSource,
+          restApiAuthTokenVariable,
+          restApiHeaders,
+          restApiToolDescription,
+          // App Info
+          appInfoAppName,
+          appInfoDescription,
+          appInfoAgents,
+          appInfoSamplePrompts,
+          // Memory
+          memoryNamespace,
+          // Execute Statement
+          sqlWarehouseSource,
+          sqlWarehouseRefName,
+          sqlWarehouseId,
+          sqlStatement,
+          sqlToolDescription,
+          // Visualization
+          vizDefaultChartType,
+          vizWidthIsContainer,
+          vizWidth,
+          vizHeight,
+          vizColorScheme,
+          vizToolDescription,
         }));
       } else if (funcType === 'python') {
         const funcName = 'name' in func ? func.name : '';
@@ -2429,7 +3268,116 @@ export default function ToolsSection() {
           name: tool.name,
           type: 'mcp',
         }));
-        
+
+        // ------------------------------------------------------------------
+        // Extract auth fields (service_principal / client_id / client_secret /
+        // workspace_host / pat). Each may arrive as:
+        //   - a resolved object (yaml.load() expanded an alias)
+        //   - a "*name" string (shouldn't happen after yaml.load, but safe)
+        //   - a primitive (manual value or variable model)
+        // We consult the YAML anchor map first so imported aliases round-trip.
+        // ------------------------------------------------------------------
+        const mcpBasePath = `tools.${key}.function`;
+        const mcpAuthPatch: Record<string, unknown> = {};
+
+        // service_principal
+        {
+          const anchor = findOriginalReferenceForPath(`${mcpBasePath}.service_principal`);
+          const sp = mcpFunc.service_principal;
+          if (anchor) {
+            mcpAuthPatch.credentialsMode = 'service_principal';
+            mcpAuthPatch.servicePrincipalRef = anchor;
+          } else if (typeof sp === 'string' && sp.startsWith('*')) {
+            mcpAuthPatch.credentialsMode = 'service_principal';
+            mcpAuthPatch.servicePrincipalRef = sp.substring(1);
+          } else if (sp && typeof sp === 'object') {
+            // Inline SP — manual mode with values expanded from the object.
+            mcpAuthPatch.credentialsMode = 'manual';
+          }
+        }
+
+        // client_id
+        {
+          const anchor = findOriginalReferenceForPath(`${mcpBasePath}.client_id`);
+          const v = mcpFunc.client_id;
+          if (anchor) {
+            mcpAuthPatch.credentialsMode = 'manual';
+            mcpAuthPatch.clientIdSource = 'variable';
+            mcpAuthPatch.clientIdVar = anchor;
+          } else if (typeof v === 'string' && v.startsWith('*')) {
+            mcpAuthPatch.credentialsMode = 'manual';
+            mcpAuthPatch.clientIdSource = 'variable';
+            mcpAuthPatch.clientIdVar = v.substring(1);
+          } else if (typeof v === 'string') {
+            mcpAuthPatch.credentialsMode = 'manual';
+            mcpAuthPatch.clientIdSource = 'manual';
+            mcpAuthPatch.clientIdManual = v;
+          } else if (v != null) {
+            const display = getVariableDisplayValue(v);
+            if (display) {
+              mcpAuthPatch.credentialsMode = 'manual';
+              mcpAuthPatch.clientIdSource = 'manual';
+              mcpAuthPatch.clientIdManual = display;
+            }
+          }
+        }
+
+        // client_secret
+        {
+          const anchor = findOriginalReferenceForPath(`${mcpBasePath}.client_secret`);
+          const v = mcpFunc.client_secret;
+          if (anchor) {
+            mcpAuthPatch.credentialsMode = 'manual';
+            mcpAuthPatch.clientSecretSource = 'variable';
+            mcpAuthPatch.clientSecretVar = anchor;
+          } else if (typeof v === 'string' && v.startsWith('*')) {
+            mcpAuthPatch.credentialsMode = 'manual';
+            mcpAuthPatch.clientSecretSource = 'variable';
+            mcpAuthPatch.clientSecretVar = v.substring(1);
+          } else if (typeof v === 'string') {
+            mcpAuthPatch.credentialsMode = 'manual';
+            mcpAuthPatch.clientSecretSource = 'manual';
+            mcpAuthPatch.clientSecretManual = v;
+          } else if (v != null) {
+            const display = getVariableDisplayValue(v);
+            if (display) {
+              mcpAuthPatch.credentialsMode = 'manual';
+              mcpAuthPatch.clientSecretSource = 'manual';
+              mcpAuthPatch.clientSecretManual = display;
+            }
+          }
+        }
+
+        // workspace_host
+        {
+          const anchor = findOriginalReferenceForPath(`${mcpBasePath}.workspace_host`);
+          const v = mcpFunc.workspace_host;
+          if (anchor) {
+            mcpAuthPatch.credentialsMode = 'manual';
+            mcpAuthPatch.workspaceHostSource = 'variable';
+            mcpAuthPatch.workspaceHostVar = anchor;
+          } else if (typeof v === 'string' && v.startsWith('*')) {
+            mcpAuthPatch.credentialsMode = 'manual';
+            mcpAuthPatch.workspaceHostSource = 'variable';
+            mcpAuthPatch.workspaceHostVar = v.substring(1);
+          } else if (typeof v === 'string') {
+            mcpAuthPatch.credentialsMode = 'manual';
+            mcpAuthPatch.workspaceHostSource = 'manual';
+            mcpAuthPatch.workspaceHostManual = v;
+          } else if (v != null) {
+            const display = getVariableDisplayValue(v);
+            if (display) {
+              mcpAuthPatch.credentialsMode = 'manual';
+              mcpAuthPatch.workspaceHostSource = 'manual';
+              mcpAuthPatch.workspaceHostManual = display;
+            }
+          }
+        }
+
+        if (Object.keys(mcpAuthPatch).length > 0) {
+          setMcpForm(prev => ({ ...prev, ...mcpAuthPatch }));
+        }
+
         // Determine source type and set MCP form data accordingly
         if (mcpFunc.connection) {
           // UC Connection source
@@ -2837,44 +3785,55 @@ export default function ToolsSection() {
           {/* Factory Tool Configuration */}
           {formData.type === 'factory' && (
             <>
-              <div className="space-y-2">
+              <div className="space-y-4">
                 <label className="block text-sm font-medium text-slate-300">Factory Function</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {FACTORY_TOOLS.map((tool) => {
-                    const Icon = tool.icon;
-                    const isSelected = formData.functionName === tool.value;
-                    return (
-                      <button
-                        key={tool.value}
-                        type="button"
-                        onClick={() => {
-                          const generatedName = generateToolName(tool.value);
-                          setFormData({ 
-                            ...formData, 
-                            functionName: tool.value,
-                            // Auto-generate tool name if not manually edited
-                            name: nameManuallyEdited ? formData.name : generatedName,
-                            // Auto-generate ref name if not manually edited
-                            refName: refNameManuallyEdited ? formData.refName : generatedName,
-                          });
-                        }}
-                        className={`p-3 rounded-lg border text-left transition-all ${
-                          isSelected
-                            ? 'border-blue-500 bg-blue-500/10'
-                            : 'border-slate-700 hover:border-slate-600 bg-slate-800/50'
-                        }`}
-                      >
-                        <div className="flex items-center space-x-2">
-                          <Icon className={`w-4 h-4 ${isSelected ? 'text-blue-400' : 'text-slate-400'}`} />
-                          <span className={`text-sm font-medium ${isSelected ? 'text-white' : 'text-slate-300'}`}>
-                            {tool.label}
-                          </span>
-                        </div>
-                        <p className="text-xs text-slate-500 mt-1">{tool.description}</p>
-                      </button>
-                    );
-                  })}
-                </div>
+                {FACTORY_CATEGORY_ORDER.map((category) => {
+                  const toolsInCategory = FACTORY_TOOLS.filter((t) => t.category === category);
+                  if (toolsInCategory.length === 0) return null;
+                  return (
+                    <div key={category} className="space-y-2">
+                      <h5 className="text-[11px] uppercase tracking-wider font-semibold text-slate-500 border-b border-slate-800 pb-1">
+                        {FACTORY_CATEGORY_LABELS[category]}
+                      </h5>
+                      <div className="grid grid-cols-2 gap-2">
+                        {toolsInCategory.map((tool) => {
+                          const Icon = tool.icon;
+                          const isSelected = formData.functionName === tool.value;
+                          return (
+                            <button
+                              key={tool.value}
+                              type="button"
+                              onClick={() => {
+                                const generatedName = generateToolName(tool.value);
+                                setFormData({
+                                  ...formData,
+                                  functionName: tool.value,
+                                  // Auto-generate tool name if not manually edited
+                                  name: nameManuallyEdited ? formData.name : generatedName,
+                                  // Auto-generate ref name if not manually edited
+                                  refName: refNameManuallyEdited ? formData.refName : generatedName,
+                                });
+                              }}
+                              className={`p-3 rounded-lg border text-left transition-all ${
+                                isSelected
+                                  ? 'border-blue-500 bg-blue-500/10'
+                                  : 'border-slate-700 hover:border-slate-600 bg-slate-800/50'
+                              }`}
+                            >
+                              <div className="flex items-center space-x-2">
+                                <Icon className={`w-4 h-4 ${isSelected ? 'text-blue-400' : 'text-slate-400'}`} />
+                                <span className={`text-sm font-medium ${isSelected ? 'text-white' : 'text-slate-300'}`}>
+                                  {tool.label}
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-500 mt-1">{tool.description}</p>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
 
               {/* Genie Tool Configuration (simple, no caching) */}
@@ -3969,6 +4928,686 @@ export default function ToolsSection() {
                 </div>
               )}
 
+              {/* A2A Agent Tool Configuration */}
+              {formData.functionName === 'dao_ai.tools.create_a2a_agent_tool' && (
+                <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+                  <h4 className="text-sm font-medium text-slate-300">A2A Agent Tool Configuration</h4>
+                  <p className="text-xs text-slate-500">Delegate prompts to a remote agent over the Google Agent-to-Agent (A2A) protocol.</p>
+
+                  <CredentialInput
+                    label="A2A Endpoint"
+                    manualValue={formData.a2aEndpoint}
+                    onManualChange={(value) => setFormData({ ...formData, a2aEndpoint: value })}
+                    variableValue={formData.a2aEndpointVariable}
+                    onVariableChange={(value) => setFormData({ ...formData, a2aEndpointVariable: value })}
+                    source={formData.a2aEndpointSource}
+                    onSourceChange={(source) => setFormData({ ...formData, a2aEndpointSource: source })}
+                    placeholder="https://my-a2a-agent.example.com"
+                    hint="Base URL of the A2A agent (agent card fetched from /.well-known/agent-card.json)"
+                    variables={variables}
+                    required
+                  />
+
+                  <Select
+                    label="Auth Type"
+                    value={formData.a2aAuthType}
+                    onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, a2aAuthType: e.target.value as A2AAuthType })}
+                    options={[
+                      { value: 'bearer', label: 'Bearer Token' },
+                      { value: 'gcp_service_account', label: 'GCP Service Account' },
+                      { value: 'none', label: 'None (Public Agent)' },
+                    ]}
+                    hint="Authentication mode for the A2A endpoint"
+                  />
+
+                  {formData.a2aAuthType !== 'none' && (
+                    <CredentialInput
+                      label={formData.a2aAuthType === 'gcp_service_account' ? 'GCP Credentials' : 'Bearer Token / API Key'}
+                      manualValue={formData.a2aAuth}
+                      onManualChange={(value) => setFormData({ ...formData, a2aAuth: value })}
+                      variableValue={formData.a2aAuthVariable}
+                      onVariableChange={(value) => setFormData({ ...formData, a2aAuthVariable: value })}
+                      source={formData.a2aAuthSource}
+                      onSourceChange={(source) => setFormData({ ...formData, a2aAuthSource: source })}
+                      placeholder={formData.a2aAuthType === 'gcp_service_account' ? 'Path to service-account JSON or inline JSON' : 'API key or OAuth bearer token'}
+                      hint={formData.a2aAuthType === 'gcp_service_account'
+                        ? 'File path, Databricks Volume path, or inline JSON from a secret scope'
+                        : 'Use a variable reference for secrets'}
+                      variables={variables}
+                      type={formData.a2aAuthType === 'bearer' ? 'password' : 'text'}
+                      required
+                    />
+                  )}
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        id="a2aStreaming"
+                        checked={formData.a2aStreaming}
+                        onChange={(e) => setFormData({ ...formData, a2aStreaming: e.target.checked })}
+                        className="rounded border-slate-600 bg-slate-700 text-purple-500 focus:ring-purple-500"
+                      />
+                      <label htmlFor="a2aStreaming" className="text-sm text-slate-300">Streaming</label>
+                    </div>
+                    <Input
+                      label="Timeout (seconds)"
+                      type="number"
+                      value={String(formData.a2aTimeoutSeconds)}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, a2aTimeoutSeconds: parseInt(e.target.value) || 300 })}
+                      hint="Per-request timeout"
+                    />
+                  </div>
+
+                  <details className="group">
+                    <summary className="text-xs font-medium text-slate-400 cursor-pointer hover:text-slate-200">Advanced options</summary>
+                    <div className="mt-3 space-y-3">
+                      <Input
+                        label="Agent Card Path"
+                        value={formData.a2aCardPath}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, a2aCardPath: e.target.value })}
+                        placeholder="/.well-known/agent-card.json"
+                        hint="Override the default agent-card endpoint"
+                      />
+                      <Input
+                        label="Agent Card Fallback Path"
+                        value={formData.a2aCardFallbackPath}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, a2aCardFallbackPath: e.target.value })}
+                        placeholder="/.well-known/agent.json"
+                        hint="Fallback path (used on 404)"
+                      />
+                      <CredentialInput
+                        label="User ID Override (Optional)"
+                        manualValue={formData.a2aUserId}
+                        onManualChange={(value) => setFormData({ ...formData, a2aUserId: value })}
+                        variableValue={formData.a2aUserIdVariable}
+                        onVariableChange={(value) => setFormData({ ...formData, a2aUserIdVariable: value })}
+                        source={formData.a2aUserIdSource}
+                        onSourceChange={(source) => setFormData({ ...formData, a2aUserIdSource: source })}
+                        placeholder="defaults to runtime.context.user_id"
+                        variables={variables}
+                      />
+                      <Textarea
+                        label="Extra Metadata (JSON)"
+                        value={formData.a2aExtraMetadata}
+                        onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFormData({ ...formData, a2aExtraMetadata: e.target.value })}
+                        placeholder='{"custom": "value"}'
+                        rows={3}
+                        hint="Additional metadata forwarded with each A2A Message"
+                      />
+                    </div>
+                  </details>
+
+                  <Textarea
+                    label="Tool Description (Optional)"
+                    value={formData.a2aToolDescription}
+                    onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFormData({ ...formData, a2aToolDescription: e.target.value })}
+                    placeholder="Delegate to a remote A2A agent"
+                    rows={2}
+                  />
+                </div>
+              )}
+
+              {/* Vertex AI Agent Engine Tool Configuration */}
+              {formData.functionName === 'dao_ai.tools.create_vertex_agent_engine_tool' && (
+                <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+                  <h4 className="text-sm font-medium text-slate-300">Vertex AI Agent Engine Tool Configuration</h4>
+                  <p className="text-xs text-slate-500">Call a Google Cloud ADK agent on Vertex AI Agent Engine via its streamQuery endpoint.</p>
+
+                  <CredentialInput
+                    label="Reasoning Engine Endpoint"
+                    manualValue={formData.vertexEndpoint}
+                    onManualChange={(value) => setFormData({ ...formData, vertexEndpoint: value })}
+                    variableValue={formData.vertexEndpointVariable}
+                    onVariableChange={(value) => setFormData({ ...formData, vertexEndpointVariable: value })}
+                    source={formData.vertexEndpointSource}
+                    onSourceChange={(source) => setFormData({ ...formData, vertexEndpointSource: source })}
+                    placeholder="projects/.../locations/.../reasoningEngines/..."
+                    hint="Full Vertex AI Reasoning Engine resource name or URL"
+                    variables={variables}
+                    required
+                  />
+
+                  <Select
+                    label="Auth Type"
+                    value={formData.vertexAuthType}
+                    onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, vertexAuthType: e.target.value as VertexAuthType })}
+                    options={[
+                      { value: 'gcp_service_account', label: 'GCP Service Account' },
+                      { value: 'bearer', label: 'Bearer Token' },
+                      { value: 'adc', label: 'Application Default Credentials (ADC)' },
+                    ]}
+                    hint="ADC discovers credentials from the environment — omit credentials in that case"
+                  />
+
+                  {formData.vertexAuthType !== 'adc' && (
+                    <CredentialInput
+                      label={formData.vertexAuthType === 'gcp_service_account' ? 'GCP Credentials' : 'Bearer Token'}
+                      manualValue={formData.vertexCredentials}
+                      onManualChange={(value) => setFormData({ ...formData, vertexCredentials: value })}
+                      variableValue={formData.vertexCredentialsVariable}
+                      onVariableChange={(value) => setFormData({ ...formData, vertexCredentialsVariable: value })}
+                      source={formData.vertexCredentialsSource}
+                      onSourceChange={(source) => setFormData({ ...formData, vertexCredentialsSource: source })}
+                      placeholder={formData.vertexAuthType === 'gcp_service_account' ? 'Path to JSON key or inline content' : 'Pre-minted bearer token'}
+                      hint={formData.vertexAuthType === 'gcp_service_account'
+                        ? 'Local file, /Volumes/... path, or inline JSON from a secret scope'
+                        : 'Static token (WIF, impersonation, OBO, etc.)'}
+                      variables={variables}
+                      type={formData.vertexAuthType === 'bearer' ? 'password' : 'text'}
+                      required
+                    />
+                  )}
+
+                  <Input
+                    label="Timeout (seconds)"
+                    type="number"
+                    value={String(formData.vertexTimeoutSeconds)}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, vertexTimeoutSeconds: parseInt(e.target.value) || 300 })}
+                  />
+
+                  <details className="group">
+                    <summary className="text-xs font-medium text-slate-400 cursor-pointer hover:text-slate-200">Advanced options</summary>
+                    <div className="mt-3 space-y-3">
+                      <Input
+                        label="Class Method"
+                        value={formData.vertexClassMethod}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, vertexClassMethod: e.target.value })}
+                        placeholder="stream_query"
+                        hint="ADK agent method to invoke"
+                      />
+                      <Input
+                        label="HTTP Method Suffix"
+                        value={formData.vertexHttpMethod}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, vertexHttpMethod: e.target.value })}
+                        placeholder="streamQuery"
+                        hint="Path segment appended to the endpoint"
+                      />
+                      <CredentialInput
+                        label="User ID Override (Optional)"
+                        manualValue={formData.vertexUserId}
+                        onManualChange={(value) => setFormData({ ...formData, vertexUserId: value })}
+                        variableValue={formData.vertexUserIdVariable}
+                        onVariableChange={(value) => setFormData({ ...formData, vertexUserIdVariable: value })}
+                        source={formData.vertexUserIdSource}
+                        onSourceChange={(source) => setFormData({ ...formData, vertexUserIdSource: source })}
+                        placeholder="defaults to runtime.context.user_id"
+                        variables={variables}
+                      />
+                    </div>
+                  </details>
+
+                  <Textarea
+                    label="Tool Description (Optional)"
+                    value={formData.vertexToolDescription}
+                    onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFormData({ ...formData, vertexToolDescription: e.target.value })}
+                    placeholder="Delegate to a Vertex AI Agent Engine ADK agent"
+                    rows={2}
+                  />
+                </div>
+              )}
+
+              {/* REST API Tool Configuration */}
+              {formData.functionName === 'dao_ai.tools.create_rest_api_tool' && (
+                <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+                  <h4 className="text-sm font-medium text-slate-300">REST API Tool Configuration</h4>
+                  <p className="text-xs text-slate-500">Make authenticated HTTP calls via a Unity Catalog connection or a plain base URL.</p>
+
+                  <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5 self-start">
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, restApiMode: 'base_url' })}
+                      className={`px-3 py-1 text-xs rounded-md font-medium ${formData.restApiMode === 'base_url' ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40' : 'text-slate-400 border border-transparent hover:text-slate-300'}`}
+                    >
+                      Direct HTTP
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, restApiMode: 'connection' })}
+                      className={`px-3 py-1 text-xs rounded-md font-medium ${formData.restApiMode === 'connection' ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40' : 'text-slate-400 border border-transparent hover:text-slate-300'}`}
+                    >
+                      UC Connection
+                    </button>
+                  </div>
+
+                  {formData.restApiMode === 'connection' ? (
+                    <ResourceSelector
+                      label="UC Connection"
+                      resourceType="Connection"
+                      configuredOptions={configuredConnectionOptions}
+                      configuredValue={formData.restApiConnectionRefName}
+                      onConfiguredChange={(value) => setFormData({ ...formData, restApiConnectionRefName: value })}
+                      source={formData.restApiConnectionSource}
+                      onSourceChange={(source) => setFormData({ ...formData, restApiConnectionSource: source })}
+                      hint="Select a configured UC connection from the Resources section"
+                    >
+                      <UCConnectionSelect
+                        value={formData.restApiConnectionRefName}
+                        onChange={(value) => setFormData({ ...formData, restApiConnectionRefName: value })}
+                      />
+                    </ResourceSelector>
+                  ) : (
+                    <>
+                      <CredentialInput
+                        label="Base URL"
+                        manualValue={formData.restApiBaseUrl}
+                        onManualChange={(value) => setFormData({ ...formData, restApiBaseUrl: value })}
+                        variableValue={formData.restApiBaseUrlVariable}
+                        onVariableChange={(value) => setFormData({ ...formData, restApiBaseUrlVariable: value })}
+                        source={formData.restApiBaseUrlSource}
+                        onSourceChange={(source) => setFormData({ ...formData, restApiBaseUrlSource: source })}
+                        placeholder="https://api.example.com/v1"
+                        variables={variables}
+                        required
+                      />
+                      <CredentialInput
+                        label="Auth Token (Optional)"
+                        manualValue={formData.restApiAuthToken}
+                        onManualChange={(value) => setFormData({ ...formData, restApiAuthToken: value })}
+                        variableValue={formData.restApiAuthTokenVariable}
+                        onVariableChange={(value) => setFormData({ ...formData, restApiAuthTokenVariable: value })}
+                        source={formData.restApiAuthTokenSource}
+                        onSourceChange={(source) => setFormData({ ...formData, restApiAuthTokenSource: source })}
+                        placeholder="Bearer token sent in Authorization header"
+                        variables={variables}
+                        type="password"
+                      />
+                    </>
+                  )}
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-sm font-medium text-slate-300">Default Headers</label>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setFormData({
+                          ...formData,
+                          restApiHeaders: [
+                            ...formData.restApiHeaders,
+                            { id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, key: '', source: 'manual', value: '', variable: '' },
+                          ],
+                        })}
+                      >
+                        <Plus className="w-3 h-3 mr-1" /> Add Header
+                      </Button>
+                    </div>
+                    {formData.restApiHeaders.map((h, idx) => (
+                      <div key={h.id} className="grid grid-cols-12 gap-2 items-center">
+                        <Input
+                          className="col-span-4"
+                          value={h.key}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                            const next = [...formData.restApiHeaders];
+                            next[idx] = { ...h, key: e.target.value };
+                            setFormData({ ...formData, restApiHeaders: next });
+                          }}
+                          placeholder="X-Custom-Header"
+                        />
+                        <div className="col-span-7">
+                          <CredentialInput
+                            label=""
+                            manualValue={h.value}
+                            onManualChange={(value) => {
+                              const next = [...formData.restApiHeaders];
+                              next[idx] = { ...h, value };
+                              setFormData({ ...formData, restApiHeaders: next });
+                            }}
+                            variableValue={h.variable}
+                            onVariableChange={(value) => {
+                              const next = [...formData.restApiHeaders];
+                              next[idx] = { ...h, variable: value };
+                              setFormData({ ...formData, restApiHeaders: next });
+                            }}
+                            source={h.source}
+                            onSourceChange={(source) => {
+                              const next = [...formData.restApiHeaders];
+                              next[idx] = { ...h, source };
+                              setFormData({ ...formData, restApiHeaders: next });
+                            }}
+                            placeholder="header value"
+                            variables={variables}
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setFormData({ ...formData, restApiHeaders: formData.restApiHeaders.filter((r) => r.id !== h.id) })}
+                          className="col-span-1 text-slate-400 hover:text-red-400"
+                          aria-label="Remove header"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+
+                  <Textarea
+                    label="Tool Description (Optional)"
+                    value={formData.restApiToolDescription}
+                    onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFormData({ ...formData, restApiToolDescription: e.target.value })}
+                    placeholder="Make HTTP requests to the external API"
+                    rows={2}
+                  />
+                </div>
+              )}
+
+              {/* App Info Tool Configuration */}
+              {formData.functionName === 'dao_ai.tools.create_app_info_tool' && (
+                <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+                  <h4 className="text-sm font-medium text-slate-300">App Info Tool Configuration</h4>
+                  <p className="text-xs text-slate-500">Expose app metadata (name, agents, sample prompts) to callers. The tool itself takes no runtime arguments.</p>
+
+                  <Input
+                    label="App Name"
+                    value={formData.appInfoAppName}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, appInfoAppName: e.target.value })}
+                    placeholder="Retail Insights Assistant"
+                    required
+                  />
+
+                  <Textarea
+                    label="App Description"
+                    value={formData.appInfoDescription}
+                    onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFormData({ ...formData, appInfoDescription: e.target.value })}
+                    placeholder="A multi-agent retail analytics assistant..."
+                    rows={3}
+                    required
+                  />
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-sm font-medium text-slate-300">Agents</label>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            const configured = Object.values(config.agents || {}).map((a, i) => ({
+                              id: `${Date.now()}-${i}`,
+                              name: a.name || '',
+                              description: a.description || '',
+                            }));
+                            if (configured.length > 0) {
+                              setFormData({ ...formData, appInfoAgents: configured });
+                            }
+                          }}
+                        >
+                          <RefreshCw className="w-3 h-3 mr-1" /> From Configured
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setFormData({
+                            ...formData,
+                            appInfoAgents: [
+                              ...formData.appInfoAgents,
+                              { id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, name: '', description: '' },
+                            ],
+                          })}
+                        >
+                          <Plus className="w-3 h-3 mr-1" /> Add Agent
+                        </Button>
+                      </div>
+                    </div>
+                    {formData.appInfoAgents.map((a, idx) => (
+                      <div key={a.id} className="grid grid-cols-12 gap-2 items-start">
+                        <Input
+                          className="col-span-4"
+                          value={a.name}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                            const next = [...formData.appInfoAgents];
+                            next[idx] = { ...a, name: e.target.value };
+                            setFormData({ ...formData, appInfoAgents: next });
+                          }}
+                          placeholder="agent_name"
+                        />
+                        <Input
+                          className="col-span-7"
+                          value={a.description}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                            const next = [...formData.appInfoAgents];
+                            next[idx] = { ...a, description: e.target.value };
+                            setFormData({ ...formData, appInfoAgents: next });
+                          }}
+                          placeholder="Short agent description"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setFormData({ ...formData, appInfoAgents: formData.appInfoAgents.filter((r) => r.id !== a.id) })}
+                          className="col-span-1 text-slate-400 hover:text-red-400 mt-2"
+                          aria-label="Remove agent"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-sm font-medium text-slate-300">Sample Prompts (Optional)</label>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setFormData({ ...formData, appInfoSamplePrompts: [...formData.appInfoSamplePrompts, ''] })}
+                      >
+                        <Plus className="w-3 h-3 mr-1" /> Add Prompt
+                      </Button>
+                    </div>
+                    {formData.appInfoSamplePrompts.map((p, idx) => (
+                      <div key={idx} className="flex gap-2 items-center">
+                        <Input
+                          value={p}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                            const next = [...formData.appInfoSamplePrompts];
+                            next[idx] = e.target.value;
+                            setFormData({ ...formData, appInfoSamplePrompts: next });
+                          }}
+                          placeholder="How many orders shipped last week?"
+                          className="flex-1"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setFormData({ ...formData, appInfoSamplePrompts: formData.appInfoSamplePrompts.filter((_, i) => i !== idx) })}
+                          className="text-slate-400 hover:text-red-400"
+                          aria-label="Remove prompt"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Memory Tools Configuration (shared by search/manage/user-profile) */}
+              {(formData.functionName === 'dao_ai.tools.create_search_memory_tool' ||
+                formData.functionName === 'dao_ai.tools.create_manage_memory_tool' ||
+                formData.functionName === 'dao_ai.tools.create_search_user_profile_tool') && (
+                <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+                  <h4 className="text-sm font-medium text-slate-300">Memory Tool Configuration</h4>
+                  <p className="text-xs text-slate-500">
+                    The memory store (BaseStore) is injected at runtime from <code className="text-slate-300">orchestration.memory.store</code>.
+                    Configure a Memory store in the Memory section — only the namespace is specified here.
+                  </p>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-sm font-medium text-slate-300">Namespace</label>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setFormData({ ...formData, memoryNamespace: [...formData.memoryNamespace, ''] })}
+                      >
+                        <Plus className="w-3 h-3 mr-1" /> Add Segment
+                      </Button>
+                    </div>
+                    {formData.memoryNamespace.length === 0 && (
+                      <p className="text-xs text-slate-500">Namespace is a tuple of strings. Example: <code>user_profile</code>, <code>{'{user_id}'}</code></p>
+                    )}
+                    {formData.memoryNamespace.map((seg, idx) => (
+                      <div key={idx} className="flex gap-2 items-center">
+                        <Input
+                          value={seg}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                            const next = [...formData.memoryNamespace];
+                            next[idx] = e.target.value;
+                            setFormData({ ...formData, memoryNamespace: next });
+                          }}
+                          placeholder={idx === 0 ? 'user_profile' : '{user_id}'}
+                          className="flex-1"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setFormData({ ...formData, memoryNamespace: formData.memoryNamespace.filter((_, i) => i !== idx) })}
+                          className="text-slate-400 hover:text-red-400"
+                          aria-label="Remove segment"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Execute Statement (SQL) Tool Configuration */}
+              {formData.functionName === 'dao_ai.tools.create_execute_statement_tool' && (
+                <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+                  <h4 className="text-sm font-medium text-slate-300">SQL Statement Tool Configuration</h4>
+                  <p className="text-xs text-slate-500">Execute a pre-configured SQL statement against a Databricks SQL warehouse. The LLM cannot modify the SQL at runtime.</p>
+
+                  <ResourceSelector
+                    label="SQL Warehouse"
+                    resourceType="Warehouse"
+                    configuredOptions={configuredWarehouseOptions}
+                    configuredValue={formData.sqlWarehouseRefName}
+                    onConfiguredChange={(value) => setFormData({ ...formData, sqlWarehouseRefName: value })}
+                    source={formData.sqlWarehouseSource}
+                    onSourceChange={(source) => setFormData({ ...formData, sqlWarehouseSource: source })}
+                    hint="Warehouse the statement will run on"
+                  >
+                    <Input
+                      label="Warehouse ID"
+                      value={formData.sqlWarehouseId}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, sqlWarehouseId: e.target.value })}
+                      placeholder="abc123def456"
+                    />
+                  </ResourceSelector>
+
+                  <Textarea
+                    label="SQL Statement"
+                    value={formData.sqlStatement}
+                    onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFormData({ ...formData, sqlStatement: e.target.value })}
+                    placeholder="SELECT COUNT(*) FROM main.retail.orders"
+                    rows={6}
+                    hint="The statement is fixed at factory time"
+                    required
+                  />
+
+                  <Textarea
+                    label="Tool Description (Optional)"
+                    value={formData.sqlToolDescription}
+                    onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFormData({ ...formData, sqlToolDescription: e.target.value })}
+                    placeholder="Return order counts for the retail catalog"
+                    rows={2}
+                  />
+                </div>
+              )}
+
+              {/* Visualization Tool Configuration */}
+              {formData.functionName === 'dao_ai.tools.create_visualization_tool' && (
+                <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+                  <h4 className="text-sm font-medium text-slate-300">Visualization Tool Configuration</h4>
+                  <p className="text-xs text-slate-500">Generate Vega-Lite chart specs from structured data. All options below are factory defaults — the LLM can still override them per call.</p>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <Select
+                      label="Default Chart Type"
+                      value={formData.vizDefaultChartType}
+                      onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, vizDefaultChartType: e.target.value as VegaChartType })}
+                      options={[
+                        { value: 'bar', label: 'Bar' },
+                        { value: 'line', label: 'Line' },
+                        { value: 'scatter', label: 'Scatter' },
+                        { value: 'area', label: 'Area' },
+                        { value: 'arc', label: 'Arc (Pie)' },
+                        { value: 'heatmap', label: 'Heatmap' },
+                      ]}
+                    />
+                    <Input
+                      label="Color Scheme"
+                      value={formData.vizColorScheme}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, vizColorScheme: e.target.value })}
+                      placeholder="tableau10"
+                      hint="Vega color scheme name"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-sm font-medium text-slate-300">Width</label>
+                        <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5">
+                          <button
+                            type="button"
+                            onClick={() => setFormData({ ...formData, vizWidthIsContainer: true })}
+                            className={`px-2 py-1 text-[11px] rounded-md font-medium ${formData.vizWidthIsContainer ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40' : 'text-slate-400 border border-transparent hover:text-slate-300'}`}
+                          >
+                            Container
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setFormData({ ...formData, vizWidthIsContainer: false })}
+                            className={`px-2 py-1 text-[11px] rounded-md font-medium ${!formData.vizWidthIsContainer ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40' : 'text-slate-400 border border-transparent hover:text-slate-300'}`}
+                          >
+                            Fixed
+                          </button>
+                        </div>
+                      </div>
+                      {!formData.vizWidthIsContainer && (
+                        <Input
+                          type="number"
+                          value={String(formData.vizWidth)}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, vizWidth: parseInt(e.target.value) || 600 })}
+                          placeholder="600"
+                        />
+                      )}
+                    </div>
+                    <Input
+                      label="Height (px)"
+                      type="number"
+                      value={String(formData.vizHeight)}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, vizHeight: parseInt(e.target.value) || 400 })}
+                    />
+                  </div>
+
+                  <Textarea
+                    label="Tool Description (Optional)"
+                    value={formData.vizToolDescription}
+                    onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFormData({ ...formData, vizToolDescription: e.target.value })}
+                    placeholder="Generate Vega-Lite chart specs from tabular data"
+                    rows={2}
+                  />
+                </div>
+              )}
+
+              {/* Web Search Tool Configuration (no factory args) */}
+              {formData.functionName === 'dao_ai.tools.create_search_tool' && (
+                <div className="space-y-2 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+                  <h4 className="text-sm font-medium text-slate-300">Web Search Tool Configuration</h4>
+                  <p className="text-xs text-slate-500">
+                    This factory takes no arguments — it wires up a DuckDuckGo search tool. The tool name, refName,
+                    and HITL configuration above are all you need.
+                  </p>
+                </div>
+              )}
+
               {/* Custom Factory */}
               {formData.functionName === 'custom' && (
                 <Input
@@ -4002,45 +5641,56 @@ export default function ToolsSection() {
                 <p className="text-xs text-slate-500">
                   Python functions decorated with @tool that can be used directly as tools
                 </p>
-                <div className="grid grid-cols-2 gap-2">
-                  {PYTHON_TOOLS.map((tool) => {
-                    const Icon = tool.icon;
-                    const isSelected = formData.functionName === tool.value;
-                    return (
-                      <button
-                        key={tool.value}
-                        type="button"
-                        onClick={() => {
-                          const generatedName = tool.value !== 'custom' ? generateToolName(tool.value) : '';
-                          setFormData({ 
-                            ...formData, 
-                            functionName: tool.value,
-                            customFunctionName: '',
-                            // Auto-generate tool name if not manually edited
-                            name: nameManuallyEdited ? formData.name : generatedName,
-                            // Auto-generate ref name if not manually edited
-                            refName: refNameManuallyEdited ? formData.refName : generatedName,
-                          });
-                        }}
-                        className={`p-3 rounded-lg border text-left transition-all ${
-                          isSelected
-                            ? 'border-violet-500 bg-violet-500/10'
-                            : 'border-slate-700 bg-slate-800/50 hover:border-slate-600'
-                        }`}
-                      >
-                        <div className="flex items-start space-x-2">
-                          <Icon className={`w-4 h-4 mt-0.5 ${isSelected ? 'text-violet-400' : 'text-slate-400'}`} />
-                          <div>
-                            <div className={`text-sm font-medium ${isSelected ? 'text-violet-400' : 'text-slate-300'}`}>
-                              {tool.label}
-                            </div>
-                            <div className="text-xs text-slate-500">{tool.description}</div>
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
+                {PYTHON_CATEGORY_ORDER.map((category) => {
+                  const toolsInCategory = PYTHON_TOOLS.filter((t) => t.category === category);
+                  if (toolsInCategory.length === 0) return null;
+                  return (
+                    <div key={category} className="space-y-2 mt-3 first:mt-0">
+                      <h5 className="text-[11px] uppercase tracking-wider font-semibold text-slate-500 border-b border-slate-800 pb-1">
+                        {PYTHON_CATEGORY_LABELS[category]}
+                      </h5>
+                      <div className="grid grid-cols-2 gap-2">
+                        {toolsInCategory.map((tool) => {
+                          const Icon = tool.icon;
+                          const isSelected = formData.functionName === tool.value;
+                          return (
+                            <button
+                              key={tool.value}
+                              type="button"
+                              onClick={() => {
+                                const generatedName = tool.value !== 'custom' ? generateToolName(tool.value) : '';
+                                setFormData({
+                                  ...formData,
+                                  functionName: tool.value,
+                                  customFunctionName: '',
+                                  // Auto-generate tool name if not manually edited
+                                  name: nameManuallyEdited ? formData.name : generatedName,
+                                  // Auto-generate ref name if not manually edited
+                                  refName: refNameManuallyEdited ? formData.refName : generatedName,
+                                });
+                              }}
+                              className={`p-3 rounded-lg border text-left transition-all ${
+                                isSelected
+                                  ? 'border-violet-500 bg-violet-500/10'
+                                  : 'border-slate-700 bg-slate-800/50 hover:border-slate-600'
+                              }`}
+                            >
+                              <div className="flex items-start space-x-2">
+                                <Icon className={`w-4 h-4 mt-0.5 ${isSelected ? 'text-violet-400' : 'text-slate-400'}`} />
+                                <div>
+                                  <div className={`text-sm font-medium ${isSelected ? 'text-violet-400' : 'text-slate-300'}`}>
+                                    {tool.label}
+                                  </div>
+                                  <div className="text-xs text-slate-500">{tool.description}</div>
+                                </div>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
 
               {/* Custom Python Function Path */}
