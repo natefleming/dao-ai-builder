@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Settings, Save, GitBranch, Users, ArrowRightLeft, Plus, Trash2, Info, Bot, X, Tag, Wrench, Sparkles, Loader2, Variable, Layers } from 'lucide-react';
+import { Settings, Save, GitBranch, Users, ArrowRightLeft, Plus, Trash2, Info, Bot, X, Tag, Wrench, Sparkles, Loader2, Variable, Layers, Timer } from 'lucide-react';
 import { useConfigStore } from '@/stores/configStore';
 import { useCatalogs, useSchemas } from '@/hooks/useDatabricks';
 import Button from '../ui/Button';
@@ -9,7 +9,7 @@ import Textarea from '../ui/Textarea';
 import Card from '../ui/Card';
 import Badge from '../ui/Badge';
 import MultiSelect from '../ui/MultiSelect';
-import { LogLevel, VariableValue, TraceLocationModel, MonitoringModel } from '@/types/dao-ai-types';
+import { LogLevel, VariableValue, TraceLocationModel, MonitoringModel, LongRunningModel, OrchestrationOutputMode } from '@/types/dao-ai-types';
 import { clsx } from 'clsx';
 import { normalizeRefName } from '@/utils/name-utils';
 
@@ -116,6 +116,7 @@ export default function AppConfigSection() {
   const tools = config.tools || {};
   const memory = config.memory;
   const warehouses = config.resources?.warehouses || {};
+  const databases = config.resources?.databases || {};
 
   // App settings form
   const [formData, setFormData] = useState(() => {
@@ -264,6 +265,15 @@ export default function AppConfigSection() {
   const [pattern, setPattern] = useState<OrchestrationPattern>(
     config.app?.orchestration?.supervisor ? 'supervisor' :
     config.app?.orchestration?.swarm ? 'swarm' : 'none'
+  );
+  // New in dao-ai 0.1.70: output_mode controls whether agent responses
+  // include full intermediate history or just the last AI message.
+  const [outputMode, setOutputMode] = useState<OrchestrationOutputMode>(
+    (config.app?.orchestration?.output_mode as OrchestrationOutputMode) || 'full_history'
+  );
+  // New in dao-ai 0.1.70: swarm.max_hops bounds cross-agent handoffs.
+  const [swarmMaxHops, setSwarmMaxHops] = useState<number>(
+    config.app?.orchestration?.swarm?.max_hops ?? 25
   );
   const [supervisorPrompt, setSupervisorPrompt] = useState<string>(() => {
     const p = config.app?.orchestration?.supervisor?.prompt;
@@ -458,6 +468,27 @@ export default function AppConfigSection() {
   const [newGuidelineName, setNewGuidelineName] = useState('');
   const [newGuidelineText, setNewGuidelineText] = useState('');
 
+  // Long-Running Agents state
+  const [enableLongRunning, setEnableLongRunning] = useState(!!app?.long_running);
+  const [longRunningDatabaseKey, setLongRunningDatabaseKey] = useState<string>(() => {
+    if (app?.long_running?.database) {
+      const lrDb = app.long_running.database;
+      if (typeof lrDb === 'string') return '';
+      for (const [key, configuredDb] of Object.entries(databases)) {
+        if (lrDb.project && configuredDb.project === lrDb.project) return key;
+        if (lrDb.instance_name && configuredDb.instance_name === lrDb.instance_name) return key;
+        if (lrDb.host && configuredDb.host === lrDb.host) return key;
+      }
+    }
+    return '';
+  });
+  const [longRunningDefaultBackground, setLongRunningDefaultBackground] = useState(app?.long_running?.default_background ?? false);
+  const [longRunningMaxDuration, setLongRunningMaxDuration] = useState(app?.long_running?.max_duration_seconds ?? 1800);
+  const [longRunningPollInterval, setLongRunningPollInterval] = useState(app?.long_running?.poll_interval_seconds ?? 1.0);
+  const [longRunningResponsesTable, setLongRunningResponsesTable] = useState(app?.long_running?.responses_table_name ?? 'dao_ai_responses');
+  const [longRunningMessagesTable, setLongRunningMessagesTable] = useState(app?.long_running?.messages_table_name ?? 'dao_ai_response_messages');
+  const [showLongRunningAdvanced, setShowLongRunningAdvanced] = useState(false);
+
   // Track whether initial sync from config has completed.
   // After the first sync, local handoff/orchestration state is managed by the user
   // and should not be overwritten by config re-renders.
@@ -583,6 +614,14 @@ export default function AppConfigSection() {
       savedOrchMemoryRef = config.memory.refName;
     }
     if (orchestrationMemoryRef !== savedOrchMemoryRef) return true;
+
+    // Check output_mode + swarm.max_hops (new in dao-ai 0.1.70)
+    const savedOutputMode = (app?.orchestration?.output_mode as OrchestrationOutputMode) || 'full_history';
+    if (outputMode !== savedOutputMode) return true;
+    if (pattern === 'swarm') {
+      const savedMaxHops = app?.orchestration?.swarm?.max_hops ?? 25;
+      if (swarmMaxHops !== savedMaxHops) return true;
+    }
     
     // Check tags
     const savedTags = (app?.tags as Record<string, string | boolean | number>) || {};
@@ -635,6 +674,28 @@ export default function AppConfigSection() {
       } else {
         if (chatHistoryMaxMessagesBeforeSummary !== (app?.chat_history?.max_messages_before_summary || 10)) return true;
       }
+    }
+
+    // Check long-running agents
+    const savedLongRunningEnabled = !!app?.long_running;
+    if (enableLongRunning !== savedLongRunningEnabled) return true;
+    if (enableLongRunning) {
+      if (longRunningDefaultBackground !== (app?.long_running?.default_background ?? false)) return true;
+      if (longRunningMaxDuration !== (app?.long_running?.max_duration_seconds ?? 1800)) return true;
+      if (longRunningPollInterval !== (app?.long_running?.poll_interval_seconds ?? 1.0)) return true;
+      if (longRunningResponsesTable !== (app?.long_running?.responses_table_name ?? 'dao_ai_responses')) return true;
+      if (longRunningMessagesTable !== (app?.long_running?.messages_table_name ?? 'dao_ai_response_messages')) return true;
+      // Check database key
+      let savedDbKey = '';
+      if (app?.long_running?.database && typeof app.long_running.database !== 'string') {
+        const lrDb = app.long_running.database;
+        for (const [key, configuredDb] of Object.entries(databases)) {
+          if (lrDb.project && configuredDb.project === lrDb.project) { savedDbKey = key; break; }
+          if (lrDb.instance_name && configuredDb.instance_name === lrDb.instance_name) { savedDbKey = key; break; }
+          if (lrDb.host && configuredDb.host === lrDb.host) { savedDbKey = key; break; }
+        }
+      }
+      if (longRunningDatabaseKey !== savedDbKey) return true;
     }
     
     return false;
@@ -861,6 +922,10 @@ export default function AppConfigSection() {
         setDefaultAgent('');
       }
       
+      // Sync output_mode + swarm.max_hops (new in dao-ai 0.1.70)
+      setOutputMode((app?.orchestration?.output_mode as OrchestrationOutputMode) || 'full_history');
+      setSwarmMaxHops(app?.orchestration?.swarm?.max_hops ?? 25);
+
       // Sync handoffs
       const existingHandoffs = app?.orchestration?.swarm?.handoffs;
       if (existingHandoffs) {
@@ -1117,6 +1182,9 @@ export default function AppConfigSection() {
         },
         // Add memory reference if configured
         ...(orchestrationMemoryRef && { memory: `*${orchestrationMemoryRef}` }),
+        // Only emit output_mode when the user has flipped it away from the
+        // dao-ai default to keep diffs minimal.
+        ...(outputMode !== 'full_history' && { output_mode: outputMode }),
       };
     } else if (pattern === 'swarm') {
       // Swarm no longer uses a model - each agent uses its own model
@@ -1146,9 +1214,11 @@ export default function AppConfigSection() {
           ...(defaultAgent && agents[defaultAgent] && { default_agent: defaultAgent }),
           ...(Object.keys(handoffsDict).length > 0 && { handoffs: handoffsDict }),
           ...(swarmMiddlewareArray.length > 0 && { middleware: swarmMiddlewareArray }),
+          ...(swarmMaxHops !== 25 && { max_hops: swarmMaxHops }),
         },
         // Add memory reference if configured
         ...(orchestrationMemoryRef && { memory: `*${orchestrationMemoryRef}` }),
+        ...(outputMode !== 'full_history' && { output_mode: outputMode }),
       };
     } else if (pattern === 'none') {
       // No orchestration pattern selected - auto-create swarm of one for single agent workflows
@@ -1248,6 +1318,19 @@ export default function AppConfigSection() {
       };
     }
 
+    // Build long_running config
+    let longRunning: LongRunningModel | undefined = undefined;
+    if (enableLongRunning && longRunningDatabaseKey && databases[longRunningDatabaseKey]) {
+      longRunning = {
+        database: databases[longRunningDatabaseKey],
+        ...(longRunningDefaultBackground && { default_background: true }),
+        ...(longRunningMaxDuration !== 1800 && { max_duration_seconds: longRunningMaxDuration }),
+        ...(longRunningPollInterval !== 1.0 && { poll_interval_seconds: longRunningPollInterval }),
+        ...(longRunningResponsesTable !== 'dao_ai_responses' && { responses_table_name: longRunningResponsesTable }),
+        ...(longRunningMessagesTable !== 'dao_ai_response_messages' && { messages_table_name: longRunningMessagesTable }),
+      };
+    }
+
     // registered_model is optional in dao-ai 0.1.55 for `deployment_target: apps`.
     // Only emit it when the user actually filled in a model name.
     const registeredModel = formData.modelName.trim()
@@ -1266,6 +1349,7 @@ export default function AppConfigSection() {
       ...(registeredModel && { registered_model: registeredModel }),
       trace_location: traceLocation,
       monitoring,
+      long_running: longRunning,
       workload_size: formData.workloadSize as 'Small' | 'Medium' | 'Large',
       scale_to_zero: formData.scaleToZero,
       deployment_target: formData.deploymentTarget as 'model_serving' | 'apps',
@@ -2112,6 +2196,36 @@ export default function AppConfigSection() {
             </p>
           )}
         </div>
+
+        {/* Output Mode (new in dao-ai 0.1.70) — applies to both supervisor and swarm */}
+        {pattern !== 'none' && (
+          <div className="space-y-2 pt-4 border-t border-slate-700">
+            <Select
+              label="Agent Output Mode"
+              value={outputMode}
+              onChange={(e) => setOutputMode(e.target.value as OrchestrationOutputMode)}
+              options={[
+                { value: 'full_history', label: 'Full History (default)' },
+                { value: 'last_message', label: 'Last Message Only' },
+              ]}
+              hint="full_history returns each agent's intermediate AI/tool messages so the same agent can see its own prior tool results across turns. last_message trims tokens but loses intermediate content."
+            />
+          </div>
+        )}
+
+        {/* Swarm Max Hops (new in dao-ai 0.1.70) */}
+        {pattern === 'swarm' && (
+          <div className="space-y-2">
+            <Input
+              label="Max Hops"
+              type="number"
+              min={1}
+              value={swarmMaxHops}
+              onChange={(e) => setSwarmMaxHops(parseInt(e.target.value) || 25)}
+              hint="Cross-agent hop ceiling for the swarm graph. Bounds two agents from handing off to each other indefinitely. Defaults to 25 (LangGraph's recursion_limit default)."
+            />
+          </div>
+        )}
       </Card>
 
       {/* Model Registration */}
@@ -2656,6 +2770,109 @@ export default function AppConfigSection() {
                   Add Set
                 </Button>
               </div>
+            </div>
+          </div>
+        )}
+      </Card>
+
+      {/* Long-Running Agents */}
+      <Card className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <Timer className="w-5 h-5 text-slate-400" />
+            <h3 className="font-medium text-white">Long-Running Agents</h3>
+          </div>
+          <label className="flex items-center space-x-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={enableLongRunning}
+              onChange={(e) => setEnableLongRunning(e.target.checked)}
+              className="rounded border-slate-600 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-900"
+            />
+            <span className="text-xs text-slate-400">Enable</span>
+          </label>
+        </div>
+        <p className="text-sm text-slate-400">
+          Responses-API-compatible kickoff/poll/cancel for background tasks backed by Lakebase
+        </p>
+
+        {enableLongRunning && (
+          <div className="space-y-4 p-4 bg-slate-800/30 rounded-lg border border-slate-700/50">
+            <Select
+              label="Database"
+              value={longRunningDatabaseKey}
+              onChange={(e) => setLongRunningDatabaseKey(e.target.value)}
+              options={[
+                { value: '', label: 'Select a database...' },
+                ...Object.keys(databases).map((name) => ({ value: name, label: name })),
+              ]}
+              hint="Lakebase database for persisting response rows and stream events"
+              required
+            />
+
+            {Object.keys(databases).length === 0 && (
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 text-amber-400 text-sm">
+                No databases configured. Add a database in <strong>Resources &rarr; Databases</strong> first.
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-4">
+              <Input
+                label="Max Duration (seconds)"
+                type="number"
+                min={1}
+                value={longRunningMaxDuration}
+                onChange={(e) => setLongRunningMaxDuration(parseInt(e.target.value) || 1800)}
+                hint="Hard cap per background run (default: 1800)"
+              />
+              <Input
+                label="Poll Interval (seconds)"
+                type="number"
+                min={0.1}
+                step={0.1}
+                value={longRunningPollInterval}
+                onChange={(e) => setLongRunningPollInterval(parseFloat(e.target.value) || 1.0)}
+                hint="Database poll interval for streaming retrieve (default: 1.0)"
+              />
+            </div>
+
+            <label className="flex items-center space-x-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={longRunningDefaultBackground}
+                onChange={(e) => setLongRunningDefaultBackground(e.target.checked)}
+                className="rounded border-slate-600 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-900"
+              />
+              <span className="text-sm text-slate-300">Default to background mode</span>
+              <span className="text-xs text-slate-500">(treat all requests as long-running)</span>
+            </label>
+
+            <div>
+              <button
+                type="button"
+                onClick={() => setShowLongRunningAdvanced(!showLongRunningAdvanced)}
+                className="text-xs text-slate-400 hover:text-slate-300 flex items-center space-x-1"
+              >
+                <span>{showLongRunningAdvanced ? '▾' : '▸'} Advanced</span>
+              </button>
+              {showLongRunningAdvanced && (
+                <div className="grid grid-cols-2 gap-4 mt-3">
+                  <Input
+                    label="Responses Table Name"
+                    value={longRunningResponsesTable}
+                    onChange={(e) => setLongRunningResponsesTable(e.target.value)}
+                    placeholder="dao_ai_responses"
+                    hint="Table storing one row per response"
+                  />
+                  <Input
+                    label="Messages Table Name"
+                    value={longRunningMessagesTable}
+                    onChange={(e) => setLongRunningMessagesTable(e.target.value)}
+                    placeholder="dao_ai_response_messages"
+                    hint="Table storing streamed events / final items"
+                  />
+                </div>
+              )}
             </div>
           </div>
         )}

@@ -2812,6 +2812,54 @@ export function generateYAML(config: AppConfig): string {
       }
       yamlConfig.app.monitoring = monitoringValue;
     }
+
+    // Format long_running
+    if (config.app.long_running) {
+      const longRunningValue: Record<string, any> = {};
+      const definedDatabases = config.resources?.databases || {};
+
+      // Resolve database reference (same pattern as memory.checkpointer.database)
+      const lrDb = config.app.long_running.database;
+      if (lrDb) {
+        const dbRef = findOriginalReference('app.long_running.database', lrDb);
+        if (dbRef) {
+          longRunningValue.database = createReference(dbRef);
+        } else if (typeof lrDb !== 'string') {
+          const matchingDbKey = Object.entries(definedDatabases).find(
+            ([, db]) => {
+              const d = db as DatabaseModel;
+              if ((lrDb as DatabaseModel).project && d.project === (lrDb as DatabaseModel).project) return true;
+              if ((lrDb as DatabaseModel).instance_name && d.instance_name === (lrDb as DatabaseModel).instance_name) return true;
+              return false;
+            }
+          )?.[0];
+          if (matchingDbKey) {
+            longRunningValue.database = createReference(matchingDbKey);
+          } else {
+            longRunningValue.database = formatDatabaseRef(lrDb as DatabaseModel, 'app.long_running.database');
+          }
+        } else {
+          longRunningValue.database = lrDb;
+        }
+      }
+
+      if (config.app.long_running.default_background) {
+        longRunningValue.default_background = config.app.long_running.default_background;
+      }
+      if (config.app.long_running.max_duration_seconds !== undefined && config.app.long_running.max_duration_seconds !== 1800) {
+        longRunningValue.max_duration_seconds = config.app.long_running.max_duration_seconds;
+      }
+      if (config.app.long_running.poll_interval_seconds !== undefined && config.app.long_running.poll_interval_seconds !== 1.0) {
+        longRunningValue.poll_interval_seconds = config.app.long_running.poll_interval_seconds;
+      }
+      if (config.app.long_running.responses_table_name && config.app.long_running.responses_table_name !== 'dao_ai_responses') {
+        longRunningValue.responses_table_name = config.app.long_running.responses_table_name;
+      }
+      if (config.app.long_running.messages_table_name && config.app.long_running.messages_table_name !== 'dao_ai_response_messages') {
+        longRunningValue.messages_table_name = config.app.long_running.messages_table_name;
+      }
+      yamlConfig.app.long_running = longRunningValue;
+    }
   }
 
   // Evaluation section

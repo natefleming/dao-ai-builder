@@ -131,13 +131,112 @@ export interface GenieRoomModel {
   name?: string;  // Optional - auto-populated from GenieSpace.title if not provided
   description?: string;
   space_id?: VariableValue;  // Optional - can configure by name only. Can be string or variable reference (env, secret, etc.)
-  warehouse?: WarehouseModel | string;  // NOTE: computed @property in Python, not serialized to YAML
+  warehouse?: WarehouseModel | string;  // SQL warehouse the Genie space queries; required for provisioning
+  // Provisioning + advanced Genie metric-view fields (new in dao-ai 0.1.70).
+  // The UI only edits the simple ones; the rest are preserved on round-trip.
+  parent_path?: VariableValue;  // Workspace folder path used when provisioning a new space
+  sample_questions?: string[];  // Suggested sample questions surfaced in the Genie UI
+  text_instructions?: string[];  // Free-form instructions Genie always considers
+  table_sources?: GenieTableSource[];
+  function_sources?: GenieSqlFunctionSource[];
+  metric_view_sources?: GenieMetricViewSource[];
+  join_specs?: GenieJoinSpec[];
+  example_sqls?: GenieExampleSql[];
+  sql_filters?: GenieSqlSnippet[];
+  sql_measures?: GenieSqlSnippet[];
+  sql_expressions?: GenieSqlSnippet[];
+  benchmarks?: GenieBenchmarkQuestion[];
+  entitlements?: GenieEntitlement[];
   // Authentication fields
   service_principal?: ServicePrincipalModel | string;
   client_id?: VariableValue;
   client_secret?: VariableValue;
   workspace_host?: VariableValue;
   pat?: VariableValue;
+}
+
+// New in dao-ai 0.1.70: rich Genie space configuration. Most users only set
+// the simple fields above; these advanced types exist so a YAML imported
+// from a hand-edited config round-trips cleanly without dropping fields.
+export type GenieRelationshipType = 'one_to_one' | 'one_to_many' | 'many_to_one' | 'many_to_many';
+export type GenieEntitlementLevel = 'CAN_RUN' | 'CAN_VIEW' | 'CAN_EDIT' | 'CAN_MANAGE';
+
+export interface GenieColumnConfig {
+  name?: string;
+  description?: string;
+  synonyms?: string[];
+  excluded?: boolean;
+  sample_values?: string[];
+  build_value_dictionary?: boolean;
+}
+
+export interface GenieTableSource {
+  table: string;
+  description?: string;
+  pii?: boolean;
+  primary_key?: string[];
+  columns?: GenieColumnConfig[];
+}
+
+export interface GenieSqlParameter {
+  name: string;
+  type?: string;
+  description?: string;
+  default?: any;
+}
+
+export interface GenieSqlFunctionSource {
+  name: string;
+  sql?: string;
+  description?: string;
+  parameters?: GenieSqlParameter[];
+  returns?: string;
+}
+
+export interface GenieMetricViewSource {
+  table: string;
+  description?: string;
+}
+
+export interface GenieJoinSpec {
+  left: string;
+  left_alias?: string;
+  right: string;
+  right_alias?: string;
+  sql?: string;
+  comment?: string;
+  type?: GenieRelationshipType;
+}
+
+export interface GenieExampleSql {
+  question: string;
+  sql: string;
+  parameters?: GenieSqlParameter[];
+  usage_guidance?: string;
+}
+
+export interface GenieSqlSnippet {
+  name: string;
+  sql: string;
+  description?: string;
+}
+
+export interface GenieBenchmarkQuestion {
+  question: string;
+  expected_sql?: string;
+}
+
+export interface GenieEntitlement {
+  principals: string[];
+  permission_level: GenieEntitlementLevel;
+}
+
+export interface ParameterDeclarationModel {
+  name: string;
+  type?: string;
+  description?: string;
+  default?: any;
+  required?: boolean;
 }
 
 export interface FunctionModel {
@@ -616,7 +715,11 @@ export interface SwarmModel {
   default_agent?: AgentModel | string;
   handoffs?: Record<string, (AgentModel | string | HandoffRouteModel)[] | null>;
   middleware?: MiddlewareModel[];
+  /** Cross-agent hop ceiling for the parent swarm graph (new in dao-ai 0.1.70). Defaults to 25. */
+  max_hops?: number;
 }
+
+export type OrchestrationOutputMode = 'full_history' | 'last_message';
 
 export type MemorySchemaName = 'user_profile' | 'preference' | 'episode';
 
@@ -659,6 +762,12 @@ export interface OrchestrationModel {
   supervisor?: SupervisorModel;
   swarm?: SwarmModel;
   memory?: MemoryModel;
+  /**
+   * How an agent's response flows back into parent state (new in dao-ai 0.1.70).
+   * full_history (default) returns the full local history including intermediate
+   * AI/tool messages; last_message returns only the final AI response.
+   */
+  output_mode?: OrchestrationOutputMode;
 }
 
 export interface RegisteredModelModel {
@@ -678,6 +787,15 @@ export interface MonitoringModel {
   guidelines_sample_rate?: number;
 }
 
+export interface LongRunningModel {
+  database: DatabaseModel | string;
+  default_background?: boolean;
+  max_duration_seconds?: number;
+  poll_interval_seconds?: number;
+  responses_table_name?: string;
+  messages_table_name?: string;
+}
+
 export interface AppModel {
   name: string;
   description?: string;
@@ -687,6 +805,7 @@ export interface AppModel {
   endpoint_name?: string;
   trace_location?: TraceLocationModel;
   monitoring?: MonitoringModel;
+  long_running?: LongRunningModel;
   tags?: Record<string, any>;
   scale_to_zero?: boolean;
   /**
