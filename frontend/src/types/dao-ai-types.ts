@@ -79,6 +79,16 @@ export interface InferenceEndpointModel {
   use_responses_api?: boolean;  // Use Responses API for ResponsesAgent endpoints
   /** Required when the Foundation Model endpoint has output guardrails enabled */
   disable_streaming?: boolean;
+  /**
+   * dao-ai 0.1.77+: route through the Databricks AI Gateway
+   * (`/ai-gateway/mlflow/v1/chat/completions`) instead of
+   * `/serving-endpoints/<name>/invocations`. When true, `name` is sent
+   * as the OpenAI-style model id in the request body. AI Gateway is
+   * OpenAI-compatible chat completions only — not for embeddings,
+   * Responses API, or non-chat endpoints. Incompatible with
+   * `use_responses_api`.
+   */
+  ai_gateway?: boolean;
   fallbacks?: (string | InferenceEndpointModel)[];
   /** dao-ai 0.1.72+: best-of-N + LLM-as-judge wrapper. */
   best_of_n?: BestOfNConfig;

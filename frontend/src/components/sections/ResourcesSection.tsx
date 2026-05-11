@@ -557,6 +557,7 @@ function ModelsPanel() {
     onBehalfOfUser: false,
     useResponseApi: false,
     disableStreaming: false,
+    aiGateway: false,
     fallbacks: [] as string[],
     // Authentication fields
     authMethod: 'default' as 'default' | 'service_principal' | 'oauth' | 'pat',
@@ -589,6 +590,7 @@ function ModelsPanel() {
       onBehalfOfUser: false,
       useResponseApi: false,
       disableStreaming: false,
+      aiGateway: false,
       fallbacks: [],
       authMethod: 'default',
       servicePrincipalRef: '',
@@ -635,6 +637,7 @@ function ModelsPanel() {
       onBehalfOfUser: llm.on_behalf_of_user ?? false,
       useResponseApi: llm.use_responses_api ?? false,
       disableStreaming: llm.disable_streaming ?? false,
+      aiGateway: llm.ai_gateway ?? false,
       fallbacks: convertedFallbacks,
       ...authData,
     });
@@ -649,7 +652,7 @@ function ModelsPanel() {
     }
     
     const hasAuth = authData.authMethod !== 'default';
-    setShowAdvanced(!!(llm.on_behalf_of_user || llm.use_responses_api || llm.disable_streaming || (llm.fallbacks && llm.fallbacks.length > 0) || hasAuth));
+    setShowAdvanced(!!(llm.on_behalf_of_user || llm.use_responses_api || llm.disable_streaming || llm.ai_gateway || (llm.fallbacks && llm.fallbacks.length > 0) || hasAuth));
     setIsModalOpen(true);
   };
 
@@ -686,6 +689,10 @@ function ModelsPanel() {
 
       if (formData.disableStreaming) {
         modelConfig.disable_streaming = true;
+      }
+
+      if (formData.aiGateway) {
+        modelConfig.ai_gateway = true;
       }
 
       if (formData.fallbacks.length > 0) {
@@ -963,9 +970,9 @@ function ModelsPanel() {
           >
             {showAdvanced ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
             <span>Advanced Options</span>
-            {(formData.onBehalfOfUser || formData.useResponseApi || formData.disableStreaming || formData.fallbacks.length > 0 || formData.authMethod !== 'default') && (
+            {(formData.onBehalfOfUser || formData.useResponseApi || formData.disableStreaming || formData.aiGateway || formData.fallbacks.length > 0 || formData.authMethod !== 'default') && (
               <Badge variant="info" className="ml-2">
-                {(formData.onBehalfOfUser ? 1 : 0) + (formData.useResponseApi ? 1 : 0) + (formData.disableStreaming ? 1 : 0) + (formData.fallbacks.length > 0 ? 1 : 0) + (formData.authMethod !== 'default' ? 1 : 0)} configured
+                {(formData.onBehalfOfUser ? 1 : 0) + (formData.useResponseApi ? 1 : 0) + (formData.disableStreaming ? 1 : 0) + (formData.aiGateway ? 1 : 0) + (formData.fallbacks.length > 0 ? 1 : 0) + (formData.authMethod !== 'default' ? 1 : 0)} configured
               </Badge>
             )}
           </button>
@@ -1009,6 +1016,22 @@ function ModelsPanel() {
                 </label>
                 <p className="text-xs text-slate-500 ml-6">
                   Required when the Foundation Model serving endpoint has output guardrails enabled (non-streaming only).
+                </p>
+              </div>
+
+              {/* AI Gateway (dao-ai 0.1.77+) */}
+              <div className="space-y-2">
+                <label className="flex items-center space-x-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.aiGateway}
+                    onChange={(e) => setFormData({ ...formData, aiGateway: e.target.checked, useResponseApi: e.target.checked ? false : formData.useResponseApi })}
+                    className="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500"
+                  />
+                  <span className="text-sm text-slate-300">Route through AI Gateway</span>
+                </label>
+                <p className="text-xs text-slate-500 ml-6">
+                  Send requests to <code>/ai-gateway/mlflow/v1/chat/completions</code> instead of <code>/serving-endpoints/&lt;name&gt;/invocations</code>. The model <code>name</code> is sent as the OpenAI-style model id. Incompatible with Response API; structured output requires <em>Disable streaming</em>.
                 </p>
               </div>
 
