@@ -1898,15 +1898,13 @@ export function generateYAML(config: AppConfig): string {
     yamlConfig.resources = {};
     
     if (config.resources!.models && Object.keys(config.resources!.models).length > 0) {
-      // EMIT KEY (TRANSITION):
-      // dao-ai 0.1.75 (unreleased on PyPI as of this commit) adds an
-      // alias on `ResourcesModel.models` so both `models:` and `llms:`
-      // parse server-side. Until 0.1.75 ships, we emit the legacy
-      // `llms:` key so the YAML round-trips through every published
-      // dao-ai version. Once 0.1.75 is on PyPI and the builder's
-      // pyproject pin is bumped, change `EMIT_KEY` to 'models' and the
-      // workshop sweep + customer migration can proceed.
-      const EMIT_KEY: 'models' | 'llms' = 'llms';
+      // EMIT_KEY: 'models' is canonical as of dao-ai 0.1.75. dao-ai's
+      // `ResourcesModel.models` carries `alias="llms"` + `populate_by_name=True`,
+      // so existing customer YAML using the legacy `llms:` key keeps
+      // parsing unchanged at runtime. Flip back to 'llms' only if you
+      // need to support a dao-ai version older than 0.1.75 in the
+      // deployed environment.
+      const EMIT_KEY: 'models' | 'llms' = 'models';
       yamlConfig.resources[EMIT_KEY] = {};
       Object.entries(config.resources!.models).forEach(([key, llm]) => {
         // Format fallbacks - convert ref: prefixed values to YAML aliases

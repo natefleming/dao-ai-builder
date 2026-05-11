@@ -7,11 +7,12 @@ requires-python = ">=3.11"
 dependencies = [
     "flask>=3.0.0",
     "gunicorn>=21.0.0",
-    # Pinned to >=0.1.73 (latest on PyPI as of the last builder rev).
-    # Bump to >=0.1.75 once that release publishes — 0.1.75 carries the
-    # `resources.llms` -> `resources.models` and `LLMModel` ->
-    # `InferenceEndpointModel` renames (both with back-compat aliases).
-    "dao-ai>=0.1.73",
+    # dao-ai 0.1.75 carries the `resources.llms` -> `resources.models`
+    # and `LLMModel` -> `InferenceEndpointModel` renames (both with
+    # back-compat aliases on the dao-ai side, so old customer configs
+    # keep loading unchanged). The builder emits the canonical
+    # `models:` key now that this floor is in place.
+    "dao-ai>=0.1.75",
     "databricks-sdk>=0.74.0",
     "mlflow[databricks]>=3.8.1",
     "python-dotenv>=1.2.1",
