@@ -9,9 +9,11 @@ dependencies = [
     "gunicorn>=21.0.0",
     # dao-ai 0.1.75 carries the `resources.llms` -> `resources.models`
     # and `LLMModel` -> `InferenceEndpointModel` renames (both with
-    # back-compat aliases on the dao-ai side, so old customer configs
-    # keep loading unchanged). The builder emits the canonical
-    # `models:` key now that this floor is in place.
+    # back-compat aliases on the dao-ai side). 0.1.76 fixed the JSON
+    # schema regen (used by IDE linting; runtime behavior identical).
+    # Builder pin held at >=0.1.75 because the workspace local PyPI
+    # mirror lags PyPI by ~1 week; bump to >=0.1.76 once the mirror
+    # catches up.
     "dao-ai>=0.1.75",
     "databricks-sdk>=0.74.0",
     "mlflow[databricks]>=3.8.1",
