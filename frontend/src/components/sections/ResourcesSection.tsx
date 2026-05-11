@@ -93,6 +93,7 @@ import {
   Key,
   Loader2,
   AppWindow,
+  BookOpen,
 } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
@@ -107,13 +108,13 @@ import {
   applyResourceAuth
 } from '@/components/ui/ResourceAuthSection';
 import { useConfigStore } from '@/stores/configStore';
-import { 
+import {
   AppConfig,
-  GenieRoomModel, 
-  TableModel, 
-  VolumeModel, 
-  FunctionModel, 
-  WarehouseModel, 
+  GenieRoomModel,
+  TableModel,
+  VolumeModel,
+  FunctionModel,
+  WarehouseModel,
   ConnectionModel,
   DatabricksAppModel,
   LLMModel,
@@ -122,6 +123,8 @@ import {
   VariableModel,
   VectorStoreModel,
   SchemaModel,
+  SkillModel,
+  VolumePathModel,
 } from '@/types/dao-ai-types';
 import { 
   useGenieSpaces, 
@@ -142,7 +145,7 @@ import {
 } from '@/hooks/useDatabricks';
 import { DatabricksAppSelect } from '@/components/ui/DatabricksSelect';
 
-type ResourceType = 'llms' | 'genie_rooms' | 'tables' | 'volumes' | 'functions' | 'warehouses' | 'connections' | 'databases' | 'vector_stores' | 'apps';
+type ResourceType = 'llms' | 'genie_rooms' | 'tables' | 'volumes' | 'functions' | 'warehouses' | 'connections' | 'databases' | 'vector_stores' | 'apps' | 'skills';
 
 interface ResourceTab {
   id: ResourceType;
@@ -162,6 +165,7 @@ const RESOURCE_TABS: ResourceTab[] = [
   { id: 'databases', label: 'Databases', icon: Server, description: 'Lakebase/PostgreSQL backends' },
   { id: 'vector_stores', label: 'Vector Stores', icon: Layers, description: 'Vector search indexes' },
   { id: 'apps', label: 'Apps', icon: AppWindow, description: 'Databricks Apps' },
+  { id: 'skills', label: 'Skills', icon: BookOpen, description: 'Deep agent skills (SKILL.md directories)' },
 ];
 
 const COMMON_MODELS = [
@@ -296,6 +300,8 @@ export function ResourcesSection() {
         return <VectorStoresPanel showForm={showForm} setShowForm={setShowForm} editingKey={editingKey} setEditingKey={setEditingKey} onClose={handleCloseForm} />;
       case 'apps':
         return <DatabricksAppsPanel showForm={showForm} setShowForm={setShowForm} editingKey={editingKey} setEditingKey={setEditingKey} onClose={handleCloseForm} />;
+      case 'skills':
+        return <SkillsPanel showForm={showForm} setShowForm={setShowForm} editingKey={editingKey} setEditingKey={setEditingKey} onClose={handleCloseForm} />;
       default:
         return null;
     }
@@ -313,6 +319,7 @@ export function ResourcesSection() {
       case 'databases': return Object.keys(resources?.databases || {}).length;
       case 'vector_stores': return Object.keys(resources?.vector_stores || {}).length;
       case 'apps': return Object.keys(resources?.apps || {}).length;
+      case 'skills': return Object.keys(resources?.skills || {}).length;
       default: return 0;
     }
   };
@@ -6307,6 +6314,288 @@ function DatabricksAppsPanel({ showForm, setShowForm, editingKey, setEditingKey,
                 isRefNameDuplicate(formData.refName, config, editingKey)
               }
             >
+              {editingKey ? 'Update' : 'Add'}
+            </Button>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// =============================================================================
+// Skills Panel — deepagents Skill resources (dao-ai 0.1.73+).
+// A Skill is a directory of Markdown content (minimally SKILL.md) that
+// teaches a deep_agent how to do a task. Two source modes:
+//   - Local: a relative path string (e.g. skills/research) shipped via
+//     code_paths with the model artifact.
+//   - Volume: a VolumePathModel referencing a UC volume, wired as a
+//     deployment resource for governance.
+// =============================================================================
+type SkillPathSource = 'local' | 'volume';
+
+function SkillsPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose }: PanelProps) {
+  const { config, addSkill, updateSkill, removeSkill } = useConfigStore();
+  const skills = config.resources?.skills || {};
+  const configuredVolumes = config.resources?.volumes || {};
+  const hasConfiguredVolumes = Object.keys(configuredVolumes).length > 0;
+
+  const [pathSource, setPathSource] = useState<SkillPathSource>('local');
+  const [formData, setFormData] = useState({
+    refName: '',
+    name: '',
+    description: '',
+    localPath: '',
+    volumeRef: '',
+    volumeSubPath: '',
+  });
+
+  const resetForm = () => {
+    setPathSource('local');
+    setFormData({ refName: '', name: '', description: '', localPath: '', volumeRef: '', volumeSubPath: '' });
+  };
+
+  const handleEdit = (key: string) => {
+    scrollToAsset(key);
+    const skill = skills[key];
+    const nextForm = {
+      refName: key,
+      name: skill.name || key,
+      description: skill.description || '',
+      localPath: '',
+      volumeRef: '',
+      volumeSubPath: '',
+    };
+    if (typeof skill.path === 'string') {
+      setPathSource('local');
+      nextForm.localPath = skill.path;
+    } else if (skill.path) {
+      setPathSource('volume');
+      const volumeName = skill.path.volume?.name;
+      const matchingKey = volumeName
+        ? Object.entries(configuredVolumes).find(([, v]) => v.name === volumeName)?.[0]
+        : undefined;
+      nextForm.volumeRef = matchingKey || '';
+      nextForm.volumeSubPath = skill.path.path || '';
+    }
+    setFormData(nextForm);
+    setEditingKey(key);
+    setShowForm(true);
+  };
+
+  const handleSave = () => {
+    let skillPath: SkillModel['path'];
+    if (pathSource === 'volume' && formData.volumeRef) {
+      const vol = configuredVolumes[formData.volumeRef];
+      const volumePath: VolumePathModel = {
+        ...(vol && { volume: vol }),
+        ...(formData.volumeSubPath && { path: formData.volumeSubPath }),
+      };
+      skillPath = volumePath;
+    } else {
+      skillPath = formData.localPath;
+    }
+    const skill: SkillModel = {
+      name: formData.name || formData.refName,
+      path: skillPath,
+    };
+    if (formData.description) {
+      skill.description = formData.description;
+    }
+
+    if (editingKey) {
+      if (editingKey !== formData.refName) {
+        removeSkill(editingKey);
+        addSkill(formData.refName, skill);
+      } else {
+        updateSkill(formData.refName, skill);
+      }
+    } else {
+      addSkill(formData.refName, skill);
+    }
+    resetForm();
+    onClose();
+  };
+
+  const isValid = formData.refName && formData.name && (
+    (pathSource === 'local' && formData.localPath) ||
+    (pathSource === 'volume' && formData.volumeRef)
+  ) && !isRefNameDuplicate(formData.refName, config, editingKey);
+
+  return (
+    <Card className="p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center space-x-3">
+          <BookOpen className="w-5 h-5 text-amber-300" />
+          <h3 className="text-lg font-semibold text-slate-100">Skills</h3>
+        </div>
+        <Button variant="secondary" size="sm" onClick={() => { resetForm(); setEditingKey(null); setShowForm(true); }}>
+          <Plus className="w-4 h-4 mr-1" />
+          Add Skill
+        </Button>
+      </div>
+
+      <Card className="p-3 mb-4 bg-amber-900/10 border-amber-500/30">
+        <div className="flex items-start space-x-2">
+          <Info className="w-4 h-4 text-amber-300 mt-0.5 flex-shrink-0" />
+          <p className="text-xs text-amber-200/80">
+            A skill is a directory containing at minimum a <code className="px-1 bg-slate-800/60 rounded">SKILL.md</code> file
+            that teaches a <strong>deep agent</strong> how to perform a task. Local skills are bundled with
+            the deployment; volume-backed skills are read from Unity Catalog at runtime.
+          </p>
+        </div>
+      </Card>
+
+      {Object.keys(skills).length > 0 && (
+        <div className="space-y-2 mb-4">
+          {Object.entries(skills).map(([key, skill]) => {
+            const pathDisplay = typeof skill.path === 'string'
+              ? skill.path
+              : skill.path?.volume?.name
+                ? `/Volumes/${getVariableDisplayValue(skill.path.volume.schema?.catalog_name)}/${getVariableDisplayValue(skill.path.volume.schema?.schema_name)}/${skill.path.volume.name}${skill.path.path ? '/' + skill.path.path : ''}`
+                : (skill.path?.path || '');
+            return (
+              <div
+                key={key}
+                className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700 cursor-pointer hover:bg-slate-800/70 transition-colors"
+                onClick={() => handleEdit(key)}
+              >
+                <div className="flex items-center space-x-3">
+                  <BookOpen className="w-4 h-4 text-amber-300" />
+                  <div>
+                    <p className="font-medium text-slate-200">{key}</p>
+                    <p className="text-xs text-slate-500 font-mono">{pathDisplay}</p>
+                    {skill.description && (
+                      <p className="text-xs text-slate-500 mt-0.5 italic">{skill.description}</p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Badge variant={typeof skill.path === 'string' ? 'default' : 'success'}>
+                    {typeof skill.path === 'string' ? 'Local' : 'Volume'}
+                  </Badge>
+                  <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleEdit(key); }}>
+                    <Edit2 className="w-4 h-4" />
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); safeDelete('Skill', key, () => removeSkill(key)); }}>
+                    <Trash2 className="w-4 h-4 text-red-400" />
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {Object.keys(skills).length === 0 && !showForm && (
+        <p className="text-slate-500 text-sm">No skills configured.</p>
+      )}
+
+      {showForm && (
+        <div className="mt-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700 space-y-4">
+          <h4 className="font-medium text-slate-200">{editingKey ? 'Edit' : 'New'} Skill</h4>
+
+          <Input
+            label="Reference Name"
+            value={formData.refName}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => {
+              const ref = normalizeRefNameWhileTyping(e.target.value);
+              setFormData({ ...formData, refName: ref, name: formData.name || ref });
+            }}
+            placeholder="research_skill"
+            hint="Used in YAML as the key under resources.skills"
+            required
+          />
+
+          <Input
+            label="Skill Name"
+            value={formData.name}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, name: e.target.value })}
+            placeholder="research"
+            hint="Identifier used by deepagents' SkillsMiddleware"
+            required
+          />
+
+          <Input
+            label="Description"
+            value={formData.description}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, description: e.target.value })}
+            placeholder="What this skill does"
+          />
+
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-slate-300">Skill Source</label>
+            <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5 w-full">
+              <button
+                type="button"
+                onClick={() => setPathSource('local')}
+                className={`flex-1 px-3 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
+                  pathSource === 'local'
+                    ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                    : 'text-slate-400 border border-transparent hover:text-slate-300'
+                }`}
+              >
+                Local Path
+              </button>
+              <button
+                type="button"
+                onClick={() => setPathSource('volume')}
+                disabled={!hasConfiguredVolumes}
+                className={`flex-1 px-3 py-1.5 text-xs rounded-md font-medium transition-all duration-150 ${
+                  pathSource === 'volume'
+                    ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                    : 'text-slate-400 border border-transparent hover:text-slate-300'
+                } disabled:opacity-50 disabled:cursor-not-allowed`}
+                title={hasConfiguredVolumes ? '' : 'Configure a Volume resource first'}
+              >
+                UC Volume
+              </button>
+            </div>
+          </div>
+
+          {pathSource === 'local' ? (
+            <Input
+              label="Local Path"
+              value={formData.localPath}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, localPath: e.target.value })}
+              placeholder="skills/research"
+              hint="Relative path under the project root; bundled with the model artifact"
+              required
+            />
+          ) : (
+            <>
+              <Select
+                label="Volume"
+                value={formData.volumeRef}
+                onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, volumeRef: e.target.value })}
+                options={[
+                  { value: '', label: 'Select a configured volume...' },
+                  ...Object.entries(configuredVolumes).map(([key, vol]) => ({
+                    value: key,
+                    label: `${key} (${vol.name})`,
+                  })),
+                ]}
+                hint="Reference a Volume defined in Resources → Volumes"
+              />
+              <Input
+                label="Subpath (optional)"
+                value={formData.volumeSubPath}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, volumeSubPath: e.target.value })}
+                placeholder="research"
+                hint="Folder inside the volume (omit to use the volume root)"
+              />
+            </>
+          )}
+
+          {formData.refName && isRefNameDuplicate(formData.refName, config, editingKey) && (
+            <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+              A resource with reference name "{formData.refName}" already exists. Please choose a unique name.
+            </div>
+          )}
+
+          <div className="flex justify-end space-x-3">
+            <Button variant="secondary" onClick={() => { resetForm(); onClose(); }}>Cancel</Button>
+            <Button onClick={handleSave} disabled={!isValid}>
               {editingKey ? 'Update' : 'Add'}
             </Button>
           </div>

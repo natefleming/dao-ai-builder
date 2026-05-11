@@ -922,7 +922,14 @@ function formatVolumePath(
  * Format orchestration configuration for YAML output.
  * Handles swarm handoffs where null means "any agent" and [] means "no handoffs".
  */
-function formatOrchestration(orchestration: OrchestrationModel, definedLLMs: Record<string, any>, definedTools: Record<string, any>, definedMiddleware: Record<string, any>, definedAgents: Record<string, any>): any {
+function formatOrchestration(
+  orchestration: OrchestrationModel,
+  definedLLMs: Record<string, any>,
+  definedTools: Record<string, any>,
+  definedMiddleware: Record<string, any>,
+  definedAgents: Record<string, any>,
+  definedSkills: Record<string, any> = {},
+): any {
   const result: any = {};
   
   if (orchestration.supervisor) {
@@ -1113,6 +1120,129 @@ function formatOrchestration(orchestration: OrchestrationModel, definedLLMs: Rec
     }
   }
   
+  // Deep Agent (dao-ai 0.1.73+). Single planning agent built on
+  // deepagents.create_deep_agent. Tools/skills/subagents/model all accept
+  // dao-ai primitives and string lookups; we emit references when the
+  // entry resolves to a definition in resources/tools/agents/skills.
+  if (orchestration.deep_agent) {
+    const da = orchestration.deep_agent as any;
+    const deepAgent: Record<string, unknown> = {};
+
+    // Model — same resolution as supervisor.model
+    if (da.model !== undefined && da.model !== null) {
+      deepAgent.model = typeof da.model === 'string'
+        ? da.model
+        : formatModelReference(da.model, definedLLMs, 'orchestration.deep_agent.model');
+    }
+
+    // Tools — resolve to *tool_name when the entry is a known tool
+    if (Array.isArray(da.tools) && da.tools.length > 0) {
+      deepAgent.tools = da.tools.map((tool: any) => {
+        const toolName = typeof tool === 'string' ? tool : tool?.name;
+        if (toolName && definedTools[toolName]) {
+          return createReference(toolName);
+        }
+        if (toolName) {
+          const matched = Object.entries(definedTools).find(
+            ([, t]) => (t as any).name === toolName,
+          );
+          if (matched) return createReference(matched[0]);
+          return createReference(toolName);
+        }
+        return tool;
+      });
+    }
+
+    // System prompt — string passes through; PromptModel emits as-is
+    if (da.system_prompt) {
+      deepAgent.system_prompt = da.system_prompt;
+    }
+
+    // Middleware — same resolution as supervisor.middleware
+    if (Array.isArray(da.middleware) && da.middleware.length > 0) {
+      deepAgent.middleware = da.middleware.map((mw: any) => {
+        if (typeof mw === 'string') {
+          return mw.startsWith('*') ? createReference(mw.slice(1)) : createReference(mw);
+        }
+        const mwName = mw?.name;
+        if (mwName) {
+          const matched = Object.entries(definedMiddleware).find(
+            ([, m]) => (m as any).name === mwName,
+          );
+          if (matched) return createReference(matched[0]);
+          return createReference(mwName);
+        }
+        return mw;
+      });
+    }
+
+    // Subagents — strings resolve against config.agents; inline objects
+    // pass through verbatim so SubAgentModel fields round-trip.
+    if (Array.isArray(da.subagents) && da.subagents.length > 0) {
+      deepAgent.subagents = da.subagents.map((sub: any) => {
+        if (typeof sub === 'string') {
+          if (definedAgents[sub]) return createReference(sub);
+          const matched = Object.entries(definedAgents).find(
+            ([, a]) => (a as any).name === sub,
+          );
+          return matched ? createReference(matched[0]) : sub;
+        }
+        // Inline SubAgentModel/AgentModel — emit as-is. Tool refs inside
+        // sub-agents are not rewritten to YAML aliases here; the dao-ai
+        // config_vars layer resolves them at load time by string lookup.
+        return sub;
+      });
+    }
+
+    // Skills — strings resolve against config.resources.skills as *alias
+    if (Array.isArray(da.skills) && da.skills.length > 0) {
+      deepAgent.skills = da.skills.map((skill: any) => {
+        if (typeof skill === 'string') {
+          if (definedSkills[skill]) return createReference(skill);
+          return skill;
+        }
+        const skillName = skill?.name;
+        if (skillName && definedSkills[skillName]) return createReference(skillName);
+        return skill;
+      });
+    }
+
+    // Instruction files — plain string array
+    if (Array.isArray(da.instruction_files) && da.instruction_files.length > 0) {
+      deepAgent.instruction_files = da.instruction_files;
+    }
+
+    // Permissions, response_format, interrupt_on, backend, context_schema,
+    // recursion_limit, debug, name — pass-through. These are leaf scalars
+    // or simple objects that don't need reference resolution.
+    if (Array.isArray(da.permissions) && da.permissions.length > 0) {
+      deepAgent.permissions = da.permissions;
+    }
+    if (da.response_format !== undefined && da.response_format !== null) {
+      deepAgent.response_format = da.response_format;
+    }
+    if (da.interrupt_on && Object.keys(da.interrupt_on).length > 0) {
+      deepAgent.interrupt_on = da.interrupt_on;
+    }
+    if (da.backend) {
+      deepAgent.backend = da.backend;
+    }
+    if (da.context_schema) {
+      deepAgent.context_schema = da.context_schema;
+    }
+    if (da.recursion_limit !== undefined && da.recursion_limit !== null) {
+      deepAgent.recursion_limit = da.recursion_limit;
+    }
+    if (da.debug === true) {
+      deepAgent.debug = true;
+    }
+    if (da.name) {
+      deepAgent.name = da.name;
+    }
+
+    result.deep_agent = deepAgent;
+  }
+
   // Handle memory - can be a string reference like '*memory' or a MemoryModel object
   if (orchestration.memory) {
     const memoryValue = orchestration.memory as unknown;
@@ -1684,7 +1814,25 @@ export function generateYAML(config: AppConfig): string {
   if (config.version) {
     yamlConfig.version = config.version;
   }
-  
+
+  // Parameters block — emitted right after version so the file reads
+  // top-down as: schema-version → declared inputs → reusable variables.
+  // Each parameter is rendered as { description?, default? }; an entry
+  // with neither field becomes an empty {} marking a required param.
+  if (config.parameters && Object.keys(config.parameters).length > 0) {
+    yamlConfig.parameters = {};
+    Object.entries(config.parameters).forEach(([key, param]) => {
+      const entry: Record<string, unknown> = {};
+      if (param.description !== undefined && param.description !== null && param.description !== '') {
+        entry.description = param.description;
+      }
+      if (param.default !== undefined && param.default !== null) {
+        entry.default = param.default;
+      }
+      yamlConfig.parameters[key] = entry;
+    });
+  }
+
   // Clear and set section-level anchor overrides from config
   clearSectionAnchors();
   
@@ -1742,7 +1890,8 @@ export function generateYAML(config: AppConfig): string {
     (config.resources.warehouses && Object.keys(config.resources.warehouses).length > 0) ||
     (config.resources.connections && Object.keys(config.resources.connections).length > 0) ||
     (config.resources.databases && Object.keys(config.resources.databases).length > 0) ||
-    (config.resources.apps && Object.keys(config.resources.apps).length > 0)
+    (config.resources.apps && Object.keys(config.resources.apps).length > 0) ||
+    (config.resources.skills && Object.keys(config.resources.skills).length > 0)
   );
 
   if (hasResources) {
@@ -1956,6 +2105,27 @@ export function generateYAML(config: AppConfig): string {
           ...(app.on_behalf_of_user !== undefined && { on_behalf_of_user: app.on_behalf_of_user }),
           ...formatResourceAuth(app, `resources.apps.${key}`),
         };
+      });
+    }
+
+    // Skills (dao-ai 0.1.73+) — deepagents Skill resources, referenced from
+    // orchestration.deep_agent.skills and subagents[].skills. Local skills
+    // ship via code_paths; VolumePathModel skills are wired as deployment
+    // resources for permission grants.
+    if (config.resources!.skills && Object.keys(config.resources!.skills).length > 0) {
+      const definedVolumes = config.resources!.volumes || {};
+      yamlConfig.resources.skills = {};
+      Object.entries(config.resources!.skills).forEach(([key, skill]) => {
+        const skillEntry: Record<string, unknown> = { name: skill.name };
+        if (typeof skill.path === 'string') {
+          skillEntry.path = skill.path;
+        } else if (skill.path) {
+          skillEntry.path = formatVolumePath(skill.path, definedVolumes);
+        }
+        if (skill.description) {
+          skillEntry.description = skill.description;
+        }
+        yamlConfig.resources.skills[key] = skillEntry;
       });
     }
   }
@@ -2739,7 +2909,15 @@ export function generateYAML(config: AppConfig): string {
       const definedTools = config.tools || {};
       const definedMiddleware = config.middleware || {};
       const definedAgents = config.agents || {};
-      yamlConfig.app.orchestration = formatOrchestration(config.app.orchestration, definedLLMs, definedTools, definedMiddleware, definedAgents);
+      const definedSkills = config.resources?.skills || {};
+      yamlConfig.app.orchestration = formatOrchestration(
+        config.app.orchestration,
+        definedLLMs,
+        definedTools,
+        definedMiddleware,
+        definedAgents,
+        definedSkills,
+      );
     }
     
     // Format chat_history

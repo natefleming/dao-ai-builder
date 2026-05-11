@@ -1,5 +1,5 @@
 import { useState, ChangeEvent } from 'react';
-import { Plus, Trash2, Key, Lock, FileCode, Layers, Pencil } from 'lucide-react';
+import { Plus, Trash2, Key, Lock, FileCode, Layers, Pencil, SlidersHorizontal } from 'lucide-react';
 import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
@@ -14,7 +14,10 @@ import {
   PrimitiveVariableModel,
   EnvironmentVariableModel,
   SecretVariableModel,
+  ParameterDeclarationModel,
 } from '@/types/dao-ai-types';
+
+type VariablesTab = 'variables' | 'parameters';
 
 interface VariableFormData {
   name: string;
@@ -129,6 +132,61 @@ const getVariableDescription = (variable: VariableModel): string => {
 };
 
 export function VariablesSection() {
+  const { config } = useConfigStore();
+  const [activeTab, setActiveTab] = useState<VariablesTab>('variables');
+  const variableCount = Object.keys(config.variables || {}).length;
+  const parameterCount = Object.keys(config.parameters || {}).length;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col gap-2">
+        <h2 className="text-lg font-semibold text-white">Variables &amp; Parameters</h2>
+        <p className="text-sm text-slate-400">
+          <strong>Variables</strong> hold reusable values (env vars, secrets, fallbacks) referenced via YAML anchors.{' '}
+          <strong>Parameters</strong> are declared inputs substituted at load time with{' '}
+          <code className="px-1 bg-slate-800/60 rounded">${'{'}param.NAME{'}'}</code>.
+        </p>
+      </div>
+
+      <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5 border border-slate-700/50 w-full max-w-md">
+        <button
+          type="button"
+          onClick={() => setActiveTab('variables')}
+          className={`flex-1 px-4 py-2 text-sm rounded-md font-medium transition-all duration-150 inline-flex items-center justify-center gap-2 ${
+            activeTab === 'variables'
+              ? 'bg-blue-500/20 text-blue-400 border border-blue-500/40'
+              : 'text-slate-400 border border-transparent hover:text-slate-200'
+          }`}
+        >
+          <Key className="w-4 h-4" />
+          Variables
+          {variableCount > 0 && (
+            <span className="text-xs px-1.5 py-0.5 rounded bg-slate-700/70 text-slate-300">{variableCount}</span>
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('parameters')}
+          className={`flex-1 px-4 py-2 text-sm rounded-md font-medium transition-all duration-150 inline-flex items-center justify-center gap-2 ${
+            activeTab === 'parameters'
+              ? 'bg-blue-500/20 text-blue-400 border border-blue-500/40'
+              : 'text-slate-400 border border-transparent hover:text-slate-200'
+          }`}
+        >
+          <SlidersHorizontal className="w-4 h-4" />
+          Parameters
+          {parameterCount > 0 && (
+            <span className="text-xs px-1.5 py-0.5 rounded bg-slate-700/70 text-slate-300">{parameterCount}</span>
+          )}
+        </button>
+      </div>
+
+      {activeTab === 'variables' ? <VariablesPanel /> : <ParametersPanel />}
+    </div>
+  );
+}
+
+function VariablesPanel() {
   const { config, addVariable, updateVariable, removeVariable } = useConfigStore();
   const [isAdding, setIsAdding] = useState(false);
   const [editingKey, setEditingKey] = useState<string | null>(null);
@@ -294,7 +352,7 @@ export function VariablesSection() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-white">Variables</h2>
+          <h3 className="text-base font-medium text-white">Variables</h3>
           <p className="text-sm text-slate-400">
             Define reusable configuration variables (env vars, secrets, or values)
           </p>
@@ -560,6 +618,217 @@ tools:
             </code>
           </pre>
         </Card>
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
+// Parameters Panel — load-time substitution declarations.
+// AppConfig.parameters is a dict keyed by parameter name; the value carries
+// an optional description and optional default. Omitting `default` makes the
+// parameter required. Referenced inline via ${param.NAME} or ${var.NAME}.
+// =============================================================================
+interface ParameterFormData {
+  name: string;
+  description: string;
+  hasDefault: boolean;
+  defaultValue: string;
+}
+
+const defaultParamForm: ParameterFormData = {
+  name: '',
+  description: '',
+  hasDefault: false,
+  defaultValue: '',
+};
+
+function ParametersPanel() {
+  const { config, addParameter, updateParameter, removeParameter } = useConfigStore();
+  const parameters = config.parameters || {};
+  const { scrollToAsset } = useYamlScrollStore();
+
+  const [isAdding, setIsAdding] = useState(false);
+  const [editingKey, setEditingKey] = useState<string | null>(null);
+  const [formData, setFormData] = useState<ParameterFormData>(defaultParamForm);
+
+  const resetForm = () => {
+    setFormData(defaultParamForm);
+    setEditingKey(null);
+    setIsAdding(false);
+  };
+
+  const handleEdit = (name: string, param: ParameterDeclarationModel) => {
+    scrollToAsset(name);
+    setEditingKey(name);
+    setFormData({
+      name,
+      description: param.description ?? '',
+      hasDefault: param.default !== undefined && param.default !== null,
+      defaultValue: param.default ?? '',
+    });
+    setIsAdding(true);
+  };
+
+  const handleSubmit = () => {
+    if (!formData.name.trim()) return;
+    const param: ParameterDeclarationModel = {};
+    if (formData.description.trim()) {
+      param.description = formData.description.trim();
+    }
+    if (formData.hasDefault) {
+      param.default = formData.defaultValue;
+    }
+    if (editingKey) {
+      if (editingKey !== formData.name) {
+        removeParameter(editingKey);
+        addParameter(formData.name, param);
+      } else {
+        updateParameter(editingKey, param);
+      }
+    } else {
+      addParameter(formData.name, param);
+    }
+    resetForm();
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-base font-medium text-white">Parameters</h3>
+          <p className="text-sm text-slate-400">
+            Declare load-time inputs substituted into the config via{' '}
+            <code className="px-1 bg-slate-800/60 rounded">${'{'}param.NAME{'}'}</code>.
+            Parameters without a default are required at deploy time.
+          </p>
+        </div>
+        <Button onClick={() => { setFormData(defaultParamForm); setIsAdding(true); }} disabled={isAdding}>
+          <Plus className="w-4 h-4 mr-2" />
+          Add Parameter
+        </Button>
+      </div>
+
+      {isAdding && (
+        <Card className="p-4 space-y-4 border-blue-500/50">
+          <h3 className="text-lg font-medium text-white">
+            {editingKey ? 'Edit Parameter' : 'Add Parameter'}
+          </h3>
+          <Input
+            label="Parameter Name"
+            placeholder="e.g., catalog, schema, genie_parent_path"
+            value={formData.name}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => {
+              setFormData({ ...formData, name: normalizeRefNameWhileTyping(e.target.value) });
+            }}
+            hint="Use snake_case. References resolve from CLI --param, env, declared default, or inline fallback."
+          />
+          <Input
+            label="Description"
+            placeholder="What does this parameter control?"
+            value={formData.description}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, description: e.target.value })}
+          />
+          <label className="flex items-center space-x-2 cursor-pointer text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={formData.hasDefault}
+              onChange={(e) => setFormData({ ...formData, hasDefault: e.target.checked })}
+              className="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500"
+            />
+            <span>Has default value (otherwise required at load time)</span>
+          </label>
+          {formData.hasDefault && (
+            <Input
+              label="Default Value"
+              placeholder="Value used when --param / env not provided"
+              value={formData.defaultValue}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, defaultValue: e.target.value })}
+            />
+          )}
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={resetForm}>Cancel</Button>
+            <Button onClick={handleSubmit} disabled={!formData.name.trim()}>
+              {editingKey ? 'Save Changes' : 'Add Parameter'}
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {Object.keys(parameters).length === 0 && !isAdding ? (
+        <Card className="p-8 text-center">
+          <div className="text-slate-400 mb-4">
+            <SlidersHorizontal className="w-12 h-12 mx-auto opacity-50" />
+          </div>
+          <h3 className="text-lg font-medium text-white mb-2">No Parameters Declared</h3>
+          <p className="text-slate-400 text-sm mb-4">
+            Parameters let you template the config — declare them here, then reference{' '}
+            <code className="px-1 bg-slate-800/60 rounded">${'{'}param.NAME{'}'}</code> anywhere in any string value.
+          </p>
+          <Button onClick={() => { setFormData(defaultParamForm); setIsAdding(true); }}>
+            <Plus className="w-4 h-4 mr-2" />
+            Add Your First Parameter
+          </Button>
+        </Card>
+      ) : (
+        <div className="grid gap-4">
+          {Object.entries(parameters).map(([name, param]) => {
+            const isRequired = param.default === undefined || param.default === null;
+            return (
+              <Card
+                key={name}
+                className="p-4 cursor-pointer hover:border-blue-500/50 transition-colors"
+                onClick={() => handleEdit(name, param)}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-slate-700/50 rounded-lg">
+                      <SlidersHorizontal className="w-5 h-5 text-amber-400" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h4 className="font-medium text-white">{name}</h4>
+                        <span className="text-xs px-2 py-0.5 rounded font-mono text-amber-300 bg-amber-500/10">
+                          ${'{'}param.{name}{'}'}
+                        </span>
+                      </div>
+                      {param.description && (
+                        <p className="text-sm text-slate-400">{param.description}</p>
+                      )}
+                      {!isRequired && (
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          Default: <span className="text-slate-300 font-mono">{String(param.default)}</span>
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs px-2 py-1 rounded ${isRequired ? 'bg-red-500/20 text-red-300' : 'bg-emerald-500/15 text-emerald-300'}`}>
+                      {isRequired ? 'Required' : 'Optional'}
+                    </span>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleEdit(name, param); }}
+                      className="text-slate-400 hover:text-blue-400 p-1"
+                      title="Edit parameter"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        safeDelete('Parameter', name, () => removeParameter(name));
+                      }}
+                      className="text-slate-400 hover:text-red-400 p-1"
+                      title="Delete parameter"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
       )}
     </div>
   );

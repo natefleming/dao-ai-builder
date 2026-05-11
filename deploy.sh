@@ -192,9 +192,20 @@ echo ""
 
 # Step 1: Generate JSON schema for validation
 echo -e "${YELLOW}[1/6] Generating JSON schema...${NC}"
-if command -v dao-ai &> /dev/null; then
-    dao-ai schema > frontend/public/model_config_schema.json
-    echo -e "  ${GREEN}✓${NC} JSON schema generated from dao-ai"
+# Set DAO_AI_BUILDER_SKIP_SCHEMA_REGEN=1 to use the schema currently sitting
+# in schemas/ + frontend/public/ (useful when the locally-installed dao-ai
+# CLI is broken or behind the schema you've already vendored).
+if [[ -n "$DAO_AI_BUILDER_SKIP_SCHEMA_REGEN" ]]; then
+    echo -e "  ${YELLOW}⚠${NC} DAO_AI_BUILDER_SKIP_SCHEMA_REGEN set — using existing schema"
+elif command -v dao-ai &> /dev/null; then
+    if dao-ai schema > frontend/public/model_config_schema.json.new 2>/tmp/dao-ai-schema.err; then
+        mv frontend/public/model_config_schema.json.new frontend/public/model_config_schema.json
+        echo -e "  ${GREEN}✓${NC} JSON schema generated from dao-ai"
+    else
+        rm -f frontend/public/model_config_schema.json.new
+        echo -e "  ${YELLOW}⚠${NC} dao-ai schema generation failed — falling back to existing schema"
+        echo -e "      $(head -1 /tmp/dao-ai-schema.err)"
+    fi
 else
     echo -e "  ${YELLOW}⚠${NC} dao-ai not found, using existing schema"
 fi

@@ -48,6 +48,19 @@ export interface SchemaModel {
   permissions?: PermissionModel[];
 }
 
+// dao-ai 0.1.72+: opt-in best-of-N + LLM-as-judge wrapper for an LLMModel.
+// Fans out N parallel generations at elevated temperature, then asks the
+// judge model to pick the winner. Effective generator temperature is
+// max(LLMModel.temperature, 0.7) unless `temperature_override` is set.
+export interface BestOfNConfig {
+  /** Number of parallel candidate generations. 1..16. Default 8. */
+  n?: number;
+  /** Judge model: a serving endpoint name (string) or a full LLMModel. */
+  judge: string | LLMModel;
+  /** Override the generator temperature for candidate calls. */
+  temperature_override?: number | null;
+}
+
 export interface LLMModel {
   name: string;
   description?: string;
@@ -58,6 +71,8 @@ export interface LLMModel {
   /** Required when the Foundation Model endpoint has output guardrails enabled */
   disable_streaming?: boolean;
   fallbacks?: (string | LLMModel)[];
+  /** dao-ai 0.1.72+: best-of-N + LLM-as-judge wrapper. */
+  best_of_n?: BestOfNConfig;
   // Authentication fields
   service_principal?: ServicePrincipalModel | string;
   client_id?: VariableValue;
@@ -231,12 +246,13 @@ export interface GenieEntitlement {
   permission_level: GenieEntitlementLevel;
 }
 
+// dao-ai 0.1.70+: top-level `parameters:` block declares load-time
+// substitution inputs referenced via ${param.NAME} or ${var.NAME}.
+// Schema is intentionally minimal — just description + optional default.
+// A parameter with no default is required at load time.
 export interface ParameterDeclarationModel {
-  name: string;
-  type?: string;
   description?: string;
-  default?: any;
-  required?: boolean;
+  default?: string | null;
 }
 
 export interface FunctionModel {
@@ -758,9 +774,103 @@ export interface StoreModel {
   namespace?: string;
 }
 
+// dao-ai 0.1.73+: a deepagents Skill — a directory of Markdown content
+// (minimally SKILL.md) that teaches a deep_agent how to do a task. Skills
+// can live as local paths (bundled via code_paths) or in Unity Catalog
+// volumes (wired as deployment resources for governance).
+export interface SkillModel {
+  /** Unique skill identifier (used by deepagents' SkillsMiddleware). */
+  name: string;
+  /**
+   * Source directory. Either a local relative path string (e.g.
+   * `skills/research`) or a VolumePathModel referencing a UC volume.
+   * A raw `/Volumes/...` string is auto-promoted to VolumePathModel.
+   */
+  path: string | VolumePathModel;
+  description?: string;
+}
+
+// dao-ai 0.1.73+: filesystem permission rule for deepagents tools.
+// Rules evaluate in declaration order; first match wins.
+export interface FilesystemPermissionModel {
+  /** Path patterns (e.g. ['/skills/**', '/tmp/*']). */
+  paths: string[];
+  mode?: 'allow' | 'deny';
+  /** Defaults to both read+write when omitted. */
+  operations?: Array<'read' | 'write'> | null;
+}
+
+// dao-ai 0.1.73+: storage/execution backend for a deep_agent.
+// Wraps deepagents BackendProtocol factory pattern.
+export interface BackendModel {
+  /** Fully qualified backend class or factory (e.g. deepagents.backends.StateBackend). */
+  name: string;
+  args?: Record<string, any>;
+}
+
+// dao-ai 0.1.73+: deepagents human-in-the-loop interrupt config per tool.
+// `true` enables defaults; an object customizes the review behaviour.
+// Imported here from the existing tools shape if available; otherwise use loose type.
+export type DeepAgentInterruptOn = Record<string, boolean | Record<string, any>>;
+
+// dao-ai 0.1.73+: a deepagents sub-agent invoked via the `task` tool.
+// Mirrors deepagents.SubAgent but lifted into the dao-ai object model so
+// every field can accept dao-ai primitives (LLMModel, PromptModel, etc).
+export interface SubAgentModel {
+  name: string;
+  description: string;
+  system_prompt: string | PromptModel;
+  tools?: (ToolModel | string)[];
+  model?: string | LLMModel | null;
+  middleware?: MiddlewareModel[];
+  interrupt_on?: DeepAgentInterruptOn;
+  /** Skill source paths or named SkillModel refs scoped to this sub-agent. */
+  skills?: (SkillModel | string)[];
+  /** Replace (not extend) parent permissions when present. */
+  permissions?: FilesystemPermissionModel[];
+  response_format?: ResponseFormatModel | string | null;
+}
+
+// dao-ai 0.1.73+: deep_agent orchestration pattern. Wraps
+// deepagents.create_deep_agent so every parameter is declarative.
+// Memory (checkpointer/store) layers over OrchestrationModel.memory.
+export interface DeepAgentModel {
+  /** Primary LLM. Defaults to deepagents' default (claude-sonnet-4-6). */
+  model?: string | LLMModel | null;
+  /** Tools merged with deepagents' built-in suite. */
+  tools?: (ToolModel | string)[];
+  /** Prepended to deepagents' base system prompt. */
+  system_prompt?: string | PromptModel | null;
+  middleware?: MiddlewareModel[];
+  /**
+   * Sub-agents invoked via the `task` tool. Three forms accepted:
+   * inline SubAgentModel, AgentModel, or a string name (lookup in app.agents).
+   */
+  subagents?: (SubAgentModel | AgentModel | string)[];
+  /** Skill source paths or named SkillModel refs. */
+  skills?: (SkillModel | string)[];
+  /** AGENTS.md-style instruction files loaded into the prompt. */
+  instruction_files?: string[];
+  /** Filesystem permission rules applied to the main agent + inherited. */
+  permissions?: FilesystemPermissionModel[];
+  response_format?: ResponseFormatModel | string | null;
+  /** Per-tool HITL config. */
+  interrupt_on?: DeepAgentInterruptOn;
+  backend?: BackendModel | null;
+  /** Fully qualified class name of a TypedDict/dataclass for run-scoped context. */
+  context_schema?: string | null;
+  /** Per-run graph recursion limit. Defaults to LangGraph's 25 when null. */
+  recursion_limit?: number | null;
+  debug?: boolean;
+  /** Human-readable name attached to the compiled graph. */
+  name?: string | null;
+}
+
 export interface OrchestrationModel {
   supervisor?: SupervisorModel;
   swarm?: SwarmModel;
+  /** dao-ai 0.1.73+: deep_agent pattern. */
+  deep_agent?: DeepAgentModel;
   memory?: MemoryModel;
   /**
    * How an agent's response flows back into parent state (new in dao-ai 0.1.70).
@@ -897,10 +1007,23 @@ export interface ResourcesModel {
   databases?: Record<string, DatabaseModel>;
   connections?: Record<string, ConnectionModel>;
   apps?: Record<string, DatabricksAppModel>;
+  /**
+   * dao-ai 0.1.73+: reusable deepagents skills keyed by name. Local skills
+   * ship via code_paths; volume-backed skills are wired as deployment
+   * resources for permission grants. Referenced from
+   * orchestration.deep_agent.skills and subagents[].skills.
+   */
+  skills?: Record<string, SkillModel>;
 }
 
 export interface AppConfig {
   version?: string;
+  /**
+   * dao-ai 0.1.70+: declared load-time parameters for ${param.NAME} /
+   * ${var.NAME} substitution. Resolved by AppConfig.from_file from CLI
+   * --param, process env, declared default, or inline ${var.NAME:-fallback}.
+   */
+  parameters?: Record<string, ParameterDeclarationModel>;
   variables?: Record<string, any>;
   schemas?: Record<string, SchemaModel>;
   service_principals?: Record<string, ServicePrincipalModel>;

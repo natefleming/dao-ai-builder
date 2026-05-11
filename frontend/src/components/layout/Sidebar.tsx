@@ -68,7 +68,8 @@ export default function Sidebar({ activeSection, onSectionChange, config }: Side
       case 'overview':
         return 0; // Overview doesn't have a count
       case 'variables':
-        return Object.keys(config.variables || {}).length;
+        // Variables tab also surfaces declared parameters (dao-ai 0.1.70+)
+        return Object.keys(config.variables || {}).length + Object.keys(config.parameters || {}).length;
       case 'service_principals':
         return Object.keys(config.service_principals || {}).length;
       case 'schemas':
@@ -82,7 +83,8 @@ export default function Sidebar({ activeSection, onSectionChange, config }: Side
           Object.keys(config.resources?.volumes || {}).length +
           Object.keys(config.resources?.functions || {}).length +
           Object.keys(config.resources?.warehouses || {}).length +
-          Object.keys(config.resources?.connections || {}).length
+          Object.keys(config.resources?.connections || {}).length +
+          Object.keys(config.resources?.skills || {}).length
         );
       case 'retrievers':
         return Object.keys(config.retrievers || {}).length;

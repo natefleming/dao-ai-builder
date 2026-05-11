@@ -1,15 +1,15 @@
 import { create } from 'zustand';
-import { 
-  AppConfig, 
-  AgentModel, 
-  ToolModel, 
-  LLMModel, 
-  SchemaModel, 
-  GuardrailModel, 
+import {
+  AppConfig,
+  AgentModel,
+  ToolModel,
+  LLMModel,
+  SchemaModel,
+  GuardrailModel,
   MiddlewareModel,
-  PromptModel, 
-  VariableModel, 
-  MemoryModel, 
+  PromptModel,
+  VariableModel,
+  MemoryModel,
   DatabaseModel,
   GenieRoomModel,
   TableModel,
@@ -21,6 +21,8 @@ import {
   VectorStoreModel,
   RetrieverModel,
   ServicePrincipalModel,
+  ParameterDeclarationModel,
+  SkillModel,
 } from '@/types/dao-ai-types';
 
 // Cache for DAO AI version
@@ -59,6 +61,16 @@ interface ConfigState {
   addVariable: (name: string, variable: VariableModel) => void;
   updateVariable: (name: string, variable: VariableModel) => void;
   removeVariable: (name: string) => void;
+
+  // Parameters (load-time ${param.NAME} substitution declarations)
+  addParameter: (name: string, parameter: ParameterDeclarationModel) => void;
+  updateParameter: (name: string, parameter: ParameterDeclarationModel) => void;
+  removeParameter: (name: string) => void;
+
+  // Skills (deepagents Skill resources — used by deep_agent orchestration)
+  addSkill: (name: string, skill: SkillModel) => void;
+  updateSkill: (name: string, updates: Partial<SkillModel>) => void;
+  removeSkill: (name: string) => void;
   
   // Memory
   updateMemory: (memory: MemoryModel | undefined) => void;
@@ -160,6 +172,7 @@ interface ConfigState {
 }
 
 const defaultConfig: AppConfig = {
+  parameters: {},
   variables: {},
   schemas: {},
   resources: {
@@ -173,6 +186,7 @@ const defaultConfig: AppConfig = {
     databases: {},
     connections: {},
     apps: {},
+    skills: {},
   },
   retrievers: {},
   tools: {},
@@ -246,7 +260,87 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
         },
       };
     }),
-  
+
+  addParameter: (name, parameter) =>
+    set((state) => ({
+      config: {
+        ...state.config,
+        parameters: {
+          ...state.config.parameters,
+          [name]: parameter,
+        },
+      },
+    })),
+
+  updateParameter: (name, parameter) =>
+    set((state) => ({
+      config: {
+        ...state.config,
+        parameters: {
+          ...state.config.parameters,
+          [name]: parameter,
+        },
+      },
+    })),
+
+  removeParameter: (name) =>
+    set((state) => {
+      const parameters = { ...state.config.parameters };
+      delete parameters?.[name];
+      return {
+        config: {
+          ...state.config,
+          parameters,
+        },
+      };
+    }),
+
+  addSkill: (name, skill) =>
+    set((state) => ({
+      config: {
+        ...state.config,
+        resources: {
+          ...state.config.resources,
+          skills: {
+            ...state.config.resources?.skills,
+            [name]: skill,
+          },
+        },
+      },
+    })),
+
+  updateSkill: (name, updates) =>
+    set((state) => {
+      const skills = { ...state.config.resources?.skills };
+      if (skills?.[name]) {
+        skills[name] = { ...skills[name], ...updates };
+      }
+      return {
+        config: {
+          ...state.config,
+          resources: {
+            ...state.config.resources,
+            skills: skills || {},
+          },
+        },
+      };
+    }),
+
+  removeSkill: (name) =>
+    set((state) => {
+      const skills = { ...state.config.resources?.skills };
+      delete skills?.[name];
+      return {
+        config: {
+          ...state.config,
+          resources: {
+            ...state.config.resources,
+            skills: skills || {},
+          },
+        },
+      };
+    }),
+
   updateMemory: (memory) =>
     set((state) => ({
       config: {

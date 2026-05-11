@@ -3369,10 +3369,11 @@ def validate_deployment():
         if not agents or len(agents) == 0:
             errors.append('At least one agent is required')
         
-        # Check for orchestration
+        # Check for orchestration. dao-ai 0.1.73+ added the deep_agent
+        # pattern alongside supervisor / swarm.
         orchestration = app_config.get('orchestration', {})
-        if not orchestration.get('supervisor') and not orchestration.get('swarm'):
-            errors.append('Orchestration pattern (supervisor or swarm) is required')
+        if not orchestration.get('supervisor') and not orchestration.get('swarm') and not orchestration.get('deep_agent'):
+            errors.append('Orchestration pattern (supervisor, swarm, or deep_agent) is required')
         
         # Check for LLMs in resources
         resources = config.get('resources', {})
@@ -4189,6 +4190,8 @@ def chat_with_agent():
                     yield from send_log('debug', f"Orchestration: Supervisor ({orch['supervisor'].get('name', 'unnamed')})")
                 elif orch.get('swarm'):
                     yield from send_log('debug', f"Orchestration: Swarm ({orch['swarm'].get('name', 'unnamed')})")
+                elif orch.get('deep_agent'):
+                    yield from send_log('debug', f"Orchestration: Deep Agent ({orch['deep_agent'].get('name', 'unnamed')})")
             except Exception as e:
                 import traceback
                 yield from send_error(f'Invalid configuration: {str(e)}', traceback.format_exc())

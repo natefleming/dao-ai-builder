@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Settings, Save, GitBranch, Users, ArrowRightLeft, Plus, Trash2, Info, Bot, X, Tag, Wrench, Sparkles, Loader2, Variable, Layers, Timer } from 'lucide-react';
+import { Settings, Save, GitBranch, Users, ArrowRightLeft, Plus, Trash2, Info, Bot, X, Tag, Wrench, Sparkles, Loader2, Variable, Layers, Timer, Brain, BookOpen } from 'lucide-react';
 import { useConfigStore } from '@/stores/configStore';
 import { useCatalogs, useSchemas } from '@/hooks/useDatabricks';
 import Button from '../ui/Button';
@@ -72,7 +72,7 @@ const WORKLOAD_SIZES = [
   { value: 'Large', label: 'Large' },
 ];
 
-type OrchestrationPattern = 'supervisor' | 'swarm' | 'none';
+type OrchestrationPattern = 'supervisor' | 'swarm' | 'deep_agent' | 'none';
 type HandoffType = 'any' | 'none' | 'specific';
 
 interface HandoffTarget {
@@ -264,7 +264,8 @@ export default function AppConfigSection() {
   // Orchestration state
   const [pattern, setPattern] = useState<OrchestrationPattern>(
     config.app?.orchestration?.supervisor ? 'supervisor' :
-    config.app?.orchestration?.swarm ? 'swarm' : 'none'
+    config.app?.orchestration?.swarm ? 'swarm' :
+    config.app?.orchestration?.deep_agent ? 'deep_agent' : 'none'
   );
   // New in dao-ai 0.1.70: output_mode controls whether agent responses
   // include full intermediate history or just the last AI message.
@@ -373,6 +374,43 @@ export default function AppConfigSection() {
     }).filter(Boolean);
   });
   
+  // Deep Agent orchestration state (dao-ai 0.1.73+).
+  // Wraps deepagents.create_deep_agent: one planning agent with built-in
+  // todo/filesystem/shell/sub-agent tools plus first-class skills and
+  // instruction files. We surface the high-value knobs here; advanced
+  // fields (permissions, backend, response_format, interrupt_on,
+  // context_schema) round-trip via the pass-through serializer.
+  const initialDeepAgent = config.app?.orchestration?.deep_agent;
+  const _initialDeepAgentSkillRefs = (initialDeepAgent?.skills || [])
+    .map((s) => (typeof s === 'string' ? s : (s as any)?.name))
+    .filter((n): n is string => !!n);
+  const _initialDeepAgentSubagentRefs = (initialDeepAgent?.subagents || [])
+    .map((s) => (typeof s === 'string' ? s : (s as any)?.name))
+    .filter((n): n is string => !!n);
+
+  const [deepAgentLLM, setDeepAgentLLM] = useState<string>(() => {
+    const existing = initialDeepAgent?.model;
+    if (existing && typeof existing !== 'string' && (existing as any).name) {
+      const name = (existing as any).name;
+      const found = Object.entries(llms).find(([, llm]) => llm.name === name);
+      return found ? found[0] : '';
+    }
+    return '';
+  });
+  const [deepAgentSystemPrompt, setDeepAgentSystemPrompt] = useState<string>(() => {
+    const sp = initialDeepAgent?.system_prompt;
+    return typeof sp === 'string' ? sp : '';
+  });
+  const [deepAgentSkills, setDeepAgentSkills] = useState<string[]>(_initialDeepAgentSkillRefs);
+  const [deepAgentSubagents, setDeepAgentSubagents] = useState<string[]>(_initialDeepAgentSubagentRefs);
+  const [deepAgentInstructionFiles, setDeepAgentInstructionFiles] = useState<string[]>(
+    initialDeepAgent?.instruction_files || []
+  );
+  const [deepAgentRecursionLimit, setDeepAgentRecursionLimit] = useState<number | ''>(
+    initialDeepAgent?.recursion_limit ?? ''
+  );
+  const [deepAgentDebug, setDeepAgentDebug] = useState<boolean>(!!initialDeepAgent?.debug);
+
   // Memory reference for orchestration
   const [orchestrationMemoryRef, setOrchestrationMemoryRef] = useState<string>(() => {
     // Check if orchestration has a memory reference
@@ -538,11 +576,14 @@ export default function AppConfigSection() {
     if (JSON.stringify(savedAgentKeys) !== JSON.stringify(currentAgentKeys)) return true;
     
     // Check orchestration pattern
-    // Note: Sync logic forces 'none' if insufficient agents for supervisor/swarm
-    let savedPattern: OrchestrationPattern = 
+    // Note: Sync logic forces 'none' if insufficient agents for supervisor/swarm.
+    // deep_agent works with a single agent (single-planning-agent pattern) so
+    // it does not get rewritten to 'none' here.
+    let savedPattern: OrchestrationPattern =
       app?.orchestration?.supervisor ? 'supervisor' :
-      app?.orchestration?.swarm ? 'swarm' : 'none';
-    
+      app?.orchestration?.swarm ? 'swarm' :
+      app?.orchestration?.deep_agent ? 'deep_agent' : 'none';
+
     // Match sync logic: override to 'none' if insufficient agents
     if ((savedPattern === 'supervisor' || savedPattern === 'swarm') && currentAgentKeys.length <= 1) {
       savedPattern = 'none';
@@ -860,11 +901,13 @@ export default function AppConfigSection() {
       initialSyncDone.current = true;
 
       // Sync orchestration pattern and settings
-      // Note: Supervisor and Swarm require multiple agents, so force to 'none' if only one agent
-      let newPattern: OrchestrationPattern = 
+      // Note: Supervisor and Swarm require multiple agents, so force to 'none' if only one agent.
+      // deep_agent is a single-planning-agent pattern and remains valid with one agent.
+      let newPattern: OrchestrationPattern =
         app?.orchestration?.supervisor ? 'supervisor' :
-        app?.orchestration?.swarm ? 'swarm' : 'none';
-      
+        app?.orchestration?.swarm ? 'swarm' :
+        app?.orchestration?.deep_agent ? 'deep_agent' : 'none';
+
       // Override to 'none' if insufficient agents for the pattern
       if ((newPattern === 'supervisor' || newPattern === 'swarm') && agentKeys.length <= 1) {
         newPattern = 'none';
@@ -1217,6 +1260,39 @@ export default function AppConfigSection() {
           ...(swarmMaxHops !== 25 && { max_hops: swarmMaxHops }),
         },
         // Add memory reference if configured
+        ...(orchestrationMemoryRef && { memory: `*${orchestrationMemoryRef}` }),
+        ...(outputMode !== 'full_history' && { output_mode: outputMode }),
+      };
+    } else if (pattern === 'deep_agent') {
+      // Build the deep_agent block. Skill / subagent strings are reference
+      // names; the YAML generator rewrites them to `*alias` when a
+      // matching entry exists in `resources.skills` / `agents`.
+      // Inline pass-through fields (permissions, backend, response_format,
+      // interrupt_on, context_schema, name) are preserved from the
+      // already-imported config so manual YAML edits round-trip.
+      const existingDeepAgent: any = (config.app?.orchestration?.deep_agent as any) || {};
+      const deepAgentBlock: Record<string, unknown> = {
+        ...(deepAgentLLM && llms[deepAgentLLM] && { model: llms[deepAgentLLM] }),
+        ...(deepAgentSystemPrompt && { system_prompt: deepAgentSystemPrompt }),
+        ...(deepAgentSubagents.length > 0 && { subagents: deepAgentSubagents }),
+        ...(deepAgentSkills.length > 0 && { skills: deepAgentSkills }),
+        ...(deepAgentInstructionFiles.length > 0 && { instruction_files: deepAgentInstructionFiles }),
+        ...(typeof deepAgentRecursionLimit === 'number' && deepAgentRecursionLimit > 0 && {
+          recursion_limit: deepAgentRecursionLimit,
+        }),
+        ...(deepAgentDebug && { debug: true }),
+        // Pass-through advanced fields the UI doesn't edit yet
+        ...(existingDeepAgent.tools && { tools: existingDeepAgent.tools }),
+        ...(existingDeepAgent.middleware && { middleware: existingDeepAgent.middleware }),
+        ...(existingDeepAgent.permissions && { permissions: existingDeepAgent.permissions }),
+        ...(existingDeepAgent.response_format && { response_format: existingDeepAgent.response_format }),
+        ...(existingDeepAgent.interrupt_on && { interrupt_on: existingDeepAgent.interrupt_on }),
+        ...(existingDeepAgent.backend && { backend: existingDeepAgent.backend }),
+        ...(existingDeepAgent.context_schema && { context_schema: existingDeepAgent.context_schema }),
+        ...(existingDeepAgent.name && { name: existingDeepAgent.name }),
+      };
+      orchestration = {
+        deep_agent: deepAgentBlock,
         ...(orchestrationMemoryRef && { memory: `*${orchestrationMemoryRef}` }),
         ...(outputMode !== 'full_history' && { output_mode: outputMode }),
       };
@@ -1643,7 +1719,7 @@ export default function AppConfigSection() {
         </p>
 
         {/* Pattern Selection */}
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <button
             type="button"
             onClick={() => setPattern('none')}
@@ -1705,6 +1781,26 @@ export default function AppConfigSection() {
             </div>
             <h4 className="text-sm font-medium text-white">Swarm</h4>
             <p className="text-xs text-slate-500 mt-0.5">Peer-to-peer handoffs</p>
+          </button>
+
+          {/* Deep Agent (dao-ai 0.1.73+): single planning agent with built-in
+              todo/filesystem/shell + skills + sub-agents via the task tool.
+              Works with one agent (no minimum-2 constraint). */}
+          <button
+            type="button"
+            onClick={() => setPattern('deep_agent')}
+            className={clsx(
+              'p-4 rounded-lg border text-center transition-all',
+              pattern === 'deep_agent'
+                ? 'bg-blue-500/10 border-blue-500 ring-1 ring-blue-500'
+                : 'bg-slate-800/50 border-slate-700 hover:border-slate-600',
+            )}
+          >
+            <div className="w-10 h-10 mx-auto rounded-lg flex items-center justify-center mb-2 bg-amber-500/20">
+              <Brain className="w-5 h-5 text-amber-400" />
+            </div>
+            <h4 className="text-sm font-medium text-white">Deep Agent</h4>
+            <p className="text-xs text-slate-500 mt-0.5">Planning + skills + sub-agents</p>
           </button>
         </div>
         
@@ -2224,6 +2320,200 @@ export default function AppConfigSection() {
               onChange={(e) => setSwarmMaxHops(parseInt(e.target.value) || 25)}
               hint="Cross-agent hop ceiling for the swarm graph. Bounds two agents from handing off to each other indefinitely. Defaults to 25 (LangGraph's recursion_limit default)."
             />
+          </div>
+        )}
+
+        {/* Deep Agent configuration (dao-ai 0.1.73+) */}
+        {pattern === 'deep_agent' && (
+          <div className="space-y-4 pt-4 border-t border-slate-700">
+            <div className="flex items-start space-x-2 text-xs text-amber-200/80 bg-amber-900/10 border border-amber-500/30 rounded-lg p-3">
+              <Brain className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
+              <p>
+                The <strong>deep_agent</strong> pattern wraps deepagents'{' '}
+                <code className="px-1 bg-slate-800/60 rounded">create_deep_agent</code>: one planning agent
+                with built-in todo / filesystem / shell tools, governed Skills, AGENTS.md-style instruction
+                files, and sub-agents callable via the{' '}
+                <code className="px-1 bg-slate-800/60 rounded">task</code> tool.
+              </p>
+            </div>
+
+            <Select
+              label="Primary LLM (Optional)"
+              options={[
+                { value: '', label: 'Default (claude-sonnet-4-6)' },
+                ...llmOptions.filter((o) => o.value !== ''),
+              ]}
+              value={deepAgentLLM}
+              onChange={(e) => setDeepAgentLLM(e.target.value)}
+              hint="LLM used by the main planning agent. Defaults to deepagents' built-in default if unset."
+            />
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-300">System Prompt (Optional)</label>
+              <textarea
+                value={deepAgentSystemPrompt}
+                onChange={(e) => setDeepAgentSystemPrompt(e.target.value)}
+                rows={4}
+                placeholder="Prepended to deepagents' base system prompt."
+                className="w-full px-3 py-2 bg-slate-800/50 border border-slate-700 rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+              <p className="text-xs text-slate-500">
+                Inline prompt — string is prepended to the deepagents base prompt.
+              </p>
+            </div>
+
+            {/* Skills selector */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-300 flex items-center gap-2">
+                <BookOpen className="w-4 h-4 text-amber-300" />
+                Skills
+              </label>
+              {Object.keys(config.resources?.skills || {}).length === 0 ? (
+                <p className="text-xs text-amber-300/80">
+                  No skills configured. Add Skills under <strong>Resources → Skills</strong> first.
+                </p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(config.resources?.skills || {}).map(([key, skill]) => {
+                    const checked = deepAgentSkills.includes(key);
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => {
+                          setDeepAgentSkills(checked
+                            ? deepAgentSkills.filter((s) => s !== key)
+                            : [...deepAgentSkills, key]);
+                        }}
+                        className={clsx(
+                          'px-3 py-1.5 text-sm rounded-lg border transition-all',
+                          checked
+                            ? 'bg-amber-500/20 border-amber-500/60 text-amber-200'
+                            : 'bg-slate-800/50 border-slate-700 text-slate-400 hover:border-slate-600'
+                        )}
+                        title={skill.description || ''}
+                      >
+                        {key}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="text-xs text-slate-500">
+                Skills exposed to the deep agent's <code className="px-1 bg-slate-800/60 rounded">SkillsMiddleware</code>.
+              </p>
+            </div>
+
+            {/* Sub-agents selector — reference selected agents by name */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-300 flex items-center gap-2">
+                <Users className="w-4 h-4 text-blue-400" />
+                Sub-Agents
+              </label>
+              {selectedAgents.length === 0 ? (
+                <p className="text-xs text-amber-300/80">
+                  Select agents in the Agents section above to make them available as sub-agents.
+                </p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {selectedAgents.map((key) => {
+                    const agent = agents[key];
+                    if (!agent) return null;
+                    const refName = agent.name;
+                    const checked = deepAgentSubagents.includes(refName);
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => {
+                          setDeepAgentSubagents(checked
+                            ? deepAgentSubagents.filter((s) => s !== refName)
+                            : [...deepAgentSubagents, refName]);
+                        }}
+                        className={clsx(
+                          'px-3 py-1.5 text-sm rounded-lg border transition-all',
+                          checked
+                            ? 'bg-blue-500/20 border-blue-500/60 text-blue-200'
+                            : 'bg-slate-800/50 border-slate-700 text-slate-400 hover:border-slate-600'
+                        )}
+                      >
+                        {refName}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="text-xs text-slate-500">
+                Sub-agents invoked via the <code className="px-1 bg-slate-800/60 rounded">task</code> tool.
+                Each is referenced by name and resolved against the agent definitions.
+              </p>
+            </div>
+
+            {/* Instruction files (AGENTS.md-style) */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-300 flex items-center gap-2">
+                <Layers className="w-4 h-4 text-violet-400" />
+                Instruction Files
+              </label>
+              {deepAgentInstructionFiles.length > 0 && (
+                <div className="space-y-1">
+                  {deepAgentInstructionFiles.map((path, idx) => (
+                    <div key={idx} className="flex items-center gap-2 px-3 py-1.5 bg-slate-800/50 border border-slate-700 rounded-lg">
+                      <code className="text-xs text-slate-300 font-mono flex-1">{path}</code>
+                      <button
+                        type="button"
+                        onClick={() => setDeepAgentInstructionFiles(deepAgentInstructionFiles.filter((_, i) => i !== idx))}
+                        className="text-slate-400 hover:text-red-400"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex gap-2">
+                <Input
+                  className="flex-1"
+                  placeholder="e.g., AGENTS.md or skills/research/AGENTS.md"
+                  value={''}
+                  onChange={() => {}}
+                  onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
+                    if (e.key === 'Enter') {
+                      const val = (e.target as HTMLInputElement).value.trim();
+                      if (val && !deepAgentInstructionFiles.includes(val)) {
+                        setDeepAgentInstructionFiles([...deepAgentInstructionFiles, val]);
+                        (e.target as HTMLInputElement).value = '';
+                      }
+                    }
+                  }}
+                  hint="Press Enter to add. Files are loaded into the system prompt at startup (deepagents' MemoryMiddleware)."
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <Input
+                label="Recursion Limit (Optional)"
+                type="number"
+                min={1}
+                placeholder="25"
+                value={deepAgentRecursionLimit === '' ? '' : String(deepAgentRecursionLimit)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setDeepAgentRecursionLimit(v === '' ? '' : Math.max(1, parseInt(v) || 0));
+                }}
+                hint="Per-run graph recursion limit. Empty uses LangGraph's default (25)."
+              />
+              <label className="flex items-end pb-2 space-x-2 cursor-pointer text-sm text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={deepAgentDebug}
+                  onChange={(e) => setDeepAgentDebug(e.target.checked)}
+                  className="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500"
+                />
+                <span>Enable deepagents debug output</span>
+              </label>
+            </div>
           </div>
         )}
       </Card>
@@ -3229,7 +3519,7 @@ export default function AppConfigSection() {
           <div>
             <span className="text-slate-400">Orchestration:</span>
             <Badge variant={pattern !== 'none' ? 'info' : 'default'} className="ml-2">
-              {pattern === 'supervisor' ? 'Supervisor' : pattern === 'swarm' ? 'Swarm' : 'None'}
+              {pattern === 'supervisor' ? 'Supervisor' : pattern === 'swarm' ? 'Swarm' : pattern === 'deep_agent' ? 'Deep Agent' : 'None'}
             </Badge>
           </div>
           <div>
