@@ -712,6 +712,8 @@ function formatModelReference(model: any, definedModels: Record<string, any>, ba
       ...(model.max_tokens !== undefined && { max_tokens: model.max_tokens }),
       ...(model.on_behalf_of_user !== undefined && { on_behalf_of_user: model.on_behalf_of_user }),
       ...(model.use_responses_api !== undefined && { use_responses_api: model.use_responses_api }),
+      ...(model.disable_streaming !== undefined && { disable_streaming: model.disable_streaming }),
+      ...(model.ai_gateway !== undefined && { ai_gateway: model.ai_gateway }),
       ...(model.fallbacks && model.fallbacks.length > 0 && { fallbacks: model.fallbacks }),
     };
   }
@@ -1926,6 +1928,8 @@ export function generateYAML(config: AppConfig): string {
           ...(llm.max_tokens !== undefined && { max_tokens: llm.max_tokens }),
           ...(llm.on_behalf_of_user !== undefined && { on_behalf_of_user: llm.on_behalf_of_user }),
           ...(llm.use_responses_api !== undefined && { use_responses_api: llm.use_responses_api }),
+          ...(llm.disable_streaming !== undefined && { disable_streaming: llm.disable_streaming }),
+          ...(llm.ai_gateway !== undefined && { ai_gateway: llm.ai_gateway }),
           ...(formattedFallbacks && formattedFallbacks.length > 0 && { fallbacks: formattedFallbacks }),
           ...formatResourceAuth(llm, `resources.${EMIT_KEY}.${key}`),
         };

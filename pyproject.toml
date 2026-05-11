@@ -7,14 +7,22 @@ requires-python = ">=3.11"
 dependencies = [
     "flask>=3.0.0",
     "gunicorn>=21.0.0",
-    # dao-ai 0.1.75 carries the `resources.llms` -> `resources.models`
-    # and `LLMModel` -> `InferenceEndpointModel` renames (both with
-    # back-compat aliases on the dao-ai side). 0.1.76 fixed the JSON
-    # schema regen (used by IDE linting; runtime behavior identical).
-    # Builder pin held at >=0.1.75 because the workspace local PyPI
-    # mirror lags PyPI by ~1 week; bump to >=0.1.76 once the mirror
-    # catches up.
-    "dao-ai>=0.1.75",
+    # dao-ai 0.1.77 adds `ai_gateway: bool` on `InferenceEndpointModel`,
+    # routing through the new Databricks AI Gateway path
+    # (`/ai-gateway/mlflow/v1/chat/completions`) instead of the legacy
+    # `/serving-endpoints/<name>/invocations`. The flag is additive and
+    # defaults to False, so existing configs are unaffected.
+    # 0.1.75 carried the `resources.llms` -> `resources.models` and
+    # `LLMModel` -> `InferenceEndpointModel` renames (back-compat aliases
+    # on the dao-ai side). 0.1.76 fixed the JSON schema regen.
+    #
+    # NOTE: the workspace `pypi-proxy.dev.databricks.com` mirror lags
+    # public PyPI by ~1 week. `uv lock` against the proxy may fail to
+    # resolve `>=0.1.77` until the mirror syncs; the schema/types/UI
+    # changes in this commit are additive and work against any prior
+    # dao-ai version at runtime, so deferring the lock is safe. Re-run
+    # `uv lock --upgrade-package dao-ai` once the proxy catches up.
+    "dao-ai>=0.1.77",
     "databricks-sdk>=0.74.0",
     "mlflow[databricks]>=3.8.1",
     "python-dotenv>=1.2.1",
