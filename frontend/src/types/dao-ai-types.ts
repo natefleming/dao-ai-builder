@@ -48,20 +48,29 @@ export interface SchemaModel {
   permissions?: PermissionModel[];
 }
 
-// dao-ai 0.1.72+: opt-in best-of-N + LLM-as-judge wrapper for an LLMModel.
+// dao-ai 0.1.72+: opt-in best-of-N + LLM-as-judge wrapper for an InferenceEndpointModel.
 // Fans out N parallel generations at elevated temperature, then asks the
 // judge model to pick the winner. Effective generator temperature is
-// max(LLMModel.temperature, 0.7) unless `temperature_override` is set.
+// max(InferenceEndpointModel.temperature, 0.7) unless `temperature_override` is set.
 export interface BestOfNConfig {
   /** Number of parallel candidate generations. 1..16. Default 8. */
   n?: number;
-  /** Judge model: a serving endpoint name (string) or a full LLMModel. */
-  judge: string | LLMModel;
+  /** Judge model: a serving endpoint name (string) or a full InferenceEndpointModel. */
+  judge: string | InferenceEndpointModel;
   /** Override the generator temperature for candidate calls. */
   temperature_override?: number | null;
 }
 
-export interface LLMModel {
+/**
+ * Configuration for a Databricks Model Serving endpoint used for inference.
+ *
+ * The same shape is reused everywhere dao-ai calls a serving endpoint —
+ * chat LLMs, embedding models, judge / extraction / reflection / query
+ * models, and custom agent endpoints. Renamed from `LLMModel` in
+ * dao-ai 0.1.75 to reflect the broader scope; the legacy name remains
+ * exported as a type alias for backward compatibility.
+ */
+export interface InferenceEndpointModel {
   name: string;
   description?: string;
   temperature?: number;
@@ -70,7 +79,7 @@ export interface LLMModel {
   use_responses_api?: boolean;  // Use Responses API for ResponsesAgent endpoints
   /** Required when the Foundation Model endpoint has output guardrails enabled */
   disable_streaming?: boolean;
-  fallbacks?: (string | LLMModel)[];
+  fallbacks?: (string | InferenceEndpointModel)[];
   /** dao-ai 0.1.72+: best-of-N + LLM-as-judge wrapper. */
   best_of_n?: BestOfNConfig;
   // Authentication fields
@@ -80,6 +89,13 @@ export interface LLMModel {
   workspace_host?: VariableValue;
   pat?: VariableValue;
 }
+
+/**
+ * Backward-compatible alias. Customer code importing `LLMModel` keeps
+ * working — both names point at the same shape. Will be removed in a
+ * future major release.
+ */
+export type LLMModel = InferenceEndpointModel;
 
 // VectorStoreModel supports two configuration modes:
 // 1. Use Existing Index: Provide only 'index' to reference a pre-built vector search index
@@ -91,7 +107,7 @@ export interface VectorStoreModel {
   // Required for provision mode only
   source_table?: TableModel;
   embedding_source_column?: string;  // Required for provision mode, omitted for use_existing
-  embedding_model?: LLMModel;        // Optional, defaults to databricks-gte-large-en for provision mode
+  embedding_model?: InferenceEndpointModel;        // Optional, defaults to databricks-gte-large-en for provision mode
   endpoint?: VectorSearchEndpoint;   // Optional, auto-discovered for provision mode
   // Optional for both modes
   source_path?: VolumePathModel;
@@ -287,7 +303,7 @@ export interface GenieContextAwareCacheParametersModel {
   context_similarity_threshold?: number;  // Default: 0.80 - Minimum similarity for context matching
   question_weight?: number | null;  // Default: 0.6 - Weight for question similarity (0-1)
   context_weight?: number | null;  // Default: computed as 1 - question_weight
-  embedding_model?: string | LLMModel;  // Default: "databricks-gte-large-en"
+  embedding_model?: string | InferenceEndpointModel;  // Default: "databricks-gte-large-en"
   embedding_dims?: number | null;  // Auto-detected if null
   database: DatabaseModel | string;  // Can be inline or reference
   warehouse: WarehouseModel | string;  // Can be inline or reference
@@ -318,7 +334,7 @@ export interface GenieInMemoryContextAwareCacheParametersModel {
   context_similarity_threshold?: number;  // Default: 0.80 - Minimum similarity for context matching
   question_weight?: number | null;  // Default: 0.6 - Weight for question similarity (0-1)
   context_weight?: number | null;  // Default: computed as 1 - question_weight
-  embedding_model?: string | LLMModel;  // Default: "databricks-gte-large-en"
+  embedding_model?: string | InferenceEndpointModel;  // Default: "databricks-gte-large-en"
   embedding_dims?: number | null;  // Auto-detected if null
   warehouse: WarehouseModel | string;  // Can be inline or reference - required for re-executing cached SQL
   capacity?: number | null;  // Default: 10000 - Max cache entries with LRU eviction, null = unlimited
@@ -410,14 +426,14 @@ export interface RetrieverModel {
 
 // Router for selecting standard vs instructed execution mode
 export interface RouterModel {
-  model?: LLMModel | string;  // Reference to LLM resource
+  model?: InferenceEndpointModel | string;  // Reference to LLM resource
   default_mode?: "standard" | "instructed";
   auto_bypass?: boolean;  // Skip Instruction Reranker and Verifier for standard mode
 }
 
 // Query decomposition settings for instructed retrieval
 export interface DecompositionModel {
-  model?: LLMModel | string;  // Reference to LLM resource (fast model recommended)
+  model?: InferenceEndpointModel | string;  // Reference to LLM resource (fast model recommended)
   max_subqueries?: number;  // Default: 3
   rrf_k?: number;  // Default: 60
   examples?: InstructedRetrieverExample[];
@@ -453,7 +469,7 @@ export interface InstructedRetrieverExample {
 
 // Verifier for result validation with retry support
 export interface VerifierModel {
-  model?: LLMModel | string;  // Reference to LLM resource
+  model?: InferenceEndpointModel | string;  // Reference to LLM resource
   on_failure?: "warn" | "retry" | "warn_and_retry";
   max_retries?: number;  // Default: 1
 }
@@ -473,7 +489,7 @@ export interface RerankParametersModel {
 
 // LLM-based instruction-aware reranking (runs after FlashRank)
 export interface InstructionAwareRerankModel {
-  model?: LLMModel | string;  // Reference to LLM resource
+  model?: InferenceEndpointModel | string;  // Reference to LLM resource
   instructions?: string;  // Custom reranking instructions
   top_n?: number;
 }
@@ -654,7 +670,7 @@ export type GuardrailMode = 'llm_judge' | 'scorer';
 export interface GuardrailModel {
   name: string;
   // LLM Judge mode fields (provide model + prompt)
-  model?: LLMModel | string;
+  model?: InferenceEndpointModel | string;
   prompt?: string | PromptModel;
   // Scorer mode fields (provide scorer, optionally scorer_args + hub)
   scorer?: string;
@@ -680,7 +696,7 @@ export interface ResponseFormatModel {
 export interface AgentModel {
   name: string;
   description?: string;
-  model: LLMModel;
+  model: InferenceEndpointModel;
   tools?: ToolModel[];
   guardrails?: GuardrailModel[];
   prompt?: string | PromptModel;
@@ -716,7 +732,7 @@ export interface AppPermissionModel {
 }
 
 export interface SupervisorModel {
-  model: LLMModel;
+  model: InferenceEndpointModel;
   tools?: ToolModel[];
   prompt?: string | PromptModel;
   middleware?: MiddlewareModel[];
@@ -746,8 +762,8 @@ export interface MemoryExtractionModel {
   auto_inject_limit?: number;
   supervisor_auto_inject?: boolean;
   background_extraction?: boolean;
-  extraction_model?: LLMModel | string;
-  query_model?: LLMModel | string;
+  extraction_model?: InferenceEndpointModel | string;
+  query_model?: InferenceEndpointModel | string;
 }
 
 export interface MemoryModel {
@@ -766,7 +782,7 @@ export interface CheckpointerModel {
 
 export interface StoreModel {
   name: string;
-  embedding_model?: LLMModel;
+  embedding_model?: InferenceEndpointModel;
   // NOTE: type field removed in dao-ai 0.1.2
   // Storage type is inferred: database provided → postgres, no database → memory
   dims?: number;
@@ -815,13 +831,13 @@ export type DeepAgentInterruptOn = Record<string, boolean | Record<string, any>>
 
 // dao-ai 0.1.73+: a deepagents sub-agent invoked via the `task` tool.
 // Mirrors deepagents.SubAgent but lifted into the dao-ai object model so
-// every field can accept dao-ai primitives (LLMModel, PromptModel, etc).
+// every field can accept dao-ai primitives (InferenceEndpointModel, PromptModel, etc).
 export interface SubAgentModel {
   name: string;
   description: string;
   system_prompt: string | PromptModel;
   tools?: (ToolModel | string)[];
-  model?: string | LLMModel | null;
+  model?: string | InferenceEndpointModel | null;
   middleware?: MiddlewareModel[];
   interrupt_on?: DeepAgentInterruptOn;
   /** Skill source paths or named SkillModel refs scoped to this sub-agent. */
@@ -836,7 +852,7 @@ export interface SubAgentModel {
 // Memory (checkpointer/store) layers over OrchestrationModel.memory.
 export interface DeepAgentModel {
   /** Primary LLM. Defaults to deepagents' default (claude-sonnet-4-6). */
-  model?: string | LLMModel | null;
+  model?: string | InferenceEndpointModel | null;
   /** Tools merged with deepagents' built-in suite. */
   tools?: (ToolModel | string)[];
   /** Prepended to deepagents' base system prompt. */
@@ -953,14 +969,14 @@ export interface Message {
 }
 
 export interface ChatHistoryModel {
-  model: LLMModel;
+  model: InferenceEndpointModel;
   max_tokens?: number;
   max_tokens_before_summary?: number;
   max_messages_before_summary?: number;
 }
 
 export interface EvaluationModel {
-  model: LLMModel;
+  model: InferenceEndpointModel;
   table: TableModel;
   num_evals: number;
   replace?: boolean;
@@ -997,7 +1013,14 @@ export interface UnityCatalogFunctionSqlTestModel {
 }
 
 export interface ResourcesModel {
-  llms?: Record<string, LLMModel>;
+  /**
+   * dao-ai 0.1.75+: renamed from `llms`. Configurations for Databricks
+   * Model Serving endpoints — covers chat LLMs, embedding models,
+   * judge / extraction / reflection / query models, and custom agent
+   * endpoints. The yaml-generator emits `models:`; the config-store
+   * import path migrates legacy `llms:` from imported YAML.
+   */
+  models?: Record<string, InferenceEndpointModel>;
   vector_stores?: Record<string, VectorStoreModel>;
   genie_rooms?: Record<string, GenieRoomModel>;
   tables?: Record<string, TableModel>;

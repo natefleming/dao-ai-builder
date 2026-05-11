@@ -3378,11 +3378,15 @@ def validate_deployment():
         if not orchestration.get('deep_agent') and (not agents or len(agents) == 0):
             errors.append('At least one agent is required')
         
-        # Check for LLMs in resources
+        # Check for inference-endpoint models in resources. dao-ai 0.1.75
+        # renamed `resources.llms` to `resources.models`; accept either
+        # (Pydantic's `populate_by_name=True` + field alias on the dao-ai
+        # side handles both at parse time, but a YAML uploaded through
+        # the builder's validation endpoint can use either literal key).
         resources = config.get('resources', {})
-        llms = resources.get('llms', {})
-        if not llms or len(llms) == 0:
-            warnings.append('No LLMs configured in resources')
+        models = resources.get('models') or resources.get('llms') or {}
+        if not models or len(models) == 0:
+            warnings.append('No models (LLM / embedding / judge) configured in resources')
         
         # Determine requirements based on configuration
         if resources.get('vector_stores'):

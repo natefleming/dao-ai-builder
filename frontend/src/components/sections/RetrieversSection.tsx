@@ -176,7 +176,7 @@ export default function RetrieversSection() {
 
   const retrievers = config.retrievers || {};
   const vectorStores = config.resources?.vector_stores || {};
-  const llms = config.resources?.llms || {};
+  const models = config.resources?.models || {};
   
   const hasVectorStores = Object.keys(vectorStores).length > 0;
 
@@ -187,7 +187,7 @@ export default function RetrieversSection() {
   }));
 
   // Get LLM options for model selection
-  const llmOptions = Object.entries(llms).map(([key, llm]) => ({
+  const llmOptions = Object.entries(models).map(([key, llm]) => ({
     value: key,
     label: `${key} (${llm.name})`,
   }));
@@ -255,12 +255,12 @@ export default function RetrieversSection() {
       return model;
     }
     
-    // It's an expanded LLMModel object - find matching key in configured LLMs
+    // It's an expanded InferenceEndpointModel object - find matching key in configured LLMs
     const modelName = model.name;
     if (!modelName) return '';
     
     // Search through configured LLMs to find matching key
-    for (const [llmKey, llm] of Object.entries(llms)) {
+    for (const [llmKey, llm] of Object.entries(models)) {
       if (llm.name === modelName) {
         // Found a match - verify other properties match too for disambiguation
         const tempMatch = model.temperature === undefined || llm.temperature === undefined || 

@@ -253,7 +253,7 @@ function addYamlAnchors(yamlString: string): string {
   
   // Sections nested under 'resources:' that need anchors
   const resourceAnchorSections = [
-    'llms',
+    'models',
     'vector_stores',
     'genie_rooms',
     'tables',
@@ -670,13 +670,13 @@ export function processObjectWithReferences(
  * or as an inline object if it's a custom definition.
  * 
  * @param model - The model object or string
- * @param definedLLMs - Map of defined LLM keys to LLM objects
+ * @param definedModels - Map of defined inference-endpoint keys to InferenceEndpointModel objects
  * @param basePath - The path in the YAML structure (e.g., "agents.my_agent.model") for reference lookup
  */
-function formatModelReference(model: any, definedLLMs: Record<string, any>, basePath?: string): any {
+function formatModelReference(model: any, definedModels: Record<string, any>, basePath?: string): any {
   if (typeof model === 'string') {
     // If it's a string, check if it's a defined LLM reference
-    if (definedLLMs[model]) {
+    if (definedModels[model]) {
       return createReference(model);
     }
     return model;
@@ -688,7 +688,7 @@ function formatModelReference(model: any, definedLLMs: Record<string, any>, base
     if (basePath) {
       const originalRef = findOriginalReference(basePath, model);
       if (originalRef) {
-        // Only use this reference if the key still exists in definedLLMs
+        // Only use this reference if the key still exists in definedModels
         // If it doesn't exist, the reference will cause an "undefined alias" error
         // which is the desired behavior for dependency checking
         return createReference(originalRef);
@@ -697,7 +697,7 @@ function formatModelReference(model: any, definedLLMs: Record<string, any>, base
     
     // FALLBACK: Check if this model exactly matches a defined LLM (deep equality)
     // This is safer than just matching by name
-    for (const [llmKey, llm] of Object.entries(definedLLMs)) {
+    for (const [llmKey, llm] of Object.entries(definedModels)) {
       // Deep equality check to avoid false matches
       if (JSON.stringify(llm) === JSON.stringify(model)) {
         return createReference(llmKey);
@@ -924,7 +924,7 @@ function formatVolumePath(
  */
 function formatOrchestration(
   orchestration: OrchestrationModel,
-  definedLLMs: Record<string, any>,
+  definedModels: Record<string, any>,
   definedTools: Record<string, any>,
   definedMiddleware: Record<string, any>,
   definedAgents: Record<string, any>,
@@ -1006,7 +1006,7 @@ function formatOrchestration(
     }
     
     result.supervisor = {
-      model: formatModelReference(orchestration.supervisor.model, definedLLMs, 'orchestration.supervisor.model'),
+      model: formatModelReference(orchestration.supervisor.model, definedModels, 'orchestration.supervisor.model'),
       ...(supervisorToolsValue && supervisorToolsValue.length > 0 && { 
         tools: supervisorToolsValue 
       }),
@@ -1132,7 +1132,7 @@ function formatOrchestration(
     if (da.model !== undefined && da.model !== null) {
       deepAgent.model = typeof da.model === 'string'
         ? da.model
-        : formatModelReference(da.model, definedLLMs, 'orchestration.deep_agent.model');
+        : formatModelReference(da.model, definedModels, 'orchestration.deep_agent.model');
     }
 
     // Tools — resolve to *tool_name when the entry is a known tool
@@ -1881,7 +1881,7 @@ export function generateYAML(config: AppConfig): string {
 
   // Resources - only add if there's at least one resource configured
   const hasResources = config.resources && (
-    (config.resources.llms && Object.keys(config.resources.llms).length > 0) ||
+    (config.resources.models && Object.keys(config.resources.models).length > 0) ||
     (config.resources.vector_stores && Object.keys(config.resources.vector_stores).length > 0) ||
     (config.resources.genie_rooms && Object.keys(config.resources.genie_rooms).length > 0) ||
     (config.resources.tables && Object.keys(config.resources.tables).length > 0) ||
@@ -1897,22 +1897,31 @@ export function generateYAML(config: AppConfig): string {
   if (hasResources) {
     yamlConfig.resources = {};
     
-    if (config.resources!.llms && Object.keys(config.resources!.llms).length > 0) {
-      yamlConfig.resources.llms = {};
-      Object.entries(config.resources!.llms).forEach(([key, llm]) => {
+    if (config.resources!.models && Object.keys(config.resources!.models).length > 0) {
+      // EMIT KEY (TRANSITION):
+      // dao-ai 0.1.75 (unreleased on PyPI as of this commit) adds an
+      // alias on `ResourcesModel.models` so both `models:` and `llms:`
+      // parse server-side. Until 0.1.75 ships, we emit the legacy
+      // `llms:` key so the YAML round-trips through every published
+      // dao-ai version. Once 0.1.75 is on PyPI and the builder's
+      // pyproject pin is bumped, change `EMIT_KEY` to 'models' and the
+      // workshop sweep + customer migration can proceed.
+      const EMIT_KEY: 'models' | 'llms' = 'llms';
+      yamlConfig.resources[EMIT_KEY] = {};
+      Object.entries(config.resources!.models).forEach(([key, llm]) => {
         // Format fallbacks - convert ref: prefixed values to YAML aliases
         let formattedFallbacks: string[] | undefined;
         if (llm.fallbacks && llm.fallbacks.length > 0) {
           formattedFallbacks = llm.fallbacks.map(f => {
             if (typeof f === 'string' && f.startsWith('ref:')) {
-              // Reference to another configured LLM - use YAML alias
+              // Reference to another configured inference endpoint - use YAML alias
               return createReference(f.slice(4));
             }
             return typeof f === 'string' ? f : f.name;
           });
         }
-        
-        yamlConfig.resources.llms[key] = {
+
+        yamlConfig.resources[EMIT_KEY][key] = {
           name: llm.name,
           ...(llm.description && { description: llm.description }),
           ...(llm.temperature !== undefined && { temperature: llm.temperature }),
@@ -1920,7 +1929,7 @@ export function generateYAML(config: AppConfig): string {
           ...(llm.on_behalf_of_user !== undefined && { on_behalf_of_user: llm.on_behalf_of_user }),
           ...(llm.use_responses_api !== undefined && { use_responses_api: llm.use_responses_api }),
           ...(formattedFallbacks && formattedFallbacks.length > 0 && { fallbacks: formattedFallbacks }),
-          ...formatResourceAuth(llm, `resources.llms.${key}`),
+          ...formatResourceAuth(llm, `resources.${EMIT_KEY}.${key}`),
         };
       });
     }
@@ -2336,7 +2345,7 @@ export function generateYAML(config: AppConfig): string {
 
   // Guardrails (dual-mode: LLM Judge or MLflow Scorer)
   if (config.guardrails && Object.keys(config.guardrails).length > 0) {
-    const definedLLMs = config.resources?.llms || {};
+    const definedModels = config.resources?.models || {};
     yamlConfig.guardrails = {};
     Object.entries(config.guardrails).forEach(([key, guardrail]) => {
       const isScorer = !!guardrail.scorer;
@@ -2354,7 +2363,7 @@ export function generateYAML(config: AppConfig): string {
       } else {
         yamlConfig.guardrails[key] = {
           name: guardrail.name,
-          ...(guardrail.model && { model: formatModelReference(guardrail.model, definedLLMs, `guardrails.${key}.model`) }),
+          ...(guardrail.model && { model: formatModelReference(guardrail.model, definedModels, `guardrails.${key}.model`) }),
           ...(guardrail.prompt && { prompt: guardrail.prompt }),
           ...(guardrail.num_retries !== undefined && { num_retries: guardrail.num_retries }),
           ...(guardrail.fail_on_error !== undefined && { fail_on_error: guardrail.fail_on_error }),
@@ -2438,12 +2447,12 @@ export function generateYAML(config: AppConfig): string {
           storeEmbeddingModel = createReference(emRef);
         } else {
           // Also check if it matches a defined LLM by name
-          const definedLLMs = config.resources?.llms || {};
-          const matchingLlmKey = Object.entries(definedLLMs).find(
+          const definedModels = config.resources?.models || {};
+          const matchingModelKey = Object.entries(definedModels).find(
             ([, llm]) => (llm as any).name === (config.memory?.store?.embedding_model as any)?.name
           )?.[0];
-          if (matchingLlmKey) {
-            storeEmbeddingModel = createReference(matchingLlmKey);
+          if (matchingModelKey) {
+            storeEmbeddingModel = createReference(matchingModelKey);
           } else {
             storeEmbeddingModel = config.memory.store.embedding_model;
           }
@@ -2463,14 +2472,14 @@ export function generateYAML(config: AppConfig): string {
     
     if (config.memory.extraction) {
       const ext = config.memory.extraction;
-      const definedLLMs = config.resources?.llms || {};
+      const definedModels = config.resources?.models || {};
       
       const extractionModel = ext.extraction_model
-        ? formatModelReference(ext.extraction_model, definedLLMs, 'memory.extraction.extraction_model')
+        ? formatModelReference(ext.extraction_model, definedModels, 'memory.extraction.extraction_model')
         : undefined;
       
       const queryModel = ext.query_model
-        ? formatModelReference(ext.query_model, definedLLMs, 'memory.extraction.query_model')
+        ? formatModelReference(ext.query_model, definedModels, 'memory.extraction.query_model')
         : undefined;
       
       yamlConfig.memory.extraction = {
@@ -2549,7 +2558,7 @@ export function generateYAML(config: AppConfig): string {
 
   // Agents
   if (config.agents && Object.keys(config.agents).length > 0) {
-    const definedLLMs = config.resources?.llms || {};
+    const definedModels = config.resources?.models || {};
     const definedPrompts = config.prompts || {};
     const definedTools = config.tools || {};
     const definedGuardrails = config.guardrails || {};
@@ -2770,7 +2779,7 @@ export function generateYAML(config: AppConfig): string {
 
       yamlConfig.agents[key] = {
         name: agent.name,
-        model: formatModelReference(agent.model, definedLLMs, `agents.${key}.model`),
+        model: formatModelReference(agent.model, definedModels, `agents.${key}.model`),
         ...(agent.description && { description: agent.description }),
         ...(toolsValue && toolsValue.length > 0 && { tools: toolsValue }),
         ...(guardrailsValue && guardrailsValue.length > 0 && { guardrails: guardrailsValue }),
@@ -2912,14 +2921,14 @@ export function generateYAML(config: AppConfig): string {
     
     // Format orchestration separately to handle swarm handoffs properly
     if (config.app.orchestration) {
-      const definedLLMs = config.resources?.llms || {};
+      const definedModels = config.resources?.models || {};
       const definedTools = config.tools || {};
       const definedMiddleware = config.middleware || {};
       const definedAgents = config.agents || {};
       const definedSkills = config.resources?.skills || {};
       yamlConfig.app.orchestration = formatOrchestration(
         config.app.orchestration,
-        definedLLMs,
+        definedModels,
         definedTools,
         definedMiddleware,
         definedAgents,
@@ -2929,9 +2938,9 @@ export function generateYAML(config: AppConfig): string {
     
     // Format chat_history
     if (config.app.chat_history) {
-      const definedLLMs = config.resources?.llms || {};
+      const definedModels = config.resources?.models || {};
       yamlConfig.app.chat_history = {
-        model: formatModelReference(config.app.chat_history.model, definedLLMs, 'app.chat_history.model'),
+        model: formatModelReference(config.app.chat_history.model, definedModels, 'app.chat_history.model'),
         max_tokens: config.app.chat_history.max_tokens,
         ...(config.app.chat_history.max_tokens_before_summary && { 
           max_tokens_before_summary: config.app.chat_history.max_tokens_before_summary 
@@ -3049,11 +3058,11 @@ export function generateYAML(config: AppConfig): string {
 
   // Evaluation section
   if (config.evaluation) {
-    const definedLLMs = config.resources?.llms || {};
+    const definedModels = config.resources?.models || {};
     const definedSchemas = config.schemas || {};
     
     yamlConfig.evaluation = {
-      model: formatModelReference(config.evaluation.model, definedLLMs, 'evaluation.model'),
+      model: formatModelReference(config.evaluation.model, definedModels, 'evaluation.model'),
       table: {
         ...(config.evaluation.table.schema && { 
           schema: formatSchemaReference(config.evaluation.table.schema, definedSchemas, 'evaluation.table.schema') 

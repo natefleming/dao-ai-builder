@@ -154,7 +154,7 @@ export default function GuardrailsSection() {
   };
 
   const guardrails = config.guardrails || {};
-  const llms = config.resources?.llms || {};
+  const models = config.resources?.models || {};
 
   const resetForm = () => {
     setFormData({
@@ -191,7 +191,7 @@ export default function GuardrailsSection() {
     let llmKey = '';
     if (mode === 'llm_judge' && guardrail.model) {
       const modelName = typeof guardrail.model === 'string' ? guardrail.model : guardrail.model.name;
-      llmKey = Object.entries(llms).find(([, llm]) => llm.name === modelName)?.[0] || '';
+      llmKey = Object.entries(models).find(([, llm]) => llm.name === modelName)?.[0] || '';
     }
     
     const promptForForm =
@@ -218,7 +218,7 @@ export default function GuardrailsSection() {
     setIsModalOpen(true);
   };
 
-  const llmOptions = Object.entries(llms).map(([key, llm]) => ({
+  const llmOptions = Object.entries(models).map(([key, llm]) => ({
     value: key,
     label: `${key} (${llm.name})`,
   }));
@@ -229,7 +229,7 @@ export default function GuardrailsSection() {
     if (!formData.refName.trim() || !formData.name.trim()) return;
     
     if (guardrailMode === 'llm_judge') {
-      if (!formData.modelKey || !llms[formData.modelKey]) return;
+      if (!formData.modelKey || !models[formData.modelKey]) return;
       
       let promptField: string | PromptModel = formData.prompt;
       try {
@@ -248,7 +248,7 @@ export default function GuardrailsSection() {
 
       const guardrailConfig = {
         name: formData.name,
-        model: llms[formData.modelKey],
+        model: models[formData.modelKey],
         prompt: promptField,
         num_retries: parseInt(formData.numRetries),
         fail_on_error: formData.failOnError,

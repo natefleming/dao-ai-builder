@@ -23,7 +23,7 @@ function isRefNameDuplicate(refName: string, config: AppConfig, editingKey: stri
   
   // Check resources
   const resources = config.resources || {};
-  const resourceTypes = ['llms', 'genie_rooms', 'tables', 'volumes', 'functions', 'warehouses', 'connections', 'databases', 'vector_stores'] as const;
+  const resourceTypes = ['models', 'genie_rooms', 'tables', 'volumes', 'functions', 'warehouses', 'connections', 'databases', 'vector_stores'] as const;
   for (const type of resourceTypes) {
     const items = resources[type] || {};
     if (refName in items && refName !== editingKey) {
@@ -142,12 +142,12 @@ export default function AgentsSection() {
   const [editingAgent, setEditingAgent] = useState<string | null>(null);
 
   const agents = config.agents || {};
-  const llms = config.resources?.llms || {};
+  const models = config.resources?.models || {};
   const tools = config.tools || {};
   const guardrails = config.guardrails || {};
   const prompts = config.prompts || {};
 
-  const llmOptions = Object.entries(llms).map(([key, llm]) => ({
+  const llmOptions = Object.entries(models).map(([key, llm]) => ({
     value: key,
     label: `${key} (${llm.name})`,
   }));
@@ -305,7 +305,7 @@ export default function AgentsSection() {
         guardrailOptions={guardrailOptions}
         middlewareOptions={middlewareOptions}
         promptOptions={promptOptions}
-        llms={llms}
+        models={models}
         tools={tools}
         guardrails={guardrails}
         middleware={middleware}
@@ -328,7 +328,7 @@ interface AgentModalProps {
   guardrailOptions: { value: string; label: string }[];
   middlewareOptions: { value: string; label: string }[];
   promptOptions: { value: string; label: string }[];
-  llms: Record<string, any>;
+  models: Record<string, any>;
   tools: Record<string, any>;
   guardrails: Record<string, any>;
   middleware: Record<string, any>;
@@ -362,7 +362,7 @@ function AgentModal({
   guardrailOptions,
   middlewareOptions,
   promptOptions,
-  llms,
+  models,
   tools,
   guardrails,
   middleware,
@@ -479,7 +479,7 @@ function AgentModal({
     if (!isOpen) return;
     
     if (editingAgent && editingKey) {
-      const modelKey = Object.entries(llms).find(
+      const modelKey = Object.entries(models).find(
         ([, llm]) => llm.name === editingAgent.model?.name
       )?.[0] || '';
       
@@ -599,12 +599,12 @@ function AgentModal({
       setShowAiInput(false);
       setAiContext('');
     }
-  }, [isOpen, editingAgent, editingKey, llms, prompts, tools, guardrails]);
+  }, [isOpen, editingAgent, editingKey, models, prompts, tools, guardrails]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!formData.refName || !formData.name || !formData.modelKey || !llms[formData.modelKey]) return;
+    if (!formData.refName || !formData.name || !formData.modelKey || !models[formData.modelKey]) return;
 
     // Determine prompt value based on source
     let promptValue: string | PromptModel | undefined;
@@ -627,7 +627,7 @@ function AgentModal({
     const agent: AgentModel = {
       name: formData.name,
       description: formData.description || undefined,
-      model: llms[formData.modelKey],
+      model: models[formData.modelKey],
       prompt: promptValue,
       handoff_prompt: formData.handoffPrompt || undefined,
       tools: formData.selectedTools.map((key) => tools[key]).filter(Boolean),

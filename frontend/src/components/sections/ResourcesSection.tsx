@@ -117,7 +117,7 @@ import {
   WarehouseModel,
   ConnectionModel,
   DatabricksAppModel,
-  LLMModel,
+  InferenceEndpointModel,
   DatabaseModel,
   LakebaseMode,
   VariableModel,
@@ -145,7 +145,7 @@ import {
 } from '@/hooks/useDatabricks';
 import { DatabricksAppSelect } from '@/components/ui/DatabricksSelect';
 
-type ResourceType = 'llms' | 'genie_rooms' | 'tables' | 'volumes' | 'functions' | 'warehouses' | 'connections' | 'databases' | 'vector_stores' | 'apps' | 'skills';
+type ResourceType = 'models' | 'genie_rooms' | 'tables' | 'volumes' | 'functions' | 'warehouses' | 'connections' | 'databases' | 'vector_stores' | 'apps' | 'skills';
 
 interface ResourceTab {
   id: ResourceType;
@@ -155,7 +155,7 @@ interface ResourceTab {
 }
 
 const RESOURCE_TABS: ResourceTab[] = [
-  { id: 'llms', label: 'LLMs', icon: Cpu, description: 'Language models' },
+  { id: 'models', label: 'Models', icon: Cpu, description: 'Inference endpoints (LLM, embedding, judge, custom)' },
   { id: 'genie_rooms', label: 'Genie Rooms', icon: MessageSquare, description: 'AI-powered data assistants' },
   { id: 'warehouses', label: 'SQL Warehouses', icon: Database, description: 'SQL compute resources' },
   { id: 'tables', label: 'Tables', icon: Table2, description: 'Unity Catalog tables' },
@@ -206,7 +206,7 @@ function isRefNameDuplicate(refName: string, config: AppConfig, editingKey: stri
   
   // Check resources
   const resources = config.resources || {};
-  const resourceTypes = ['llms', 'genie_rooms', 'tables', 'volumes', 'functions', 'warehouses', 'connections', 'databases', 'vector_stores', 'apps'] as const;
+  const resourceTypes = ['models', 'genie_rooms', 'tables', 'volumes', 'functions', 'warehouses', 'connections', 'databases', 'vector_stores', 'apps'] as const;
   for (const type of resourceTypes) {
     const items = resources[type] || {};
     if (refName in items && refName !== editingKey) {
@@ -269,7 +269,7 @@ export function ResourcesSection() {
   const { config } = useConfigStore();
   const resources = config.resources;
   
-  const [activeTab, setActiveTab] = useState<ResourceType>('llms');
+  const [activeTab, setActiveTab] = useState<ResourceType>('models');
   const [showForm, setShowForm] = useState(false);
   const [editingKey, setEditingKey] = useState<string | null>(null);
 
@@ -280,8 +280,8 @@ export function ResourcesSection() {
 
   const renderTabContent = () => {
     switch (activeTab) {
-      case 'llms':
-        return <LLMsPanel />;
+      case 'models':
+        return <ModelsPanel />;
       case 'genie_rooms':
         return <GenieRoomsPanel showForm={showForm} setShowForm={setShowForm} editingKey={editingKey} setEditingKey={setEditingKey} onClose={handleCloseForm} />;
       case 'warehouses':
@@ -309,7 +309,7 @@ export function ResourcesSection() {
 
   const getResourceCount = (type: ResourceType): number => {
     switch (type) {
-      case 'llms': return Object.keys(resources?.llms || {}).length;
+      case 'models': return Object.keys(resources?.models || {}).length;
       case 'genie_rooms': return Object.keys(resources?.genie_rooms || {}).length;
       case 'tables': return Object.keys(resources?.tables || {}).length;
       case 'volumes': return Object.keys(resources?.volumes || {}).length;
@@ -407,8 +407,8 @@ interface FallbackItemProps {
   fallback: string;
   isReference: boolean;
   refKey: string | null;
-  hasConfiguredLLMs: boolean;
-  llms: Record<string, LLMModel>;
+  hasConfiguredModels: boolean;
+  models: Record<string, InferenceEndpointModel>;
   endpoints: { name: string; state?: { ready?: string; config_update?: string } }[];
   editingKey: string | null;
   formDataName: string;
@@ -422,8 +422,8 @@ function FallbackItem({
   fallback,
   isReference,
   refKey,
-  hasConfiguredLLMs,
-  llms,
+  hasConfiguredModels,
+  models,
   endpoints,
   editingKey,
   formDataName,
@@ -434,7 +434,7 @@ function FallbackItem({
   const [source, setSource] = useState<FallbackSource>(isReference ? 'reference' : 'endpoint');
   
   // Available configured LLMs (excluding the one being edited)
-  const availableLLMs = Object.entries(llms)
+  const availableModels = Object.entries(models)
     .filter(([key]) => key !== editingKey && key !== formDataName)
     .map(([key, llm]) => ({
       value: `ref:${key}`,
@@ -468,7 +468,7 @@ function FallbackItem({
       </div>
 
       {/* Source Toggle */}
-      {hasConfiguredLLMs && (
+      {hasConfiguredModels && (
         <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5 w-full">
           <button
             type="button"
@@ -496,21 +496,21 @@ function FallbackItem({
       )}
 
       {/* Selection based on source */}
-      {source === 'reference' && hasConfiguredLLMs ? (
+      {source === 'reference' && hasConfiguredModels ? (
         <div className="space-y-2">
           <Select
             value={fallback}
             onChange={(e: ChangeEvent<HTMLSelectElement>) => onUpdate(e.target.value)}
             options={[
               { value: '', label: 'Select a configured LLM...' },
-              ...availableLLMs,
+              ...availableModels,
             ]}
           />
-          {isReference && refKey && llms[refKey] && (
+          {isReference && refKey && models[refKey] && (
             <div className="p-2 bg-slate-800/50 rounded text-xs">
               <span className="text-blue-400">YAML output:</span>{' '}
               <code className="text-slate-300">*{refKey}</code>
-              <span className="text-slate-500 ml-2">→ {llms[refKey].name}</span>
+              <span className="text-slate-500 ml-2">→ {models[refKey].name}</span>
             </div>
           )}
         </div>
@@ -542,8 +542,8 @@ function FallbackItem({
 // =============================================================================
 type ModelSource = 'preset' | 'endpoint' | 'custom';
 
-function LLMsPanel() {
-  const { config, addLLM, removeLLM, updateLLM } = useConfigStore();
+function ModelsPanel() {
+  const { config, addModel, removeModel, updateModel } = useConfigStore();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [modelSource, setModelSource] = useState<ModelSource>('preset');
@@ -577,7 +577,7 @@ function LLMsPanel() {
 
   const { data: endpoints, loading: endpointsLoading, refetch: refetchEndpoints } = useServingEndpoints();
 
-  const llms = config.resources?.llms || {};
+  const models = config.resources?.models || {};
 
   const resetForm = () => {
     setFormData({
@@ -610,21 +610,21 @@ function LLMsPanel() {
     setEditingKey(null);
   };
 
-  const handleEdit = (key: string, llm: LLMModel) => {
+  const handleEdit = (key: string, llm: InferenceEndpointModel) => {
     scrollToAsset(key);
     setEditingKey(key);
     // Convert fallbacks: if it matches a configured LLM key, prefix with ref:
     const convertedFallbacks = (llm.fallbacks || []).map(f => {
       const fallbackName = typeof f === 'string' ? f : f.name;
       // Check if this fallback matches a configured LLM key
-      if (Object.keys(llms).includes(fallbackName) && fallbackName !== key) {
+      if (Object.keys(models).includes(fallbackName) && fallbackName !== key) {
         return `ref:${fallbackName}`;
       }
       return fallbackName;
     });
     
     // Parse authentication data
-    const authData = parseResourceAuth(llm, safeStartsWith, safeString, config.service_principals || {}, `resources.llms.${key}`);
+    const authData = parseResourceAuth(llm, safeStartsWith, safeString, config.service_principals || {}, `resources.models.${key}`);
     
     setFormData({
       name: key,
@@ -670,41 +670,41 @@ function LLMsPanel() {
     }
     
     if (formData.name && modelName) {
-      const llmConfig: LLMModel = {
+      const modelConfig: InferenceEndpointModel = {
         name: modelName,
         temperature: parseFloat(formData.temperature),
         max_tokens: parseInt(formData.maxTokens),
       };
 
       if (formData.onBehalfOfUser) {
-        llmConfig.on_behalf_of_user = true;
+        modelConfig.on_behalf_of_user = true;
       }
 
       if (formData.useResponseApi) {
-        llmConfig.use_responses_api = true;
+        modelConfig.use_responses_api = true;
       }
 
       if (formData.disableStreaming) {
-        llmConfig.disable_streaming = true;
+        modelConfig.disable_streaming = true;
       }
 
       if (formData.fallbacks.length > 0) {
-        llmConfig.fallbacks = formData.fallbacks;
+        modelConfig.fallbacks = formData.fallbacks;
       }
 
       // Apply authentication configuration
-      applyResourceAuth(llmConfig, formData as any);
+      applyResourceAuth(modelConfig, formData as any);
 
       if (editingKey) {
         // If key changed, remove old and add new
         if (editingKey !== formData.name) {
-          removeLLM(editingKey);
-          addLLM(formData.name, llmConfig);
+          removeModel(editingKey);
+          addModel(formData.name, modelConfig);
         } else {
-          updateLLM(editingKey, llmConfig);
+          updateModel(editingKey, modelConfig);
         }
       } else {
-        addLLM(formData.name, llmConfig);
+        addModel(formData.name, modelConfig);
       }
 
       resetForm();
@@ -769,9 +769,9 @@ function LLMsPanel() {
       </div>
 
       {/* LLM List */}
-      {Object.keys(llms).length > 0 ? (
+      {Object.keys(models).length > 0 ? (
         <div className="space-y-2">
-          {Object.entries(llms).map(([key, llm]) => (
+          {Object.entries(models).map(([key, llm]) => (
             <div 
               key={key} 
               className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700 cursor-pointer hover:bg-slate-800/70 transition-colors"
@@ -804,7 +804,7 @@ function LLMsPanel() {
                   size="sm"
                   onClick={(e) => {
                     e.stopPropagation();
-                    safeDelete('LLM', key, () => removeLLM(key));
+                    safeDelete('Model', key, () => removeModel(key));
                   }}
                 >
                   <Trash2 className="w-4 h-4 text-red-400" />
@@ -1038,7 +1038,7 @@ function LLMsPanel() {
                       const fallbackStr = safeString(fallback);
                       const isReference = safeStartsWith(fallbackStr, 'ref:');
                       const refKey = isReference ? fallbackStr.slice(4) : null;
-                      const hasConfiguredLLMs = Object.keys(llms).filter(k => k !== editingKey && k !== formData.name).length > 0;
+                      const hasConfiguredModels = Object.keys(models).filter(k => k !== editingKey && k !== formData.name).length > 0;
                       
                       return (
                         <FallbackItem
@@ -1047,8 +1047,8 @@ function LLMsPanel() {
                           fallback={fallback}
                           isReference={isReference}
                           refKey={refKey}
-                          hasConfiguredLLMs={hasConfiguredLLMs}
-                          llms={llms}
+                          hasConfiguredModels={hasConfiguredModels}
+                          models={models}
                           endpoints={endpoints || []}
                           editingKey={editingKey}
                           formDataName={formData.name}
@@ -4885,7 +4885,7 @@ function VolumePathsSection({
 function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, onClose }: PanelProps) {
   const { config, addVectorStore, updateVectorStore, removeVectorStore } = useConfigStore();
   const vectorStores = config.resources?.vector_stores || {};
-  const configuredLLMs = config.resources?.llms || {};
+  const configuredModels = config.resources?.models || {};
   const configuredSchemas = config.schemas || {};
   const configuredVolumes = config.resources?.volumes || {};
   const variables = config.variables || {};
@@ -5303,7 +5303,7 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
     { value: '', label: 'Select embedding model...' },
     { value: 'databricks-gte-large-en', label: 'GTE Large (Embeddings)' },
     { value: 'databricks-bge-large-en', label: 'BGE Large (Embeddings)' },
-    ...Object.entries(configuredLLMs).map(([key, llm]) => ({
+    ...Object.entries(configuredModels).map(([key, llm]) => ({
       value: llm.name,
       label: `${key} (${llm.name})`,
     })),

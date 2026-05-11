@@ -14,7 +14,7 @@ import {
   StoreModel,
   MemoryExtractionModel,
   MemorySchemaName,
-  LLMModel,
+  InferenceEndpointModel,
 } from '@/types/dao-ai-types';
 import { normalizeRefNameWhileTyping, normalizeRefName } from '@/utils/name-utils';
 import { safeDelete } from '@/utils/safe-delete';
@@ -37,10 +37,10 @@ export function MemorySection() {
   const { config, updateMemory } = useConfigStore();
   const memory = config.memory;
   const databases = config.resources?.databases || {};
-  const llms = config.resources?.llms || {};
+  const models = config.resources?.models || {};
   const { scrollToAsset } = useYamlScrollStore();
   
-  const llmOptions = Object.entries(llms).map(([key, llm]) => ({
+  const llmOptions = Object.entries(models).map(([key, llm]) => ({
     value: key,
     label: `${key} (${llm.name})`,
   }));
@@ -90,10 +90,10 @@ export function MemorySection() {
   const [extractionQueryModelKey, setExtractionQueryModelKey] = useState('');
   
   // Helper to find LLM key by matching model name
-  const findLlmKey = (model: LLMModel | string | undefined): string => {
+  const findLlmKey = (model: InferenceEndpointModel | string | undefined): string => {
     if (!model) return '';
     const modelName = typeof model === 'string' ? model : model.name;
-    for (const [key, llm] of Object.entries(llms)) {
+    for (const [key, llm] of Object.entries(models)) {
       if (llm.name === modelName) return key;
     }
     return '';
@@ -259,11 +259,11 @@ export function MemorySection() {
       extraction.auto_inject_limit = extractionAutoInjectLimit;
       extraction.supervisor_auto_inject = extractionSupervisorAutoInject;
       extraction.background_extraction = extractionBackgroundExtraction;
-      if (extractionModelKey && llms[extractionModelKey]) {
-        extraction.extraction_model = llms[extractionModelKey];
+      if (extractionModelKey && models[extractionModelKey]) {
+        extraction.extraction_model = models[extractionModelKey];
       }
-      if (extractionQueryModelKey && llms[extractionQueryModelKey]) {
-        extraction.query_model = llms[extractionQueryModelKey];
+      if (extractionQueryModelKey && models[extractionQueryModelKey]) {
+        extraction.query_model = models[extractionQueryModelKey];
       }
       
       newMemory.extraction = extraction;

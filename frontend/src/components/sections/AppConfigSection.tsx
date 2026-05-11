@@ -112,7 +112,7 @@ export default function AppConfigSection() {
   const app = config.app;
   const schemas = config.schemas || {};
   const agents = config.agents || {};
-  const llms = config.resources?.llms || {};
+  const models = config.resources?.models || {};
   const tools = config.tools || {};
   const memory = config.memory;
   const warehouses = config.resources?.warehouses || {};
@@ -290,7 +290,7 @@ export default function AppConfigSection() {
     // Only supervisor uses a model - swarm no longer has a model field
     const existingModel = config.app?.orchestration?.supervisor?.model?.name;
     if (existingModel) {
-      const found = Object.entries(llms).find(([, llm]) => llm.name === existingModel);
+      const found = Object.entries(models).find(([, llm]) => llm.name === existingModel);
       return found ? found[0] : '';
     }
     return '';
@@ -392,7 +392,7 @@ export default function AppConfigSection() {
     const existing = initialDeepAgent?.model;
     if (existing && typeof existing !== 'string' && (existing as any).name) {
       const name = (existing as any).name;
-      const found = Object.entries(llms).find(([, llm]) => llm.name === name);
+      const found = Object.entries(models).find(([, llm]) => llm.name === name);
       return found ? found[0] : '';
     }
     return '';
@@ -433,7 +433,7 @@ export default function AppConfigSection() {
   const [chatHistoryLLM, setChatHistoryLLM] = useState(() => {
     const existingModel = app?.chat_history?.model?.name;
     if (existingModel) {
-      const found = Object.entries(llms).find(([, llm]) => llm.name === existingModel);
+      const found = Object.entries(models).find(([, llm]) => llm.name === existingModel);
       return found ? found[0] : '';
     }
     return '';
@@ -593,7 +593,7 @@ export default function AppConfigSection() {
     // Check orchestration details
     if (pattern === 'supervisor') {
       const savedLLMName = app?.orchestration?.supervisor?.model?.name;
-      const currentLLMName = selectedLLM ? llms[selectedLLM]?.name : '';
+      const currentLLMName = selectedLLM ? models[selectedLLM]?.name : '';
       if (savedLLMName !== currentLLMName) return true;
       if (supervisorPrompt !== (app?.orchestration?.supervisor?.prompt || '')) return true;
       
@@ -700,7 +700,7 @@ export default function AppConfigSection() {
     if (enableChatHistory) {
       // Check chat history LLM
       const savedChatHistoryLLMName = app?.chat_history?.model?.name;
-      const currentChatHistoryLLMName = chatHistoryLLM ? llms[chatHistoryLLM]?.name : '';
+      const currentChatHistoryLLMName = chatHistoryLLM ? models[chatHistoryLLM]?.name : '';
       if (savedChatHistoryLLMName !== currentChatHistoryLLMName) return true;
       
       // Check max tokens
@@ -794,7 +794,7 @@ export default function AppConfigSection() {
 
   const llmOptions = [
     { value: '', label: 'Select an LLM...' },
-    ...Object.entries(llms).map(([key, llm]) => ({
+    ...Object.entries(models).map(([key, llm]) => ({
       value: key,
       label: `${key} (${llm.name})`,
     })),
@@ -921,7 +921,7 @@ export default function AppConfigSection() {
       // Sync orchestration model (only supervisor uses a model)
       const existingModel = app?.orchestration?.supervisor?.model?.name;
       if (existingModel) {
-        const found = Object.entries(llms).find(([, llm]) => llm.name === existingModel);
+        const found = Object.entries(models).find(([, llm]) => llm.name === existingModel);
         setSelectedLLM(found ? found[0] : '');
       } else {
         setSelectedLLM('');
@@ -1068,7 +1068,7 @@ export default function AppConfigSection() {
     
     const chatHistoryModel = app?.chat_history?.model?.name;
     if (chatHistoryModel) {
-      const foundLLM = Object.entries(llms).find(([, llm]) => llm.name === chatHistoryModel);
+      const foundLLM = Object.entries(models).find(([, llm]) => llm.name === chatHistoryModel);
       setChatHistoryLLM(foundLLM ? foundLLM[0] : '');
     } else {
       setChatHistoryLLM('');
@@ -1089,7 +1089,7 @@ export default function AppConfigSection() {
       setChatHistoryMaxTokensBeforeSummary(20480);
       setChatHistoryMaxMessagesBeforeSummary(10);
     }
-  }, [app, agents, llms, tools]);
+  }, [app, agents, models, tools]);
 
   // Auto-adjust orchestration pattern based on number of selected agents
   // Single agent = always "No Orchestration" (supervisor/swarm disabled)
@@ -1208,7 +1208,7 @@ export default function AppConfigSection() {
 
     // Build orchestration config
     let orchestration: any = undefined;
-    if (pattern === 'supervisor' && selectedLLM && llms[selectedLLM]) {
+    if (pattern === 'supervisor' && selectedLLM && models[selectedLLM]) {
       // Build supervisor tools array from selected tool keys
       const supervisorToolsArray = supervisorTools
         .map(key => tools[key])
@@ -1221,7 +1221,7 @@ export default function AppConfigSection() {
       
       orchestration = {
         supervisor: {
-          model: llms[selectedLLM],
+          model: models[selectedLLM],
           ...(supervisorToolsArray.length > 0 && { tools: supervisorToolsArray }),
           ...(supervisorPrompt && { prompt: supervisorPrompt }),
           ...(supervisorMiddlewareArray.length > 0 && { middleware: supervisorMiddlewareArray }),
@@ -1275,7 +1275,7 @@ export default function AppConfigSection() {
       // already-imported config so manual YAML edits round-trip.
       const existingDeepAgent: any = (config.app?.orchestration?.deep_agent as any) || {};
       const deepAgentBlock: Record<string, unknown> = {
-        ...(deepAgentLLM && llms[deepAgentLLM] && { model: llms[deepAgentLLM] }),
+        ...(deepAgentLLM && models[deepAgentLLM] && { model: models[deepAgentLLM] }),
         ...(deepAgentSystemPrompt && { system_prompt: deepAgentSystemPrompt }),
         ...(deepAgentSubagents.length > 0 && { subagents: deepAgentSubagents }),
         ...(deepAgentSkills.length > 0 && { skills: deepAgentSkills }),
@@ -1355,9 +1355,9 @@ export default function AppConfigSection() {
 
     // Build chat_history config
     let chatHistory: any = undefined;
-    if (enableChatHistory && chatHistoryLLM && llms[chatHistoryLLM]) {
+    if (enableChatHistory && chatHistoryLLM && models[chatHistoryLLM]) {
       chatHistory = {
-        model: llms[chatHistoryLLM],
+        model: models[chatHistoryLLM],
         max_tokens: chatHistoryMaxTokens,
       };
       
@@ -1820,7 +1820,7 @@ export default function AppConfigSection() {
             {/* Only show LLM selection for supervisor pattern - swarm doesn't use a model */}
             {pattern === 'supervisor' && (
               <>
-                {Object.keys(llms).length === 0 && (
+                {Object.keys(models).length === 0 && (
                   <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 text-amber-400 text-sm">
                     Add an LLM in Resources first to configure supervisor orchestration.
                   </div>
@@ -2682,7 +2682,7 @@ export default function AppConfigSection() {
                 onChange={(e) => setChatHistoryLLM(e.target.value)}
                 options={[
                   { value: '', label: 'Select an LLM...' },
-                  ...Object.entries(llms).map(([key, llm]) => ({
+                  ...Object.entries(models).map(([key, llm]) => ({
                     value: key,
                     label: llm.name || key,
                   })),
@@ -2701,7 +2701,7 @@ export default function AppConfigSection() {
               />
             </div>
 
-            {Object.keys(llms).length === 0 && (
+            {Object.keys(models).length === 0 && (
               <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 text-amber-400 text-sm">
                 No LLMs configured. Add an LLM in Resources section first.
               </div>

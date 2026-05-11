@@ -25,7 +25,7 @@ function getVariableDisplayValue(value: VariableValue | undefined): string {
 export default function EvaluationSection() {
   const { config, updateConfig } = useConfigStore();
   const schemas = config.schemas || {};
-  const llms = config.resources?.llms || {};
+  const models = config.resources?.models || {};
   const evaluation = config.evaluation;
 
   const [enableEvaluation, setEnableEvaluation] = useState(!!evaluation);
@@ -33,7 +33,7 @@ export default function EvaluationSection() {
   const [modelKey, setModelKey] = useState<string>(() => {
     if (evaluation?.model) {
       const modelName = typeof evaluation.model === 'string' ? evaluation.model : evaluation.model.name;
-      const matched = Object.entries(llms).find(([, llm]) => llm.name === modelName);
+      const matched = Object.entries(models).find(([, llm]) => llm.name === modelName);
       return matched ? matched[0] : '';
     }
     return '';
@@ -66,7 +66,7 @@ export default function EvaluationSection() {
   const [newGuidelineName, setNewGuidelineName] = useState('');
   const [newGuidelineText, setNewGuidelineText] = useState('');
 
-  const llmOptions = Object.entries(llms).map(([key, llm]) => ({
+  const llmOptions = Object.entries(models).map(([key, llm]) => ({
     value: key,
     label: `${key} (${llm.name})`,
   }));
@@ -82,7 +82,7 @@ export default function EvaluationSection() {
       return;
     }
 
-    if (!modelKey || !llms[modelKey]) return;
+    if (!modelKey || !models[modelKey]) return;
 
     let customInputs: Record<string, any> | undefined;
     if (customInputsJson.trim()) {
@@ -95,7 +95,7 @@ export default function EvaluationSection() {
     }
 
     const evalConfig: EvaluationModel = {
-      model: llms[modelKey],
+      model: models[modelKey],
       table: {
         ...(tableSchemaKey && schemas[tableSchemaKey] && { schema: schemas[tableSchemaKey] }),
         name: tableName,

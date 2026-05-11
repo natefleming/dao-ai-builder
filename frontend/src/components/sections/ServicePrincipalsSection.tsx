@@ -26,7 +26,7 @@ function isRefNameDuplicate(refName: string, config: AppConfig, editingKey: stri
   
   // Check resources
   const resources = config.resources || {};
-  const resourceTypes = ['llms', 'genie_rooms', 'tables', 'volumes', 'functions', 'warehouses', 'connections', 'databases', 'vector_stores'] as const;
+  const resourceTypes = ['models', 'genie_rooms', 'tables', 'volumes', 'functions', 'warehouses', 'connections', 'databases', 'vector_stores'] as const;
   for (const type of resourceTypes) {
     const items = resources[type] || {};
     if (refName in items && refName !== editingKey) {

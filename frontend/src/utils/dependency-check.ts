@@ -45,7 +45,7 @@ function objectMatchesKey(obj: unknown, refKey: string, config: AppConfig, resou
   
   switch (resourceType) {
     case 'llm':
-      configuredResource = config.resources?.llms?.[refKey];
+      configuredResource = config.resources?.models?.[refKey];
       break;
     case 'schema':
       configuredResource = config.schemas?.[refKey];

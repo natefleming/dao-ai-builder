@@ -77,7 +77,8 @@ export function validateDeletion(
       if (testConfig.retrievers) delete testConfig.retrievers[componentKey];
       break;
     case 'llm':
-      if (testConfig.resources?.llms) delete testConfig.resources.llms[componentKey];
+    case 'model':
+      if (testConfig.resources?.models) delete testConfig.resources.models[componentKey];
       break;
     case 'genie room':
       if (testConfig.resources?.genie_rooms) delete testConfig.resources.genie_rooms[componentKey];

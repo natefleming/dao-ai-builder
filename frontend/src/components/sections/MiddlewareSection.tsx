@@ -1086,10 +1086,10 @@ export default function MiddlewareSection() {
   const [formData, setFormData] = useState<MiddlewareFormData>(defaultFormData);
 
   const middleware = config.middleware || {};
-  const llms = config.resources?.llms || {};
+  const models = config.resources?.models || {};
   const llmOptions = [
     { value: '', label: 'Select LLM...' },
-    ...Object.keys(llms).map(key => ({ value: key, label: key })),
+    ...Object.keys(models).map(key => ({ value: key, label: key })),
   ];
   
   // Tools for middleware that reference tools
@@ -1149,7 +1149,7 @@ export default function MiddlewareSection() {
     }
     // When YAML aliases are resolved, modelArg becomes the LLM config object — find its key
     if (typeof modelArg === 'object' && modelArg !== null) {
-      const llmEntries = Object.entries(llms);
+      const llmEntries = Object.entries(models);
       const match = llmEntries.find(([, llm]) =>
         (llm as any).name === modelArg.name
       );

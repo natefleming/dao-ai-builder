@@ -947,7 +947,7 @@ export default function ToolsSection() {
   const configuredSchemas = config.schemas || {};
   const configuredFunctions = config.resources?.functions || {};
   const configuredConnections = config.resources?.connections || {};
-  const configuredLlms = config.resources?.llms || {};
+  const configuredLlms = config.resources?.models || {};
   const configuredWarehouses = config.resources?.warehouses || {};
   const configuredDatabases = config.resources?.databases || {};
 

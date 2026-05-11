@@ -3,7 +3,7 @@ import {
   AppConfig,
   AgentModel,
   ToolModel,
-  LLMModel,
+  InferenceEndpointModel,
   SchemaModel,
   GuardrailModel,
   MiddlewareModel,
@@ -24,6 +24,40 @@ import {
   ParameterDeclarationModel,
   SkillModel,
 } from '@/types/dao-ai-types';
+
+/**
+ * Migrate an imported AppConfig in-place to the current schema shape.
+ *
+ * dao-ai 0.1.75 renamed `resources.llms` to `resources.models`. Old YAML
+ * files imported via `setConfig` still arrive with the legacy key (the
+ * Pydantic alias on the backend resolves both, but the JS YAML parser
+ * gives us whatever the file literally contains). This helper migrates
+ * `resources.llms` → `resources.models` so the rest of the store / UI
+ * only ever sees the canonical shape.
+ */
+function migrateLegacyConfig(config: AppConfig): AppConfig {
+  if (!config?.resources) return config;
+  // Cast through `any` because the legacy `llms` key is not part of the
+  // current TS type — this is the input-migration shim that bridges old
+  // YAML to the canonical `models` shape.
+  const r = config.resources as Record<string, unknown>;
+  if (r.llms && !r.models) {
+    const { llms: _legacy, ...rest } = r;
+    return {
+      ...config,
+      resources: { ...rest, models: _legacy } as AppConfig['resources'],
+    };
+  }
+  // If somehow both keys are present, prefer `models` and drop `llms`.
+  if (r.llms && r.models) {
+    const { llms: _legacy, ...rest } = r;
+    return {
+      ...config,
+      resources: rest as AppConfig['resources'],
+    };
+  }
+  return config;
+}
 
 // Cache for DAO AI version
 let cachedDaoAiVersion: string | null = null;
@@ -85,10 +119,10 @@ interface ConfigState {
   updateSchema: (name: string, updates: Partial<SchemaModel>) => void;
   removeSchema: (name: string) => void;
   
-  // LLMs
-  addLLM: (name: string, llm: LLMModel) => void;
-  updateLLM: (name: string, updates: Partial<LLMModel>) => void;
-  removeLLM: (name: string) => void;
+  // Inference endpoints (chat LLMs, embeddings, judges, custom agent endpoints)
+  addModel: (name: string, model: InferenceEndpointModel) => void;
+  updateModel: (name: string, updates: Partial<InferenceEndpointModel>) => void;
+  removeModel: (name: string) => void;
   
   // Genie Rooms
   addGenieRoom: (name: string, genieRoom: GenieRoomModel) => void;
@@ -176,7 +210,7 @@ const defaultConfig: AppConfig = {
   variables: {},
   schemas: {},
   resources: {
-    llms: {},
+    models: {},
     vector_stores: {},
     genie_rooms: {},
     tables: {},
@@ -204,7 +238,11 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
   daoAiVersion: null,
   hasUnsavedAppChanges: false,
   
-  setConfig: (config) => set({ config, skippedSteps: new Set<string>(), hasUnsavedAppChanges: false }),
+  setConfig: (config) => set({
+    config: migrateLegacyConfig(config),
+    skippedSteps: new Set<string>(),
+    hasUnsavedAppChanges: false,
+  }),
   
   setDaoAiVersion: (version) => set({ daoAiVersion: version }),
   
@@ -432,47 +470,47 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
       };
     }),
   
-  addLLM: (name, llm) =>
+  addModel: (name, llm) =>
     set((state) => ({
       config: {
         ...state.config,
         resources: {
           ...state.config.resources,
-          llms: {
-            ...state.config.resources?.llms,
+          models: {
+            ...state.config.resources?.models,
             [name]: llm,
           },
         },
       },
     })),
   
-  updateLLM: (name, updates) =>
+  updateModel: (name, updates) =>
     set((state) => {
-      const llms = { ...state.config.resources?.llms };
-      if (llms?.[name]) {
-        llms[name] = { ...llms[name], ...updates };
+      const models = { ...state.config.resources?.models };
+      if (models?.[name]) {
+        models[name] = { ...models[name], ...updates };
       }
       return {
         config: {
           ...state.config,
           resources: {
             ...state.config.resources,
-            llms: llms || {},
+            models: models || {},
           },
         },
       };
     }),
-  
-  removeLLM: (name) =>
+
+  removeModel: (name) =>
     set((state) => {
-      const llms = { ...state.config.resources?.llms };
-      delete llms?.[name];
+      const models = { ...state.config.resources?.models };
+      delete models?.[name];
       return {
         config: {
           ...state.config,
           resources: {
             ...state.config.resources,
-            llms: llms || {},
+            models: models || {},
           },
         },
       };

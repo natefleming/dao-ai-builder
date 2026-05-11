@@ -77,7 +77,7 @@ export default function Sidebar({ activeSection, onSectionChange, config }: Side
       case 'resources':
         // Count all resource types including LLMs
         return (
-          Object.keys(config.resources?.llms || {}).length +
+          Object.keys(config.resources?.models || {}).length +
           Object.keys(config.resources?.genie_rooms || {}).length +
           Object.keys(config.resources?.tables || {}).length +
           Object.keys(config.resources?.volumes || {}).length +

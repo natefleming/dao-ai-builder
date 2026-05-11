@@ -46,7 +46,7 @@ const GETTING_STARTED_STEPS: StepConfig[] = [
     color: 'text-emerald-400',
     isComplete: (config) => {
       const r = config.resources || {};
-      return Object.keys(r.llms || {}).length > 0;
+      return Object.keys(r.models || {}).length > 0;
     },
   },
   {
@@ -91,7 +91,7 @@ export default function OverviewSection({ onNavigate }: OverviewSectionProps) {
   // Calculate stats
   const stats = {
     schemas: Object.keys(config.schemas || {}).length,
-    llms: Object.keys(config.resources?.llms || {}).length,
+    models: Object.keys(config.resources?.models || {}).length,
     tools: Object.keys(config.tools || {}).length,
     agents: Object.keys(config.agents || {}).length,
     prompts: Object.keys(config.prompts || {}).length,
@@ -159,7 +159,7 @@ export default function OverviewSection({ onNavigate }: OverviewSectionProps) {
               <p className="text-xs text-slate-500">Schemas</p>
             </div>
             <div className="text-center">
-              <p className="text-lg font-semibold text-white">{stats.llms}</p>
+              <p className="text-lg font-semibold text-white">{stats.models}</p>
               <p className="text-xs text-slate-500">LLMs</p>
             </div>
             <div className="text-center">
