@@ -2900,6 +2900,13 @@ export function generateYAML(config: AppConfig): string {
       ...(config.app.input_example && { input_example: config.app.input_example }),
       ...(config.app.code_paths && config.app.code_paths.length > 0 && { code_paths: config.app.code_paths }),
       ...(config.app.pip_requirements && config.app.pip_requirements.length > 0 && { pip_requirements: config.app.pip_requirements }),
+      // Emit `app.agents` only when non-empty. Under the deep_agent
+      // orchestration pattern the planning agent IS the orchestration
+      // block, so a skills-only config has zero top-level agents and
+      // emits no `agents:` key — equivalent to `agents: []` per
+      // dao-ai's AppModel.agents default_factory. dao-ai's
+      // validate_agents_not_empty validator explicitly allows this when
+      // deep_agent is present (config.py:6531-6540).
       ...(appAgentsValue && appAgentsValue.length > 0 && { agents: appAgentsValue }),
     };
     

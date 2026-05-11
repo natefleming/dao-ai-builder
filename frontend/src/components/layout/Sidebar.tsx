@@ -113,6 +113,12 @@ export default function Sidebar({ activeSection, onSectionChange, config }: Side
     const count = getItemCount(section);
     const item = navItems.find(i => i.id === section);
     if (item?.required) {
+      // dao-ai's deep_agent pattern explicitly allows app.agents: []
+      // (the planning agent is the orchestration block itself).
+      // Treat agents as satisfied when deep_agent is configured.
+      if (section === 'agents' && config.app?.orchestration?.deep_agent) {
+        return true;
+      }
       return count > 0;
     }
     return true;

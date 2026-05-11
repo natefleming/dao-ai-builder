@@ -759,8 +759,11 @@ export default function AppConfigSection() {
     validationErrors.push('Model name is required for Model Serving deployments');
   }
 
-  // Required: At least one agent must be selected
-  if (selectedAgents.length === 0) {
+  // At least one agent is required for every orchestration pattern except
+  // deep_agent. Under deep_agent the planning agent IS the orchestration
+  // block (model + system_prompt + skills), so `app.agents: []` is valid
+  // and dao-ai's AppModel.validate_agents_not_empty explicitly allows it.
+  if (selectedAgents.length === 0 && pattern !== 'deep_agent') {
     validationErrors.push('At least one agent must be selected');
   }
 
@@ -2333,7 +2336,9 @@ export default function AppConfigSection() {
                 <code className="px-1 bg-slate-800/60 rounded">create_deep_agent</code>: one planning agent
                 with built-in todo / filesystem / shell tools, governed Skills, AGENTS.md-style instruction
                 files, and sub-agents callable via the{' '}
-                <code className="px-1 bg-slate-800/60 rounded">task</code> tool.
+                <code className="px-1 bg-slate-800/60 rounded">task</code> tool. Unlike supervisor / swarm,
+                this pattern works with an <strong>empty Agents list</strong> — the planning agent IS the
+                orchestration block. Define Skills under Resources and (optionally) Sub-Agents below.
               </p>
             </div>
 
@@ -2411,8 +2416,11 @@ export default function AppConfigSection() {
                 Sub-Agents
               </label>
               {selectedAgents.length === 0 ? (
-                <p className="text-xs text-amber-300/80">
-                  Select agents in the Agents section above to make them available as sub-agents.
+                <p className="text-xs text-slate-400">
+                  No top-level agents selected. Sub-agents are <strong>optional</strong> under the deep_agent
+                  pattern — a skills-only deep agent is a valid configuration. Add agents under the Agents
+                  section above if you want the planning agent to delegate sub-tasks via the{' '}
+                  <code className="px-1 bg-slate-800/60 rounded">task</code> tool.
                 </p>
               ) : (
                 <div className="flex flex-wrap gap-2">

@@ -3364,16 +3364,19 @@ def validate_deployment():
         if deployment_target == 'model_serving' and not app_config.get('endpoint_name'):
             warnings.append('app.endpoint_name not set - will default to app name')
         
-        # Check for agents
-        agents = config.get('agents', {})
-        if not agents or len(agents) == 0:
-            errors.append('At least one agent is required')
-        
         # Check for orchestration. dao-ai 0.1.73+ added the deep_agent
         # pattern alongside supervisor / swarm.
         orchestration = app_config.get('orchestration', {})
         if not orchestration.get('supervisor') and not orchestration.get('swarm') and not orchestration.get('deep_agent'):
             errors.append('Orchestration pattern (supervisor, swarm, or deep_agent) is required')
+
+        # Check for agents. Required for supervisor / swarm / none, but
+        # NOT for deep_agent — under deep_agent the planning agent is the
+        # orchestration block itself, so app.agents: [] is valid.
+        # See dao-ai/src/dao_ai/config.py:6531-6540 (AppModel.validate_agents_not_empty).
+        agents = config.get('agents', {})
+        if not orchestration.get('deep_agent') and (not agents or len(agents) == 0):
+            errors.append('At least one agent is required')
         
         # Check for LLMs in resources
         resources = config.get('resources', {})
