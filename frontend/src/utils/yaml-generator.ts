@@ -3056,6 +3056,83 @@ export function generateYAML(config: AppConfig): string {
       }
       yamlConfig.app.long_running = longRunningValue;
     }
+
+    // Format a2a (dao-ai 0.1.80+)
+    if (config.app.a2a) {
+      const a2aValue: Record<string, any> = {};
+      const a2a = config.app.a2a;
+
+      // `enabled` is True by default in dao-ai. Only emit when explicitly false.
+      if (a2a.enabled === false) {
+        a2aValue.enabled = false;
+      }
+      if (a2a.server_url) {
+        a2aValue.server_url = a2a.server_url;
+      }
+      // Three-state OBO advisory: null/undefined = auto-derive, only emit when pinned.
+      if (a2a.on_behalf_of_user === true || a2a.on_behalf_of_user === false) {
+        a2aValue.on_behalf_of_user = a2a.on_behalf_of_user;
+      }
+      if (a2a.default_input_modes && a2a.default_input_modes.length > 0) {
+        const def = ['text/plain', 'application/json'];
+        if (JSON.stringify(a2a.default_input_modes) !== JSON.stringify(def)) {
+          a2aValue.default_input_modes = a2a.default_input_modes;
+        }
+      }
+      if (a2a.default_output_modes && a2a.default_output_modes.length > 0) {
+        const def = ['text/plain', 'application/json'];
+        if (JSON.stringify(a2a.default_output_modes) !== JSON.stringify(def)) {
+          a2aValue.default_output_modes = a2a.default_output_modes;
+        }
+      }
+
+      // task_store: { database, table }. Only emit when database is set
+      // (omitted block -> in-memory) or table is non-default.
+      const ts = a2a.task_store;
+      if (ts && (ts.database || (ts.table && ts.table !== 'dao_ai_a2a_tasks'))) {
+        const tsValue: Record<string, any> = {};
+        if (ts.database) {
+          const tsDbRef = findOriginalReference('app.a2a.task_store.database', ts.database);
+          if (tsDbRef) {
+            tsValue.database = createReference(tsDbRef);
+          } else if (typeof ts.database !== 'string') {
+            const definedDatabases = config.resources?.databases || {};
+            const matchingDbKey = Object.entries(definedDatabases).find(
+              ([, db]) => {
+                const d = db as DatabaseModel;
+                const tsDb = ts.database as DatabaseModel;
+                if (tsDb.project && d.project === tsDb.project) return true;
+                if (tsDb.instance_name && d.instance_name === tsDb.instance_name) return true;
+                return false;
+              }
+            )?.[0];
+            if (matchingDbKey) {
+              tsValue.database = createReference(matchingDbKey);
+            } else {
+              tsValue.database = formatDatabaseRef(ts.database as DatabaseModel, 'app.a2a.task_store.database');
+            }
+          } else {
+            tsValue.database = ts.database;
+          }
+        }
+        if (ts.table && ts.table !== 'dao_ai_a2a_tasks') {
+          tsValue.table = ts.table;
+        }
+        a2aValue.task_store = tsValue;
+      }
+
+      if (a2a.skills && a2a.skills.length > 0) {
+        a2aValue.skills = a2a.skills;
+      }
+      if (a2a.security_schemes && Object.keys(a2a.security_schemes).length > 0) {
+        a2aValue.security_schemes = a2a.security_schemes;
+      }
+
+      // Only emit the block if we have anything non-default to say.
+      if (Object.keys(a2aValue).length > 0) {
+        yamlConfig.app.a2a = a2aValue;
+      }
+    }
   }
 
   // Evaluation section

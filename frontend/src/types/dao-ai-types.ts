@@ -932,6 +932,72 @@ export interface LongRunningModel {
   messages_table_name?: string;
 }
 
+/**
+ * dao-ai 0.1.80+: A2A protocol task-persistence configuration.
+ *
+ * Mirrors the dao-ai idiom shared by `CheckpointerModel` and `StoreModel`:
+ * an optional `database` toggles the backing store. Absent -> in-memory
+ * (tasks lost on restart); present -> Lakebase/Postgres, persisted in
+ * `table`. Independent of `LongRunningModel` -- point both at the same
+ * `DatabaseModel` to share a connection pool. Replaces the prior
+ * `task_store: Literal["auto","in_memory","lakebase"]` selector + sibling
+ * `tasks_table_name` field.
+ */
+export interface A2ATaskStoreModel {
+  database?: DatabaseModel | string;  // Can be inline or a reference key
+  table?: string;  // default "dao_ai_a2a_tasks"; ignored when database is unset
+}
+
+/**
+ * dao-ai 0.1.80+: single skill advertised on the A2A Agent Card. When
+ * `A2AModel.skills` is unset, dao-ai derives one skill per entry in
+ * `app.agents`.
+ */
+export interface A2ASkillModel {
+  id: string;
+  name: string;
+  description?: string;
+  tags?: string[];
+  examples?: string[];
+  input_modes?: string[];
+  output_modes?: string[];
+}
+
+/**
+ * dao-ai 0.1.80+: Google A2A (Agent2Agent) protocol endpoint config.
+ *
+ * Every Databricks Apps deployment auto-mounts:
+ *   - `GET /.well-known/agent-card.json` (Agent Card discovery)
+ *   - `POST /a2a` (JSON-RPC 2.0: message/send, message/stream, tasks/get,
+ *     tasks/list, tasks/cancel, tasks/subscribe)
+ *
+ * alongside the existing OpenAI Responses contract. Set `enabled: false`
+ * to opt out. Ignored for Model Serving deployments (route mounting is
+ * Apps-only).
+ *
+ * `security_schemes` is freeform here because dao-ai validates it against
+ * a2a-sdk's `SecurityScheme` discriminated union at config load. See
+ * `dao_ai.apps.a2a.security` for ready-made constants and factories;
+ * YAML users can author equivalents inline with `${workspace.host}`
+ * substitution.
+ *
+ * `on_behalf_of_user` is three-state:
+ *   - undefined / null -> auto-derive from any resource carrying
+ *     `on_behalf_of_user: true` (default).
+ *   - true -> force-advertise OBO (Agent Card emits oauth2 + bearer).
+ *   - false -> force-suppress (Agent Card emits PAT/M2M bearer only).
+ */
+export interface A2AModel {
+  enabled?: boolean;  // default true
+  server_url?: string;  // default: derived from $DATABRICKS_APP_URL at startup
+  skills?: A2ASkillModel[];  // default: derived from app.agents
+  security_schemes?: Record<string, Record<string, any>>;  // a2a-sdk SecurityScheme dicts
+  default_input_modes?: string[];  // default ["text/plain", "application/json"]
+  default_output_modes?: string[];  // default ["text/plain", "application/json"]
+  task_store?: A2ATaskStoreModel;  // default {} -> InMemoryTaskStore
+  on_behalf_of_user?: boolean | null;  // three-state (null = auto-derive)
+}
+
 export interface AppModel {
   name: string;
   description?: string;
@@ -942,6 +1008,18 @@ export interface AppModel {
   trace_location?: TraceLocationModel;
   monitoring?: MonitoringModel;
   long_running?: LongRunningModel;
+  /**
+   * dao-ai 0.1.80+: A2A protocol configuration. Defaults to a fresh
+   * `A2AModel()` -- enabled with sensible defaults (skills derived from
+   * sub-agents, bearer scheme auto-derived from any resource OBO). Set
+   * `a2a.enabled: false` to opt out. Ignored for Model Serving deployments.
+   *
+   * Note: the field-level `AppModel.on_behalf_of_user` advisory flag was
+   * REMOVED in 0.1.80 (its only consumer was the A2A Agent Card). Use
+   * `A2AModel.on_behalf_of_user` instead; leave it undefined to auto-
+   * derive from resource-level `on_behalf_of_user` fields.
+   */
+  a2a?: A2AModel;
   tags?: Record<string, any>;
   scale_to_zero?: boolean;
   /**

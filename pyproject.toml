@@ -7,22 +7,23 @@ requires-python = ">=3.11"
 dependencies = [
     "flask>=3.0.0",
     "gunicorn>=21.0.0",
-    # dao-ai 0.1.77 adds `ai_gateway: bool` on `InferenceEndpointModel`,
-    # routing through the new Databricks AI Gateway path
-    # (`/ai-gateway/mlflow/v1/chat/completions`) instead of the legacy
-    # `/serving-endpoints/<name>/invocations`. The flag is additive and
-    # defaults to False, so existing configs are unaffected.
-    # 0.1.75 carried the `resources.llms` -> `resources.models` and
-    # `LLMModel` -> `InferenceEndpointModel` renames (back-compat aliases
-    # on the dao-ai side). 0.1.76 fixed the JSON schema regen.
-    #
-    # NOTE: the workspace `pypi-proxy.dev.databricks.com` mirror lags
-    # public PyPI by ~1 week. `uv lock` against the proxy may fail to
-    # resolve `>=0.1.77` until the mirror syncs; the schema/types/UI
-    # changes in this commit are additive and work against any prior
-    # dao-ai version at runtime, so deferring the lock is safe. Re-run
-    # `uv lock --upgrade-package dao-ai` once the proxy catches up.
-    "dao-ai>=0.1.77",
+    # dao-ai 0.1.80 ships Google A2A (Agent2Agent) v0.3 protocol support
+    # on Databricks Apps deployments. The new surface on AppModel:
+    #   * `a2a: A2AModel` (concrete default; enabled-by-default on Apps)
+    #   * `A2ATaskStoreModel { database, table }` replaces the prior
+    #     Literal["auto","in_memory","lakebase"] selector + sibling table name
+    #   * `security_schemes` is typed against a2a-sdk's `SecurityScheme`
+    #     discriminated union (validated at config load)
+    #   * `A2AModel.on_behalf_of_user: Optional[bool]` three-state
+    #     (None=auto-derive from any resource OBO; True/False pin explicitly)
+    #     -- moved off `AppModel.on_behalf_of_user`, which was removed.
+    # The builder's TypeScript mirrors these in dao-ai-types.ts; the
+    # AppConfigSection gains an "A2A Protocol" subsection.
+    # 0.1.77 carried `ai_gateway: bool` on InferenceEndpointModel (still
+    # supported). 0.1.75 renamed `resources.llms` -> `resources.models`
+    # and `LLMModel` -> `InferenceEndpointModel` (back-compat aliases on
+    # the dao-ai side).
+    "dao-ai>=0.1.80",
     "databricks-sdk>=0.74.0",
     "mlflow[databricks]>=3.8.1",
     "python-dotenv>=1.2.1",
