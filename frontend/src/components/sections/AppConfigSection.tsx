@@ -9,7 +9,7 @@ import Textarea from '../ui/Textarea';
 import Card from '../ui/Card';
 import Badge from '../ui/Badge';
 import MultiSelect from '../ui/MultiSelect';
-import { LogLevel, VariableValue, TraceLocationModel, MonitoringModel, LongRunningModel, OrchestrationOutputMode } from '@/types/dao-ai-types';
+import { LogLevel, VariableValue, TraceLocationModel, MonitoringModel, LongRunningModel, A2AModel, OrchestrationOutputMode } from '@/types/dao-ai-types';
 import { clsx } from 'clsx';
 import { normalizeRefName } from '@/utils/name-utils';
 
@@ -527,6 +527,33 @@ export default function AppConfigSection() {
   const [longRunningMessagesTable, setLongRunningMessagesTable] = useState(app?.long_running?.messages_table_name ?? 'dao_ai_response_messages');
   const [showLongRunningAdvanced, setShowLongRunningAdvanced] = useState(false);
 
+  // A2A Protocol state (dao-ai 0.1.80+)
+  // `a2a.enabled` defaults to true in dao-ai. We treat "no a2a block" and
+  // "a2a.enabled: true" identically (Apps deployments get A2A by default).
+  const [a2aEnabled, setA2aEnabled] = useState(app?.a2a?.enabled !== false);
+  // Three-state OBO: 'auto' | 'on' | 'off'. 'auto' means undefined in the
+  // YAML (dao-ai derives from any resource carrying on_behalf_of_user=true).
+  const [a2aObo, setA2aObo] = useState<'auto' | 'on' | 'off'>(() => {
+    const v = app?.a2a?.on_behalf_of_user;
+    if (v === true) return 'on';
+    if (v === false) return 'off';
+    return 'auto';
+  });
+  const [a2aTaskStoreDatabaseKey, setA2aTaskStoreDatabaseKey] = useState<string>(() => {
+    const tsDb = app?.a2a?.task_store?.database;
+    if (!tsDb) return '';
+    if (typeof tsDb === 'string') return '';
+    for (const [key, configuredDb] of Object.entries(databases)) {
+      if (tsDb.project && configuredDb.project === tsDb.project) return key;
+      if (tsDb.instance_name && configuredDb.instance_name === tsDb.instance_name) return key;
+      if (tsDb.host && configuredDb.host === tsDb.host) return key;
+    }
+    return '';
+  });
+  const [a2aTaskStoreTable, setA2aTaskStoreTable] = useState(app?.a2a?.task_store?.table ?? 'dao_ai_a2a_tasks');
+  const [a2aServerUrl, setA2aServerUrl] = useState(app?.a2a?.server_url ?? '');
+  const [showA2aAdvanced, setShowA2aAdvanced] = useState(false);
+
   // Track whether initial sync from config has completed.
   // After the first sync, local handoff/orchestration state is managed by the user
   // and should not be overwritten by config re-renders.
@@ -715,6 +742,31 @@ export default function AppConfigSection() {
       } else {
         if (chatHistoryMaxMessagesBeforeSummary !== (app?.chat_history?.max_messages_before_summary || 10)) return true;
       }
+    }
+
+    // Check A2A protocol (dao-ai 0.1.80+)
+    const savedA2aEnabled = app?.a2a?.enabled !== false;
+    if (a2aEnabled !== savedA2aEnabled) return true;
+    if (a2aEnabled) {
+      const savedObo: 'auto' | 'on' | 'off' = (() => {
+        const v = app?.a2a?.on_behalf_of_user;
+        if (v === true) return 'on';
+        if (v === false) return 'off';
+        return 'auto';
+      })();
+      if (a2aObo !== savedObo) return true;
+      if (a2aServerUrl !== (app?.a2a?.server_url ?? '')) return true;
+      if (a2aTaskStoreTable !== (app?.a2a?.task_store?.table ?? 'dao_ai_a2a_tasks')) return true;
+      // task_store.database is keyed by DatabaseModel matching, like long-running.
+      let savedTsDbKey = '';
+      const tsDb = app?.a2a?.task_store?.database;
+      if (tsDb && typeof tsDb !== 'string') {
+        for (const [key, configuredDb] of Object.entries(databases)) {
+          if (tsDb.project && configuredDb.project === tsDb.project) { savedTsDbKey = key; break; }
+          if (tsDb.instance_name && configuredDb.instance_name === tsDb.instance_name) { savedTsDbKey = key; break; }
+        }
+      }
+      if (a2aTaskStoreDatabaseKey !== savedTsDbKey) return true;
     }
 
     // Check long-running agents
@@ -1410,6 +1462,29 @@ export default function AppConfigSection() {
       };
     }
 
+    // Build a2a config (dao-ai 0.1.80+). Only construct an A2AModel if the
+    // user has deviated from defaults; an empty object would round-trip but
+    // pollutes the YAML.
+    let a2a: A2AModel | undefined = undefined;
+    const a2aOboValue: boolean | null | undefined = a2aObo === 'on' ? true : a2aObo === 'off' ? false : undefined;
+    const a2aTsDb = a2aTaskStoreDatabaseKey && databases[a2aTaskStoreDatabaseKey] ? databases[a2aTaskStoreDatabaseKey] : undefined;
+    const a2aHasOverrides = !a2aEnabled
+      || a2aOboValue !== undefined
+      || !!a2aServerUrl
+      || !!a2aTsDb
+      || (a2aTaskStoreTable !== 'dao_ai_a2a_tasks' && !!a2aTsDb);
+    if (a2aHasOverrides) {
+      const taskStore = a2aTsDb
+        ? { database: a2aTsDb, ...(a2aTaskStoreTable !== 'dao_ai_a2a_tasks' && { table: a2aTaskStoreTable }) }
+        : undefined;
+      a2a = {
+        ...(!a2aEnabled && { enabled: false }),
+        ...(a2aOboValue !== undefined && { on_behalf_of_user: a2aOboValue }),
+        ...(a2aServerUrl && { server_url: a2aServerUrl }),
+        ...(taskStore && { task_store: taskStore }),
+      };
+    }
+
     // registered_model is optional in dao-ai 0.1.55 for `deployment_target: apps`.
     // Only emit it when the user actually filled in a model name.
     const registeredModel = formData.modelName.trim()
@@ -1429,6 +1504,7 @@ export default function AppConfigSection() {
       trace_location: traceLocation,
       monitoring,
       long_running: longRunning,
+      a2a,
       workload_size: formData.workloadSize as 'Small' | 'Medium' | 'Large',
       scale_to_zero: formData.scaleToZero,
       deployment_target: formData.deploymentTarget as 'model_serving' | 'apps',
@@ -3169,6 +3245,112 @@ export default function AppConfigSection() {
                     placeholder="dao_ai_response_messages"
                     hint="Table storing streamed events / final items"
                   />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </Card>
+
+      {/* A2A Protocol (dao-ai 0.1.80+) */}
+      <Card className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <ArrowRightLeft className="w-5 h-5 text-slate-400" />
+            <h3 className="font-medium text-white">A2A Protocol (Agent2Agent)</h3>
+          </div>
+          <label className="flex items-center space-x-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={a2aEnabled}
+              onChange={(e) => setA2aEnabled(e.target.checked)}
+              className="rounded border-slate-600 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-900"
+            />
+            <span className="text-xs text-slate-400">Enabled</span>
+          </label>
+        </div>
+        <p className="text-sm text-slate-400">
+          Google A2A v0.3 endpoints (<code className="text-slate-300">GET /.well-known/agent-card.json</code> +{' '}
+          <code className="text-slate-300">POST /a2a</code> JSON-RPC) auto-mounted on every Databricks Apps deployment. Ignored for Model Serving.
+        </p>
+
+        {a2aEnabled && (
+          <div className="space-y-4 p-4 bg-slate-800/30 rounded-lg border border-slate-700/50">
+            {/* On-Behalf-Of-User three-state */}
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-2">
+                Agent Card OBO advertisement
+              </label>
+              <div className="space-y-1.5">
+                {([
+                  { v: 'auto' as const, label: 'Auto-derive (default)', hint: 'Emit OBO scheme iff any resource has on_behalf_of_user: true' },
+                  { v: 'on' as const, label: 'Force ON', hint: 'Agent Card emits oauth2 + bearer schemes regardless of resources' },
+                  { v: 'off' as const, label: 'Force OFF', hint: 'Agent Card emits PAT/M2M bearer only, even if a resource has OBO' },
+                ]).map(({ v, label, hint }) => (
+                  <label key={v} className="flex items-start space-x-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="a2a-obo"
+                      value={v}
+                      checked={a2aObo === v}
+                      onChange={() => setA2aObo(v)}
+                      className="mt-1 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-900"
+                    />
+                    <div>
+                      <div className="text-sm text-slate-200">{label}</div>
+                      <div className="text-xs text-slate-500">{hint}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* Task store database picker */}
+            <div className="space-y-2">
+              <Select
+                label="Task store database"
+                value={a2aTaskStoreDatabaseKey}
+                onChange={(e) => setA2aTaskStoreDatabaseKey(e.target.value)}
+                options={[
+                  { value: '', label: '(none — in-memory; tasks lost on restart)' },
+                  ...Object.keys(databases).map((name) => ({ value: name, label: name })),
+                ]}
+                hint="Lakebase database for persisting A2A Task lifecycle. Independent of app.long_running; point both at the same database to share a connection pool."
+              />
+              {a2aTaskStoreDatabaseKey && (
+                <Input
+                  label="Task store table name"
+                  value={a2aTaskStoreTable}
+                  onChange={(e) => setA2aTaskStoreTable(e.target.value)}
+                  placeholder="dao_ai_a2a_tasks"
+                  hint="Table holding the task rows (default: dao_ai_a2a_tasks)"
+                />
+              )}
+            </div>
+
+            <div>
+              <button
+                type="button"
+                onClick={() => setShowA2aAdvanced(!showA2aAdvanced)}
+                className="text-xs text-slate-400 hover:text-slate-300 flex items-center space-x-1"
+              >
+                <span>{showA2aAdvanced ? '▾' : '▸'} Advanced</span>
+              </button>
+              {showA2aAdvanced && (
+                <div className="mt-3 space-y-3">
+                  <Input
+                    label="Agent Card server_url override"
+                    value={a2aServerUrl}
+                    onChange={(e) => setA2aServerUrl(e.target.value)}
+                    placeholder="(default: derived from $DATABRICKS_APP_URL at startup)"
+                    hint="Public base URL advertised on the Agent Card. Leave blank to derive from the Apps runtime."
+                  />
+                  <div className="text-xs text-slate-500 leading-relaxed">
+                    <strong>skills</strong> and <strong>security_schemes</strong> auto-derive from your sub-agents
+                    and the resolved OBO posture. To override either, edit the YAML directly. dao-ai ships ready-made
+                    constants/factories in <code>dao_ai.apps.a2a.security</code> (BEARER_DATABRICKS_*,
+                    oauth2_databricks_obo, openid_connect_databricks).
+                  </div>
                 </div>
               )}
             </div>
