@@ -1305,8 +1305,19 @@ function formatToolFunction(func: ToolFunctionModel, toolKey?: string, definedCo
   // - UnityCatalogFunctionModel doesn't have name (uses resource instead)
   // - McpFunctionModel doesn't have name (name is in parent ToolModel)
   // - Only FactoryFunctionModel and some other types have name in the function itself
-  if (!('__MERGE__' in func) && func.type !== 'unity_catalog' && func.type !== 'mcp' && 'name' in func) {
-    result.name = func.name;
+  // SearchToolModel (dao-ai 0.1.99) sets extra="forbid" with only `type`.
+  // Any other shortcut type with an undefined/empty name is also skipped --
+  // dao-ai falls back to the parent ToolModel.name in those cases.
+  if (
+    !('__MERGE__' in func) &&
+    func.type !== 'unity_catalog' &&
+    func.type !== 'mcp' &&
+    func.type !== 'search' &&
+    'name' in func &&
+    (func as { name?: unknown }).name !== undefined &&
+    (func as { name?: unknown }).name !== ''
+  ) {
+    result.name = (func as { name?: unknown }).name;
   }
 
   // Add type-specific fields
@@ -1538,6 +1549,89 @@ function formatToolFunction(func: ToolFunctionModel, toolKey?: string, definedCo
     }
     if ('exclude_tools' in func && func.exclude_tools && (func.exclude_tools as string[]).length > 0) {
       result.exclude_tools = func.exclude_tools;
+    }
+  }
+
+  // dao-ai 0.1.99+ first-class shortcut tool types.
+  // Each emits the shortcut form (e.g. `type: genie` + `genie_room: *room`)
+  // rather than the legacy `type: factory + name: dao_ai.tools.create_*` wrapper.
+  // Authoritative shapes: src/dao_ai/config.py:5073-5555.
+  const SHORTCUT_TYPES = ['genie', 'vector_search', 'search', 'app', 'serving_endpoint', 'a2a'];
+  if (SHORTCUT_TYPES.includes(func.type)) {
+    const f = func as any;
+    // SearchToolModel has `extra="forbid"` and rejects description.
+    if (func.type !== 'search' && f.description !== undefined && f.description !== '') {
+      result.description = f.description;
+    }
+
+    const refOrInline = (
+      field: string,
+      val: any,
+      definedMap?: Record<string, any>,
+    ): any => {
+      if (val === undefined || val === null) return undefined;
+      if (typeof val === 'string' && val.startsWith('*')) {
+        return createReference(val.slice(1));
+      }
+      const path = toolKey ? `tools.${toolKey}.function.${field}` : `function.${field}`;
+      const ref = findOriginalReference(path, val);
+      if (ref) return createReference(ref);
+      if (definedMap && typeof val === 'object' && val !== null && (val as any).name) {
+        const matchKey = Object.entries(definedMap).find(
+          ([, v]) => (v as any).name === (val as any).name,
+        )?.[0];
+        if (matchKey) return createReference(matchKey);
+      }
+      return val;
+    };
+
+    if (func.type === 'genie') {
+      const gr = refOrInline('genie_room', f.genie_room);
+      if (gr !== undefined) result.genie_room = gr;
+      if (f.persist_conversation === false) result.persist_conversation = false;
+      if (f.truncate_results === true) result.truncate_results = true;
+      if (f.enable_feedback === true) result.enable_feedback = true;
+      if (f.max_consecutive_cache_hits !== undefined && f.max_consecutive_cache_hits !== null) {
+        result.max_consecutive_cache_hits = f.max_consecutive_cache_hits;
+      }
+      if (f.lru_cache) result.lru_cache = f.lru_cache;
+      if (f.context_aware_cache) result.context_aware_cache = f.context_aware_cache;
+      if (f.in_memory_context_aware_cache) result.in_memory_context_aware_cache = f.in_memory_context_aware_cache;
+    } else if (func.type === 'vector_search') {
+      const r = refOrInline('retriever', f.retriever);
+      if (r !== undefined) result.retriever = r;
+      const vs = refOrInline('vector_store', f.vector_store);
+      if (vs !== undefined) result.vector_store = vs;
+    } else if (func.type === 'app') {
+      const a = refOrInline('app', f.app, definedApps);
+      if (a !== undefined) result.app = a;
+      if (f.api) result.api = f.api;
+    } else if (func.type === 'serving_endpoint') {
+      // endpoint: string shorthand (endpoint name), reference, or inline InferenceEndpointModel.
+      if (typeof f.endpoint === 'string' && !f.endpoint.startsWith('*')) {
+        result.endpoint = f.endpoint;
+      } else {
+        const e = refOrInline('endpoint', f.endpoint);
+        if (e !== undefined) result.endpoint = e;
+      }
+      if (f.api) result.api = f.api;
+      if (f.on_behalf_of_user === true) result.on_behalf_of_user = true;
+    } else if (func.type === 'a2a') {
+      if (f.endpoint !== undefined && f.endpoint !== null) {
+        result.endpoint = formatCredential(f.endpoint as string);
+      }
+      const a = refOrInline('app', f.app, definedApps);
+      if (a !== undefined) result.app = a;
+      if (f.auth !== undefined && f.auth !== null) result.auth = formatCredential(f.auth as string);
+      if (f.auth_type) result.auth_type = f.auth_type;
+      if (f.streaming === false) result.streaming = false;
+      if (f.timeout_seconds !== undefined && f.timeout_seconds !== 300) {
+        result.timeout_seconds = f.timeout_seconds;
+      }
+      if (f.card_path) result.card_path = f.card_path;
+      if (f.card_fallback_path !== undefined) result.card_fallback_path = f.card_fallback_path;
+      if (f.user_id !== undefined && f.user_id !== null) result.user_id = formatCredential(f.user_id as string);
+      if (f.extra_metadata) result.extra_metadata = f.extra_metadata;
     }
   }
 
@@ -2901,6 +2995,10 @@ export function generateYAML(config: AppConfig): string {
       ...((config.app.deployment_target === 'model_serving' || !config.app.deployment_target) && config.app.scale_to_zero !== undefined && { scale_to_zero: config.app.scale_to_zero }),
       ...(config.app.python_version && { python_version: config.app.python_version }),
       ...(config.app.budget_policy_id && { budget_policy_id: config.app.budget_policy_id }),
+      // dao-ai 0.1.99+: Databricks App Space assignment (Private Preview) and
+      // MCP-only deployments. Pure pass-through scalars.
+      ...(config.app.space && { space: config.app.space }),
+      ...(config.app.mcp_only === true && { mcp_only: true }),
       ...(config.app.environment_vars && Object.keys(config.app.environment_vars).length > 0 && { 
         environment_vars: formatEnvironmentVars(config.app.environment_vars, config.variables || {}) 
       }),
@@ -2977,17 +3075,26 @@ export function generateYAML(config: AppConfig): string {
               traceLocationValue.warehouse = tlWarehouse;
             }
           }
-        } else {
-          const whName = tlWarehouse.name;
+        } else if (typeof tlWarehouse === 'object' && tlWarehouse !== null && 'name' in tlWarehouse) {
+          const whName = (tlWarehouse as { name?: string }).name;
           const matchedWarehouse = Object.entries(definedWarehouses).find(([, w]) => w.name === whName);
           if (matchedWarehouse) {
             traceLocationValue.warehouse = createReference(matchedWarehouse[0]);
           } else {
             traceLocationValue.warehouse = tlWarehouse;
           }
+        } else {
+          // AnyVariable shape (env/secret/composite/primitive) — pass through.
+          traceLocationValue.warehouse = tlWarehouse;
         }
       }
-      
+
+      // dao-ai 0.1.99+: optional table_prefix to namespace OTEL trace tables.
+      const tablePrefix = config.app.trace_location.table_prefix;
+      if (tablePrefix !== undefined && tablePrefix !== null && tablePrefix !== '') {
+        traceLocationValue.table_prefix = tablePrefix;
+      }
+
       yamlConfig.app.trace_location = traceLocationValue;
     }
 
@@ -3009,52 +3116,55 @@ export function generateYAML(config: AppConfig): string {
       yamlConfig.app.monitoring = monitoringValue;
     }
 
-    // Format long_running
-    if (config.app.long_running) {
-      const longRunningValue: Record<string, any> = {};
+    // Format background (dao-ai 0.1.99 renamed `long_running` -> `background`
+    // and `default_background` -> `default_enabled`). Fall back to legacy
+    // `long_running` field for round-tripping configs authored before the
+    // rename; always emit the new field name.
+    const bg = config.app.background ?? config.app.long_running;
+    if (bg) {
+      const bgValue: Record<string, any> = {};
       const definedDatabases = config.resources?.databases || {};
 
-      // Resolve database reference (same pattern as memory.checkpointer.database)
-      const lrDb = config.app.long_running.database;
-      if (lrDb) {
-        const dbRef = findOriginalReference('app.long_running.database', lrDb);
+      const bgDb = bg.database;
+      if (bgDb) {
+        const dbRef = findOriginalReference('app.background.database', bgDb)
+          ?? findOriginalReference('app.long_running.database', bgDb);
         if (dbRef) {
-          longRunningValue.database = createReference(dbRef);
-        } else if (typeof lrDb !== 'string') {
+          bgValue.database = createReference(dbRef);
+        } else if (typeof bgDb !== 'string') {
           const matchingDbKey = Object.entries(definedDatabases).find(
             ([, db]) => {
               const d = db as DatabaseModel;
-              if ((lrDb as DatabaseModel).project && d.project === (lrDb as DatabaseModel).project) return true;
-              if ((lrDb as DatabaseModel).instance_name && d.instance_name === (lrDb as DatabaseModel).instance_name) return true;
+              if ((bgDb as DatabaseModel).project && d.project === (bgDb as DatabaseModel).project) return true;
+              if ((bgDb as DatabaseModel).instance_name && d.instance_name === (bgDb as DatabaseModel).instance_name) return true;
               return false;
             }
           )?.[0];
           if (matchingDbKey) {
-            longRunningValue.database = createReference(matchingDbKey);
+            bgValue.database = createReference(matchingDbKey);
           } else {
-            longRunningValue.database = formatDatabaseRef(lrDb as DatabaseModel, 'app.long_running.database');
+            bgValue.database = formatDatabaseRef(bgDb as DatabaseModel, 'app.background.database');
           }
         } else {
-          longRunningValue.database = lrDb;
+          bgValue.database = bgDb;
         }
       }
 
-      if (config.app.long_running.default_background) {
-        longRunningValue.default_background = config.app.long_running.default_background;
+      const defaultEnabled = bg.default_enabled ?? (bg as any).default_background;
+      if (defaultEnabled) bgValue.default_enabled = defaultEnabled;
+      if (bg.max_duration_seconds !== undefined && bg.max_duration_seconds !== 1800) {
+        bgValue.max_duration_seconds = bg.max_duration_seconds;
       }
-      if (config.app.long_running.max_duration_seconds !== undefined && config.app.long_running.max_duration_seconds !== 1800) {
-        longRunningValue.max_duration_seconds = config.app.long_running.max_duration_seconds;
+      if (bg.poll_interval_seconds !== undefined && bg.poll_interval_seconds !== 1.0) {
+        bgValue.poll_interval_seconds = bg.poll_interval_seconds;
       }
-      if (config.app.long_running.poll_interval_seconds !== undefined && config.app.long_running.poll_interval_seconds !== 1.0) {
-        longRunningValue.poll_interval_seconds = config.app.long_running.poll_interval_seconds;
+      if (bg.responses_table_name && bg.responses_table_name !== 'dao_ai_responses') {
+        bgValue.responses_table_name = bg.responses_table_name;
       }
-      if (config.app.long_running.responses_table_name && config.app.long_running.responses_table_name !== 'dao_ai_responses') {
-        longRunningValue.responses_table_name = config.app.long_running.responses_table_name;
+      if (bg.messages_table_name && bg.messages_table_name !== 'dao_ai_response_messages') {
+        bgValue.messages_table_name = bg.messages_table_name;
       }
-      if (config.app.long_running.messages_table_name && config.app.long_running.messages_table_name !== 'dao_ai_response_messages') {
-        longRunningValue.messages_table_name = config.app.long_running.messages_table_name;
-      }
-      yamlConfig.app.long_running = longRunningValue;
+      yamlConfig.app.background = bgValue;
     }
 
     // Format a2a (dao-ai 0.1.80+)

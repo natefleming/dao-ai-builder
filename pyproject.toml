@@ -7,23 +7,28 @@ requires-python = ">=3.11"
 dependencies = [
     "flask>=3.0.0",
     "gunicorn>=21.0.0",
-    # dao-ai 0.1.80 ships Google A2A (Agent2Agent) v0.3 protocol support
-    # on Databricks Apps deployments. The new surface on AppModel:
-    #   * `a2a: A2AModel` (concrete default; enabled-by-default on Apps)
-    #   * `A2ATaskStoreModel { database, table }` replaces the prior
-    #     Literal["auto","in_memory","lakebase"] selector + sibling table name
-    #   * `security_schemes` is typed against a2a-sdk's `SecurityScheme`
-    #     discriminated union (validated at config load)
-    #   * `A2AModel.on_behalf_of_user: Optional[bool]` three-state
-    #     (None=auto-derive from any resource OBO; True/False pin explicitly)
-    #     -- moved off `AppModel.on_behalf_of_user`, which was removed.
-    # The builder's TypeScript mirrors these in dao-ai-types.ts; the
-    # AppConfigSection gains an "A2A Protocol" subsection.
-    # 0.1.77 carried `ai_gateway: bool` on InferenceEndpointModel (still
-    # supported). 0.1.75 renamed `resources.llms` -> `resources.models`
-    # and `LLMModel` -> `InferenceEndpointModel` (back-compat aliases on
-    # the dao-ai side).
-    "dao-ai>=0.1.80",
+    # dao-ai 0.1.99 expanded FunctionType with six first-class shortcut
+    # tool types parsed directly (no factory wrapper):
+    #   * type: genie             - GenieToolModel (genie_room + flags)
+    #   * type: vector_search     - VectorSearchToolModel (retriever | vector_store)
+    #   * type: search            - SearchToolModel (no args)
+    #   * type: app               - AppToolModel (Databricks App + api selector)
+    #   * type: serving_endpoint  - ServingEndpointToolModel (endpoint + api)
+    #   * type: a2a               - A2AToolModel (endpoint OR app, 5-state auth)
+    # The legacy factory form (type: factory + name: dao_ai.tools.create_*)
+    # still works; the builder now emits the shortcut form by default.
+    # Other AppModel changes the builder mirrors:
+    #   * `long_running` -> `background` (and `default_background` ->
+    #     `default_enabled`). Builder reads legacy, emits new name.
+    #   * `space: Optional[str]` -- App Spaces (Private Preview)
+    #   * `mcp_only: bool` -- skip agent-required validators
+    #   * `trace_location` accepts "catalog.schema" shorthand and gained
+    #     optional `table_prefix` to namespace OTEL trace tables.
+    # 0.1.80 shipped Google A2A v0.3 (A2AModel, A2ATaskStoreModel,
+    # security_schemes, on_behalf_of_user three-state). 0.1.77 carried
+    # `ai_gateway: bool` on InferenceEndpointModel. 0.1.75 renamed
+    # `resources.llms` -> `resources.models`.
+    "dao-ai>=0.1.99",
     "databricks-sdk>=0.74.0",
     "mlflow[databricks]>=3.8.1",
     "python-dotenv>=1.2.1",

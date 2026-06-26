@@ -14,6 +14,7 @@ import {
   HumanInTheLoopModel,
   UnityCatalogFunctionModel,
   A2AAuthType,
+  A2AFunctionAuthType,
   VertexAuthType,
   VegaChartType,
 } from '@/types/dao-ai-types';
@@ -241,6 +242,26 @@ const TOOL_TYPES = [
   { value: 'inline', label: 'Inline Function' },
   { value: 'unity_catalog', label: 'Unity Catalog Function' },
   { value: 'mcp', label: 'MCP Server' },
+  { value: 'genie', label: 'Genie (shortcut)' },
+  { value: 'vector_search', label: 'Vector Search (shortcut)' },
+  { value: 'search', label: 'Web Search (shortcut)' },
+  { value: 'app', label: 'Databricks App (shortcut)' },
+  { value: 'serving_endpoint', label: 'Serving Endpoint (shortcut)' },
+  { value: 'a2a', label: 'A2A Agent (shortcut)' },
+];
+
+const SHORTCUT_API_OPTIONS = [
+  { value: '', label: 'Auto-detect' },
+  { value: 'responses', label: 'responses' },
+  { value: 'completions', label: 'completions' },
+];
+
+const A2A_SHORTCUT_AUTH_TYPES = [
+  { value: 'bearer', label: 'bearer' },
+  { value: 'gcp_service_account', label: 'gcp_service_account' },
+  { value: 'none', label: 'none' },
+  { value: 'forwarded_user_token', label: 'forwarded_user_token' },
+  { value: 'databricks_app_sp', label: 'databricks_app_sp' },
 ];
 
 // Tool picker categories. Keep `custom` last.
@@ -731,7 +752,7 @@ export default function ToolsSection() {
   const [formData, setFormData] = useState({
     refName: '', // YAML key (reference name) - independent of tool name
     name: '',    // Tool's internal name
-    type: 'factory' as 'factory' | 'python' | 'unity_catalog' | 'mcp' | 'inline',
+    type: 'factory' as 'factory' | 'python' | 'unity_catalog' | 'mcp' | 'inline' | 'genie' | 'vector_search' | 'search' | 'app' | 'serving_endpoint' | 'a2a',
     functionName: '',
     customFunctionName: '',
     args: '{}',
@@ -875,7 +896,7 @@ export default function ToolsSection() {
     a2aAuth: '',
     a2aAuthSource: 'manual' as CredentialSource,
     a2aAuthVariable: '',
-    a2aAuthType: 'bearer' as A2AAuthType,
+    a2aAuthType: 'bearer' as A2AFunctionAuthType,
     a2aStreaming: true,
     a2aTimeoutSeconds: 300,
     a2aCardPath: '',
@@ -932,6 +953,14 @@ export default function ToolsSection() {
     vizHeight: 400,
     vizColorScheme: 'tableau10',
     vizToolDescription: '',
+    // Shortcut first-class tool types (dao-ai 0.1.99): genie/vector_search/search/app/serving_endpoint/a2a
+    shortcutDescription: '',
+    shortcutApi: '' as '' | 'responses' | 'completions',
+    shortcutEndpointName: '',
+    shortcutEndpointMode: 'configured' as 'configured' | 'string',
+    shortcutEndpointRefName: '',
+    shortcutOnBehalfOfUser: false,
+    appRefName: '',
   });
 
   const [mcpForm, setMcpForm] = useState<MCPFormData>(defaultMCPFormData);
@@ -1776,6 +1805,76 @@ export default function ToolsSection() {
       if (hitlConfig) {
         (functionConfig as McpFunctionModel).human_in_the_loop = hitlConfig;
       }
+    } else if (formData.type === 'genie') {
+      const fn: any = {
+        type: 'genie',
+        genie_room: formData.genieRefName ? `__REF__${formData.genieRefName}` : undefined,
+      };
+      if (formData.name) fn.name = formData.name;
+      if (formData.shortcutDescription) fn.description = formData.shortcutDescription;
+      if (formData.geniePersistConversation === false) fn.persist_conversation = false;
+      if (formData.genieTruncateResults === true) fn.truncate_results = true;
+      if (hitlConfig) fn.human_in_the_loop = hitlConfig;
+      functionConfig = fn;
+    } else if (formData.type === 'vector_search') {
+      const fn: any = { type: 'vector_search' };
+      if (formData.retrieverRefName) {
+        fn.retriever = `__REF__${formData.retrieverRefName}`;
+      } else if (formData.vectorStoreRefName) {
+        fn.vector_store = `__REF__${formData.vectorStoreRefName}`;
+      }
+      if (formData.name) fn.name = formData.name;
+      if (formData.shortcutDescription) fn.description = formData.shortcutDescription;
+      if (hitlConfig) fn.human_in_the_loop = hitlConfig;
+      functionConfig = fn;
+    } else if (formData.type === 'search') {
+      const fn: any = { type: 'search' };
+      if (formData.name) fn.name = formData.name;
+      if (formData.shortcutDescription) fn.description = formData.shortcutDescription;
+      if (hitlConfig) fn.human_in_the_loop = hitlConfig;
+      functionConfig = fn;
+    } else if (formData.type === 'app') {
+      const fn: any = {
+        type: 'app',
+        app: formData.appRefName ? `__REF__${formData.appRefName}` : undefined,
+      };
+      if (formData.shortcutApi) fn.api = formData.shortcutApi;
+      if (formData.name) fn.name = formData.name;
+      if (formData.shortcutDescription) fn.description = formData.shortcutDescription;
+      if (hitlConfig) fn.human_in_the_loop = hitlConfig;
+      functionConfig = fn;
+    } else if (formData.type === 'serving_endpoint') {
+      const fn: any = { type: 'serving_endpoint' };
+      if (formData.shortcutEndpointMode === 'string') {
+        fn.endpoint = formData.shortcutEndpointName;
+      } else if (formData.shortcutEndpointRefName) {
+        fn.endpoint = `__REF__${formData.shortcutEndpointRefName}`;
+      }
+      if (formData.shortcutApi) fn.api = formData.shortcutApi;
+      if (formData.shortcutOnBehalfOfUser === true) fn.on_behalf_of_user = true;
+      if (formData.name) fn.name = formData.name;
+      if (formData.shortcutDescription) fn.description = formData.shortcutDescription;
+      if (hitlConfig) fn.human_in_the_loop = hitlConfig;
+      functionConfig = fn;
+    } else if (formData.type === 'a2a') {
+      const fn: any = { type: 'a2a' };
+      if (formData.appRefName) {
+        fn.app = `__REF__${formData.appRefName}`;
+      } else if (formData.a2aEndpoint) {
+        fn.endpoint = formData.a2aEndpointSource === 'variable' && formData.a2aEndpointVariable
+          ? `__REF__${formData.a2aEndpointVariable}`
+          : formData.a2aEndpoint;
+      }
+      if (formData.a2aAuthType && formData.a2aAuthType !== 'bearer') fn.auth_type = formData.a2aAuthType;
+      if (formData.a2aAuthType !== 'none' && formData.a2aAuth) {
+        fn.auth = formData.a2aAuthSource === 'variable' && formData.a2aAuthVariable
+          ? `__REF__${formData.a2aAuthVariable}`
+          : formData.a2aAuth;
+      }
+      if (formData.name) fn.name = formData.name;
+      if (formData.shortcutDescription) fn.description = formData.shortcutDescription;
+      if (hitlConfig) fn.human_in_the_loop = hitlConfig;
+      functionConfig = fn;
     } else {
       functionConfig = funcName;
     }
@@ -1998,6 +2097,14 @@ export default function ToolsSection() {
       vizHeight: 400,
       vizColorScheme: 'tableau10',
       vizToolDescription: '',
+      // Shortcut first-class tool types
+      shortcutDescription: '',
+      shortcutApi: '',
+      shortcutEndpointName: '',
+      shortcutEndpointMode: 'configured',
+      shortcutEndpointRefName: '',
+      shortcutOnBehalfOfUser: false,
+      appRefName: '',
     });
     // Set MCP form defaults with proper source defaults based on configured resources
     const hasConfiguredConnections = Object.keys(configuredConnections).length > 0;
@@ -2048,9 +2155,9 @@ export default function ToolsSection() {
     } else if (typeof func === 'object') {
       const funcType = func.type || 'factory';
       
-      // Handle HITL config
-      if (func.human_in_the_loop) {
-        const hitl = func.human_in_the_loop;
+      // Handle HITL config (SearchFunctionModel has no HITL field; narrow safely.)
+      const hitl = (func as { human_in_the_loop?: HumanInTheLoopModel }).human_in_the_loop;
+      if (hitl) {
         const allowedDecisions = hitl.allowed_decisions || ['approve', 'edit', 'reject'];
         setShowHitlConfig(true);
         setHitlForm({
@@ -3136,7 +3243,8 @@ export default function ToolsSection() {
           vizToolDescription,
         }));
       } else if (funcType === 'python') {
-        const funcName = 'name' in func ? func.name : '';
+        const rawName = 'name' in func ? func.name : '';
+        const funcName: string = typeof rawName === 'string' ? rawName : '';
         const isKnownPython = PYTHON_TOOLS.some(pt => pt.value === funcName);
         
         setFormData(prev => ({
@@ -3566,32 +3674,126 @@ export default function ToolsSection() {
             excludeTools: mcpFunc.exclude_tools || [],
           }));
         }
+      } else if (funcType === 'genie') {
+        const f = func as any;
+        const isRef = typeof f.genie_room === 'string' && f.genie_room.startsWith('*');
+        setFormData(prev => ({
+          ...prev,
+          refName: key,
+          name: tool.name,
+          type: 'genie',
+          shortcutDescription: f.description || '',
+          genieRefName: isRef ? f.genie_room.slice(1) : '',
+          genieSource: isRef ? 'configured' : 'configured',
+          geniePersistConversation: f.persist_conversation !== false,
+          genieTruncateResults: f.truncate_results === true,
+        }));
+      } else if (funcType === 'vector_search') {
+        const f = func as any;
+        const retIsRef = typeof f.retriever === 'string' && f.retriever.startsWith('*');
+        const vsIsRef = typeof f.vector_store === 'string' && f.vector_store.startsWith('*');
+        setFormData(prev => ({
+          ...prev,
+          refName: key,
+          name: tool.name,
+          type: 'vector_search',
+          shortcutDescription: f.description || '',
+          retrieverRefName: retIsRef ? f.retriever.slice(1) : '',
+          vectorStoreRefName: vsIsRef ? f.vector_store.slice(1) : '',
+          vectorSearchSourceType: retIsRef ? 'retriever' : (vsIsRef ? 'vector_store' : 'retriever'),
+        }));
+      } else if (funcType === 'search') {
+        const f = func as any;
+        setFormData(prev => ({
+          ...prev,
+          refName: key,
+          name: tool.name,
+          type: 'search',
+          shortcutDescription: f.description || '',
+        }));
+      } else if (funcType === 'app') {
+        const f = func as any;
+        const isRef = typeof f.app === 'string' && f.app.startsWith('*');
+        setFormData(prev => ({
+          ...prev,
+          refName: key,
+          name: tool.name,
+          type: 'app',
+          shortcutDescription: f.description || '',
+          shortcutApi: (f.api === 'responses' || f.api === 'completions') ? f.api : '',
+          appRefName: isRef ? f.app.slice(1) : '',
+        }));
+      } else if (funcType === 'serving_endpoint') {
+        const f = func as any;
+        let endpointMode: 'configured' | 'string' = 'configured';
+        let endpointRefName = '';
+        let endpointName = '';
+        if (typeof f.endpoint === 'string') {
+          if (f.endpoint.startsWith('*')) {
+            endpointRefName = f.endpoint.slice(1);
+            endpointMode = 'configured';
+          } else {
+            endpointName = f.endpoint;
+            endpointMode = 'string';
+          }
+        }
+        setFormData(prev => ({
+          ...prev,
+          refName: key,
+          name: tool.name,
+          type: 'serving_endpoint',
+          shortcutDescription: f.description || '',
+          shortcutApi: (f.api === 'responses' || f.api === 'completions') ? f.api : '',
+          shortcutOnBehalfOfUser: f.on_behalf_of_user === true,
+          shortcutEndpointMode: endpointMode,
+          shortcutEndpointRefName: endpointRefName,
+          shortcutEndpointName: endpointName,
+        }));
+      } else if (funcType === 'a2a') {
+        const f = func as any;
+        const appIsRef = typeof f.app === 'string' && f.app.startsWith('*');
+        setFormData(prev => ({
+          ...prev,
+          refName: key,
+          name: tool.name,
+          type: 'a2a',
+          shortcutDescription: f.description || '',
+          appRefName: appIsRef ? f.app.slice(1) : '',
+          a2aEndpoint: typeof f.endpoint === 'string' ? f.endpoint : '',
+          a2aEndpointSource: 'manual',
+          a2aAuth: typeof f.auth === 'string' ? f.auth : '',
+          a2aAuthSource: 'manual',
+          a2aAuthType: (f.auth_type as A2AFunctionAuthType) || 'bearer',
+        }));
       }
     }
-    
+
     setIsModalOpen(true);
   };
 
-  const getToolType = (tool: { function: string | { type?: string } }): string => {
+  const getToolType = (tool: { function: string | { type?: string } } | { function: ToolFunctionModel }): string => {
     if (typeof tool.function === 'string') return 'string';
-    return tool.function?.type || 'unknown';
+    return (tool.function as { type?: string })?.type || 'unknown';
   };
 
-  const hasHITL = (tool: { function: string | { human_in_the_loop?: HumanInTheLoopModel } }): boolean => {
+  const hasHITL = (tool: { function: string | { human_in_the_loop?: HumanInTheLoopModel } } | { function: ToolFunctionModel }): boolean => {
     if (typeof tool.function === 'string') return false;
-    return !!tool.function?.human_in_the_loop;
+    return !!(tool.function as { human_in_the_loop?: HumanInTheLoopModel })?.human_in_the_loop;
   };
 
-  const getToolIcon = (tool: { function: string | { type?: string; name?: string } }) => {
+  const getToolIcon = (tool: { function: string | { type?: string; name?: unknown } } | { function: ToolFunctionModel }) => {
     const type = getToolType(tool);
     if (type === 'mcp') return Link2;
     if (type === 'unity_catalog') return Database;
     if (type === 'inline') return Code;
-    if (typeof tool.function === 'object' && tool.function.name) {
-      if (tool.function.name.includes('genie')) return MessageSquare;
-      if (tool.function.name.includes('vector') || tool.function.name.includes('search')) return Search;
-      if (tool.function.name.includes('time')) return Clock;
-      if (tool.function.name.includes('agent')) return Bot;
+    if (typeof tool.function === 'object') {
+      const fnName = (tool.function as { name?: unknown }).name;
+      if (typeof fnName === 'string') {
+        if (fnName.includes('genie')) return MessageSquare;
+        if (fnName.includes('vector') || fnName.includes('search')) return Search;
+        if (fnName.includes('time')) return Clock;
+        if (fnName.includes('agent')) return Bot;
+      }
     }
     return Wrench;
   };
@@ -3681,8 +3883,10 @@ export default function ToolsSection() {
                         <p className="text-xs text-slate-500">name: {tool.name}</p>
                       )}
                     <p className="text-sm text-slate-400 font-mono">
-                      {typeof tool.function === 'object' 
-                        ? ('name' in tool.function ? tool.function.name : `${tool.function.type}`)
+                      {typeof tool.function === 'object'
+                        ? ('name' in tool.function && typeof (tool.function as { name?: unknown }).name === 'string'
+                            ? (tool.function as { name: string }).name
+                            : `${(tool.function as { type?: string }).type}`)
                         : tool.function}
                     </p>
                   </div>
@@ -7266,6 +7470,275 @@ def my_tool(param: str) -> str:
                   </div>
                 )}
               </div>
+            </div>
+          )}
+
+          {/* Genie shortcut (first-class tool type, dao-ai 0.1.99) */}
+          {formData.type === 'genie' && (
+            <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+              <h4 className="text-sm font-medium text-slate-300">Genie Shortcut</h4>
+              <p className="text-xs text-slate-500">Emits a <code>type: genie</code> tool block. For caching/feedback/circuit-breaker options, use the Factory function instead.</p>
+              <ResourceSelector
+                label="Genie Room"
+                resourceType="Genie room"
+                configuredOptions={configuredGenieOptions}
+                configuredValue={formData.genieRefName}
+                onConfiguredChange={(value) => setFormData({ ...formData, genieRefName: value })}
+                source="configured"
+                onSourceChange={() => {}}
+              >
+                <div />
+              </ResourceSelector>
+              <Textarea
+                label="Description (optional)"
+                value={formData.shortcutDescription}
+                onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFormData({ ...formData, shortcutDescription: e.target.value })}
+                placeholder="Tool description shown to the LLM"
+              />
+              <div className="space-y-2">
+                <label className="flex items-start gap-3 cursor-pointer group">
+                  <input
+                    type="checkbox"
+                    checked={formData.geniePersistConversation}
+                    onChange={(e) => setFormData({ ...formData, geniePersistConversation: e.target.checked })}
+                    className="mt-0.5 w-4 h-4 rounded border-slate-600 bg-slate-800 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-900"
+                  />
+                  <div>
+                    <span className="text-sm text-slate-200 group-hover:text-white">Persist Conversation</span>
+                    <p className="text-xs text-slate-500">Keep conversation context across tool calls (default: on)</p>
+                  </div>
+                </label>
+                <label className="flex items-start gap-3 cursor-pointer group">
+                  <input
+                    type="checkbox"
+                    checked={formData.genieTruncateResults}
+                    onChange={(e) => setFormData({ ...formData, genieTruncateResults: e.target.checked })}
+                    className="mt-0.5 w-4 h-4 rounded border-slate-600 bg-slate-800 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-900"
+                  />
+                  <div>
+                    <span className="text-sm text-slate-200 group-hover:text-white">Truncate Results</span>
+                    <p className="text-xs text-slate-500">Truncate large query results to fit within token limits</p>
+                  </div>
+                </label>
+              </div>
+            </div>
+          )}
+
+          {/* Vector Search shortcut (first-class tool type) */}
+          {formData.type === 'vector_search' && (
+            <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+              <h4 className="text-sm font-medium text-slate-300">Vector Search Shortcut</h4>
+              <p className="text-xs text-slate-500">Emits a <code>type: vector_search</code> tool. Pick exactly one of Retriever (full search params + reranking) or Vector Store (defaults).</p>
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-slate-300">Source</label>
+                <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, vectorSearchSourceType: 'retriever', vectorStoreRefName: '' })}
+                    className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${formData.vectorSearchSourceType === 'retriever' ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40' : 'text-slate-400 border border-transparent hover:text-slate-300'}`}
+                  >
+                    Retriever
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, vectorSearchSourceType: 'vector_store', retrieverRefName: '' })}
+                    className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${formData.vectorSearchSourceType === 'vector_store' ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40' : 'text-slate-400 border border-transparent hover:text-slate-300'}`}
+                  >
+                    Vector Store
+                  </button>
+                </div>
+              </div>
+              {formData.vectorSearchSourceType === 'retriever' ? (
+                <Select
+                  label="Retriever"
+                  options={[{ value: '', label: 'Select retriever...' }, ...configuredRetrieverOptions]}
+                  value={formData.retrieverRefName}
+                  onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, retrieverRefName: e.target.value })}
+                />
+              ) : (
+                <Select
+                  label="Vector Store"
+                  options={[{ value: '', label: 'Select vector store...' }, ...configuredVectorStoreOptions]}
+                  value={formData.vectorStoreRefName}
+                  onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, vectorStoreRefName: e.target.value })}
+                />
+              )}
+              <Textarea
+                label="Description (optional)"
+                value={formData.shortcutDescription}
+                onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFormData({ ...formData, shortcutDescription: e.target.value })}
+                placeholder="Tool description shown to the LLM"
+              />
+            </div>
+          )}
+
+          {/* Web Search shortcut (first-class tool type) */}
+          {formData.type === 'search' && (
+            <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+              <h4 className="text-sm font-medium text-slate-300">Web Search Shortcut</h4>
+              <p className="text-xs text-slate-500">Emits a <code>type: search</code> tool block (built-in web search).</p>
+              <Textarea
+                label="Description (optional)"
+                value={formData.shortcutDescription}
+                onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFormData({ ...formData, shortcutDescription: e.target.value })}
+                placeholder="Tool description shown to the LLM"
+              />
+            </div>
+          )}
+
+          {/* Databricks App shortcut (first-class tool type) */}
+          {formData.type === 'app' && (
+            <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+              <h4 className="text-sm font-medium text-slate-300">Databricks App Shortcut</h4>
+              <p className="text-xs text-slate-500">Emits a <code>type: app</code> tool block. Auto-detects the app's <code>/responses</code> vs <code>/completions</code> API unless overridden.</p>
+              <Select
+                label="App"
+                options={[{ value: '', label: 'Select app...' }, ...configuredAppOptions]}
+                value={formData.appRefName}
+                onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, appRefName: e.target.value })}
+              />
+              <Select
+                label="API (optional)"
+                options={SHORTCUT_API_OPTIONS}
+                value={formData.shortcutApi}
+                onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, shortcutApi: e.target.value as '' | 'responses' | 'completions' })}
+              />
+              <Textarea
+                label="Description (optional)"
+                value={formData.shortcutDescription}
+                onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFormData({ ...formData, shortcutDescription: e.target.value })}
+                placeholder="Tool description shown to the LLM"
+              />
+            </div>
+          )}
+
+          {/* Serving Endpoint shortcut (first-class tool type) */}
+          {formData.type === 'serving_endpoint' && (
+            <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+              <h4 className="text-sm font-medium text-slate-300">Serving Endpoint Shortcut</h4>
+              <p className="text-xs text-slate-500">Emits a <code>type: serving_endpoint</code> tool block. Use String mode for OBO; Configured mode references an <code>InferenceEndpointModel</code>.</p>
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-slate-300">Endpoint Source</label>
+                <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, shortcutEndpointMode: 'configured' })}
+                    className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${formData.shortcutEndpointMode === 'configured' ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40' : 'text-slate-400 border border-transparent hover:text-slate-300'}`}
+                  >
+                    Configured Model
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, shortcutEndpointMode: 'string' })}
+                    className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${formData.shortcutEndpointMode === 'string' ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40' : 'text-slate-400 border border-transparent hover:text-slate-300'}`}
+                  >
+                    String
+                  </button>
+                </div>
+              </div>
+              {formData.shortcutEndpointMode === 'configured' ? (
+                <Select
+                  label="Model"
+                  options={[{ value: '', label: 'Select model...' }, ...configuredLlmOptions]}
+                  value={formData.shortcutEndpointRefName}
+                  onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, shortcutEndpointRefName: e.target.value })}
+                />
+              ) : (
+                <Input
+                  label="Endpoint Name"
+                  value={formData.shortcutEndpointName}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, shortcutEndpointName: e.target.value })}
+                  placeholder="my-serving-endpoint"
+                />
+              )}
+              <Select
+                label="API (optional)"
+                options={SHORTCUT_API_OPTIONS}
+                value={formData.shortcutApi}
+                onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, shortcutApi: e.target.value as '' | 'responses' | 'completions' })}
+              />
+              <label className="flex items-start gap-3 cursor-pointer group">
+                <input
+                  type="checkbox"
+                  checked={formData.shortcutOnBehalfOfUser}
+                  onChange={(e) => setFormData({ ...formData, shortcutOnBehalfOfUser: e.target.checked })}
+                  className="mt-0.5 w-4 h-4 rounded border-slate-600 bg-slate-800 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-900"
+                />
+                <div>
+                  <span className="text-sm text-slate-200 group-hover:text-white">On Behalf Of User</span>
+                  <p className="text-xs text-slate-500">Only honored when endpoint is provided as a string (not a configured model)</p>
+                </div>
+              </label>
+              <Textarea
+                label="Description (optional)"
+                value={formData.shortcutDescription}
+                onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFormData({ ...formData, shortcutDescription: e.target.value })}
+                placeholder="Tool description shown to the LLM"
+              />
+            </div>
+          )}
+
+          {/* A2A Agent shortcut (first-class tool type) */}
+          {formData.type === 'a2a' && (
+            <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+              <h4 className="text-sm font-medium text-slate-300">A2A Agent Shortcut</h4>
+              <p className="text-xs text-slate-500">Emits a <code>type: a2a</code> tool block. App mode targets a Databricks App; External mode targets any A2A-compliant agent endpoint.</p>
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-slate-300">Mode</label>
+                <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, a2aEndpoint: '' })}
+                    className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${formData.appRefName ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40' : 'text-slate-400 border border-transparent hover:text-slate-300'}`}
+                  >
+                    App
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, appRefName: '' })}
+                    className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${!formData.appRefName ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40' : 'text-slate-400 border border-transparent hover:text-slate-300'}`}
+                  >
+                    External
+                  </button>
+                </div>
+              </div>
+              {formData.appRefName || !formData.a2aEndpoint ? (
+                <Select
+                  label="App"
+                  options={[{ value: '', label: 'Select app...' }, ...configuredAppOptions]}
+                  value={formData.appRefName}
+                  onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, appRefName: e.target.value, a2aEndpoint: '' })}
+                />
+              ) : null}
+              {!formData.appRefName && (
+                <>
+                  <Input
+                    label="Endpoint URL"
+                    value={formData.a2aEndpoint}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, a2aEndpoint: e.target.value })}
+                    placeholder="https://example.com/a2a"
+                  />
+                  <Input
+                    label="Auth (optional)"
+                    value={formData.a2aAuth}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, a2aAuth: e.target.value })}
+                    placeholder="Bearer token or credentials"
+                    type={formData.a2aAuthType === 'bearer' ? 'password' : 'text'}
+                  />
+                  <Select
+                    label="Auth Type"
+                    options={A2A_SHORTCUT_AUTH_TYPES}
+                    value={formData.a2aAuthType}
+                    onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, a2aAuthType: e.target.value as A2AFunctionAuthType })}
+                  />
+                </>
+              )}
+              <Textarea
+                label="Description (optional)"
+                value={formData.shortcutDescription}
+                onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFormData({ ...formData, shortcutDescription: e.target.value })}
+                placeholder="Tool description shown to the LLM"
+              />
             </div>
           )}
 

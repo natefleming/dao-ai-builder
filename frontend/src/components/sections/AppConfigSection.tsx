@@ -465,16 +465,20 @@ export default function AppConfigSection() {
   });
   type TraceWarehouseSource = 'configured' | 'manual';
   const [traceWarehouseSource, setTraceWarehouseSource] = useState<TraceWarehouseSource>(() => {
-    if (app?.trace_location?.warehouse) {
-      if (typeof app.trace_location.warehouse === 'string') return 'manual';
-      const whName = app.trace_location.warehouse.name;
-      if (whName && Object.values(warehouses).some(w => w.name === whName)) return 'configured';
+    const tlWh = app?.trace_location?.warehouse;
+    if (tlWh) {
+      if (typeof tlWh === 'string') return 'manual';
+      if (typeof tlWh === 'object' && tlWh !== null && 'name' in tlWh) {
+        const whName = (tlWh as { name?: string }).name;
+        if (whName && Object.values(warehouses).some(w => w.name === whName)) return 'configured';
+      }
     }
     return Object.keys(warehouses).length > 0 ? 'configured' : 'manual';
   });
   const [traceWarehouseKey, setTraceWarehouseKey] = useState<string>(() => {
-    if (app?.trace_location?.warehouse && typeof app.trace_location.warehouse !== 'string') {
-      const whName = app.trace_location.warehouse.name;
+    const tlWh = app?.trace_location?.warehouse;
+    if (tlWh && typeof tlWh === 'object' && tlWh !== null && 'name' in tlWh) {
+      const whName = (tlWh as { name?: string }).name;
       const matched = Object.entries(warehouses).find(([, w]) => w.name === whName);
       return matched ? matched[0] : '';
     }
@@ -520,7 +524,11 @@ export default function AppConfigSection() {
     }
     return '';
   });
-  const [longRunningDefaultBackground, setLongRunningDefaultBackground] = useState(app?.long_running?.default_background ?? false);
+  // dao-ai 0.1.99 renamed long_running -> background and default_background -> default_enabled.
+  // Read prefers the new name; falls back to legacy for round-tripping older configs.
+  const [longRunningDefaultBackground, setLongRunningDefaultBackground] = useState(
+    app?.background?.default_enabled ?? (app?.long_running as { default_background?: boolean } | undefined)?.default_background ?? false
+  );
   const [longRunningMaxDuration, setLongRunningMaxDuration] = useState(app?.long_running?.max_duration_seconds ?? 1800);
   const [longRunningPollInterval, setLongRunningPollInterval] = useState(app?.long_running?.poll_interval_seconds ?? 1.0);
   const [longRunningResponsesTable, setLongRunningResponsesTable] = useState(app?.long_running?.responses_table_name ?? 'dao_ai_responses');
@@ -773,7 +781,8 @@ export default function AppConfigSection() {
     const savedLongRunningEnabled = !!app?.long_running;
     if (enableLongRunning !== savedLongRunningEnabled) return true;
     if (enableLongRunning) {
-      if (longRunningDefaultBackground !== (app?.long_running?.default_background ?? false)) return true;
+      const savedDefaultEnabled = app?.background?.default_enabled ?? (app?.long_running as { default_background?: boolean } | undefined)?.default_background ?? false;
+      if (longRunningDefaultBackground !== savedDefaultEnabled) return true;
       if (longRunningMaxDuration !== (app?.long_running?.max_duration_seconds ?? 1800)) return true;
       if (longRunningPollInterval !== (app?.long_running?.poll_interval_seconds ?? 1.0)) return true;
       if (longRunningResponsesTable !== (app?.long_running?.responses_table_name ?? 'dao_ai_responses')) return true;

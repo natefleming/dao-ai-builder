@@ -1,5 +1,613 @@
 {
   "$defs": {
+    "A2AModel": {
+      "additionalProperties": false,
+      "description": "Google A2A (Agent2Agent) protocol endpoint configuration.\n\nEvery Databricks Apps deployment exposes the following routes by default\n(``AppModel.a2a`` defaults to a fresh ``A2AModel`` with ``enabled=True``):\n\n* ``GET  /.well-known/agent-card.json``  \u2014 Agent Card discovery.\n* ``POST /a2a``                          \u2014 JSON-RPC 2.0 (message/send,\n  message/stream, tasks/get, tasks/list, tasks/cancel, tasks/subscribe).\n\nThese run alongside the existing OpenAI Responses contract on\n``/invocations`` and ``/v1/responses*`` \u2014 both protocols share the same\nLangGraph instance via :meth:`AppConfig.as_graph` and the same\ncheckpointer, so conversations are consistent across contracts.\n\nSet ``enabled: false`` to skip mounting the A2A routes entirely.\n\nTask persistence is configured via :attr:`task_store` \u2014 an\n:class:`A2ATaskStoreModel` whose ``database`` field toggles between\nin-memory (default) and Lakebase-backed storage. This is independent\nof :class:`BackgroundModel`; point both at the same\n:class:`DatabaseModel` to share the connection pool.\n\nSkills and security schemes are derived from the rest of the config\n(one skill per entry in ``config.agents``; bearer scheme with an OBO-\naware description when :attr:`on_behalf_of_user` is True). Override\neither by setting the field explicitly here. The\n:attr:`security_schemes` field is typed against a2a-sdk's\n:class:`a2a.types.SecurityScheme` discriminated union, so malformed\nschemes fail at config load instead of at request time.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "When False, A2A routes are NOT mounted on the Databricks Apps FastAPI app.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "server_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Public base URL advertised on the Agent Card. If unset, derived from $DATABRICKS_APP_URL at startup; otherwise a relative '/a2a' URL is published.",
+          "title": "Server Url"
+        },
+        "skills": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/A2ASkillModel"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Overrides the Agent Card 'skills' list. When unset, one skill is derived per entry in config.agents.",
+          "title": "Skills"
+        },
+        "security_schemes": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/SecurityScheme"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Overrides the Agent Card 'securitySchemes'. Keys are scheme names; values are validated against a2a-sdk's SecurityScheme discriminated union at config-load time. See ``dao_ai.apps.a2a.security`` for ready-made constants (BEARER_DATABRICKS_PAT, BEARER_DATABRICKS_M2M, BEARER_DATABRICKS_OBO) and factories (oauth2_databricks_authorization_code, oauth2_databricks_obo, openid_connect_databricks, api_key_header). When unset, derived from :attr:`on_behalf_of_user` (bearer scheme with OBO-aware description).",
+          "title": "Security Schemes"
+        },
+        "default_input_modes": {
+          "description": "Default supported input MIME types on the Agent Card.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Default Input Modes",
+          "type": "array"
+        },
+        "default_output_modes": {
+          "description": "Default supported output MIME types on the Agent Card.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Default Output Modes",
+          "type": "array"
+        },
+        "task_store": {
+          "$ref": "#/$defs/A2ATaskStoreModel",
+          "description": "A2A task persistence configuration. Defaults to an empty A2ATaskStoreModel (no database \u2192 InMemoryTaskStore). Set ``task_store.database`` to a DatabaseModel to persist tasks in Lakebase. Independent of app.background."
+        },
+        "on_behalf_of_user": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Three-state advisory controlling how the Agent Card advertises On-Behalf-Of-User (OBO) auth. None (default) \u2192 auto-derive: True iff any Databricks resource in the config has ``on_behalf_of_user=True``. True \u2192 force-advertise OBO (Agent Card emits oauth2 + bearer schemes). False \u2192 force-suppress (Agent Card emits a single PAT/M2M bearer scheme). This flag does NOT toggle OBO on any resource; resource-level OBO is still configured per resource via the resource's own ``on_behalf_of_user`` field.",
+          "title": "On Behalf Of User"
+        },
+        "streaming": {
+          "default": true,
+          "description": "Advertise streaming support (message/stream JSON-RPC) on the Agent Card capabilities object. dao-ai's a2a-sdk integration supports streaming, so this defaults True.",
+          "title": "Streaming",
+          "type": "boolean"
+        },
+        "push_notifications": {
+          "default": false,
+          "description": "Advertise push-notification webhook support on the Agent Card capabilities object. dao-ai does not currently implement A2A push notifications, so this defaults False; flip to True only after wiring an external notifier.",
+          "title": "Push Notifications",
+          "type": "boolean"
+        },
+        "state_transition_history": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Advertise task state-transition history retention on the Agent Card capabilities object. None (default) auto-derives: True iff the app has a configured A2A task store backed by a database OR an orchestration checkpointer that persists task state across requests. Set explicitly to override.",
+          "title": "State Transition History"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional service-provider block shown on the Agent Card. Recommended for production agents so callers can identify the maintainer."
+        },
+        "documentation_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional URL to public documentation for this agent. Surfaced on the Agent Card so callers can find usage docs.",
+          "title": "Documentation Url"
+        },
+        "icon_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional URL to a hosted icon image for this agent. Surfaced on the Agent Card.",
+          "title": "Icon Url"
+        }
+      },
+      "title": "A2AModel",
+      "type": "object"
+    },
+    "A2ASkillModel": {
+      "additionalProperties": false,
+      "description": "Single skill advertised on the A2A Agent Card.",
+      "properties": {
+        "id": {
+          "description": "Stable skill identifier (often the sub-agent name).",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "description": "Human-readable skill name.",
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Short summary of what this skill does.",
+          "title": "Description"
+        },
+        "tags": {
+          "description": "Free-form tags shown on the Agent Card for skill discovery.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "examples": {
+          "description": "Example prompts illustrating how to invoke the skill.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Examples",
+          "type": "array"
+        },
+        "input_modes": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Supported input MIME types for this skill. Falls back to A2AModel.default_input_modes.",
+          "title": "Input Modes"
+        },
+        "output_modes": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Supported output MIME types for this skill. Falls back to A2AModel.default_output_modes.",
+          "title": "Output Modes"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "title": "A2ASkillModel",
+      "type": "object"
+    },
+    "A2ATaskStoreModel": {
+      "additionalProperties": false,
+      "description": "A2A protocol task persistence configuration.\n\nMirrors the dao-ai idiom shared by :class:`CheckpointerModel` and\n:class:`StoreModel`: an optional :class:`DatabaseModel` toggles the\nbacking store. Absent \u2192 in-memory (tasks lost on restart); present \u2192\nLakebase/Postgres, persisted in ``table``. This is independent of\n:class:`BackgroundModel` \u2014 the two concepts (A2A task lifecycle vs\nResponses-API kickoff/poll/cancel) are configured separately.\n\nWhen the same ``DatabaseModel`` is referenced here, on\n``memory.checkpointer.database``, and on ``app.background.database``,\n:class:`dao_ai.memory.postgres.AsyncPostgresPoolManager` dedupes by\nconnection-string value, so all three share a single connection pool.",
+      "properties": {
+        "database": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DatabaseModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Database for persistent task storage. When omitted, A2A tasks are held in process memory and lost on restart. When set, tasks persist in the configured ``table`` and share the AsyncPostgresPoolManager pool with the LangGraph checkpointer and BackgroundStore whenever those point at the same DatabaseModel."
+        },
+        "table": {
+          "default": "dao_ai_a2a_tasks",
+          "description": "Table name for task persistence. Ignored when `database` is None.",
+          "title": "Table",
+          "type": "string"
+        }
+      },
+      "title": "A2ATaskStoreModel",
+      "type": "object"
+    },
+    "A2AToolModel": {
+      "additionalProperties": false,
+      "description": "First-class tool that calls a Google A2A v0.3 agent.\n\nEquivalent to ``type: factory + name: dao_ai.tools.create_a2a_agent_tool``,\nbut with typed fields. Two configuration modes match the underlying\nfactory:\n\n- **Mode 1 (external A2A)**: set ``endpoint`` + ``auth_type``\n  (default ``bearer``). Use for Vertex AI Agent Engine, Crew.ai, Google\n  ADK, or any third-party A2A agent outside Databricks Apps.\n- **Mode 2 (Databricks App)**: set ``app`` referencing a\n  ``DatabricksAppModel``. ``auth_type`` defaults from\n  ``app.on_behalf_of_user``: True \u2192 ``forwarded_user_token``;\n  False/None \u2192 ``databricks_app_sp``.",
+      "properties": {
+        "type": {
+          "const": "a2a",
+          "default": "a2a",
+          "description": "Function type discriminator. Must be 'a2a'.",
+          "title": "Type",
+          "type": "string"
+        },
+        "human_in_the_loop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HumanInTheLoopModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-in-the-loop approval configuration for this tool."
+        },
+        "endpoint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompositeVariableModel"
+            },
+            {
+              "$ref": "#/$defs/EnvironmentVariableModel"
+            },
+            {
+              "$ref": "#/$defs/SecretVariableModel"
+            },
+            {
+              "$ref": "#/$defs/PrimitiveVariableModel"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Base URL of the A2A agent (e.g., 'https://agent.example.com'). Mode 1 entry point. Mutually exclusive with ``app`` (``app`` wins if both are provided).",
+          "title": "Endpoint"
+        },
+        "app": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DatabricksAppModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Databricks App resource for the remote dao-ai app. Mode 2 entry point. Endpoint and auth mode derived from the bound app."
+        },
+        "auth": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompositeVariableModel"
+            },
+            {
+              "$ref": "#/$defs/EnvironmentVariableModel"
+            },
+            {
+              "$ref": "#/$defs/SecretVariableModel"
+            },
+            {
+              "$ref": "#/$defs/PrimitiveVariableModel"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Auth material resolved to a string. Required for ``bearer`` and ``gcp_service_account``. Ignored by ``none``, ``forwarded_user_token``, and ``databricks_app_sp``.",
+          "title": "Auth"
+        },
+        "auth_type": {
+          "anyOf": [
+            {
+              "enum": [
+                "bearer",
+                "gcp_service_account",
+                "none",
+                "forwarded_user_token",
+                "databricks_app_sp"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Auth mode. Default is 'bearer' in Mode 1 and derived from ``app.on_behalf_of_user`` in Mode 2. Passing this in Mode 2 overrides the app-derived default.",
+          "title": "Auth Type"
+        },
+        "streaming": {
+          "default": true,
+          "description": "If true (default) the A2A client negotiates streaming; responses are still aggregated internally and returned as one string.",
+          "title": "Streaming",
+          "type": "boolean"
+        },
+        "timeout_seconds": {
+          "default": 300,
+          "description": "httpx client timeout in seconds.",
+          "title": "Timeout Seconds",
+          "type": "integer"
+        },
+        "card_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Primary agent-card discovery path relative to ``endpoint``. Defaults to the current spec's '/.well-known/agent-card.json'.",
+          "title": "Card Path"
+        },
+        "card_fallback_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Fallback agent-card path if the primary 404s. Defaults to the pre-1.0 spec's '/.well-known/agent.json'. Pass empty string to disable fallback.",
+          "title": "Card Fallback Path"
+        },
+        "user_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompositeVariableModel"
+            },
+            {
+              "$ref": "#/$defs/EnvironmentVariableModel"
+            },
+            {
+              "$ref": "#/$defs/SecretVariableModel"
+            },
+            {
+              "$ref": "#/$defs/PrimitiveVariableModel"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Static value forwarded as ``Message.metadata['dao_ai.user_id']``. If omitted, falls back to ``runtime.context.user_id``.",
+          "title": "User Id"
+        },
+        "extra_metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/CompositeVariableModel"
+                  },
+                  {
+                    "$ref": "#/$defs/EnvironmentVariableModel"
+                  },
+                  {
+                    "$ref": "#/$defs/SecretVariableModel"
+                  },
+                  {
+                    "$ref": "#/$defs/PrimitiveVariableModel"
+                  },
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Static metadata merged into ``Message.metadata`` on every call.",
+          "title": "Extra Metadata"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompositeVariableModel"
+            },
+            {
+              "$ref": "#/$defs/EnvironmentVariableModel"
+            },
+            {
+              "$ref": "#/$defs/SecretVariableModel"
+            },
+            {
+              "$ref": "#/$defs/PrimitiveVariableModel"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tool name visible to the LLM. Defaults to 'a2a_agent'.",
+          "title": "Name"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompositeVariableModel"
+            },
+            {
+              "$ref": "#/$defs/EnvironmentVariableModel"
+            },
+            {
+              "$ref": "#/$defs/SecretVariableModel"
+            },
+            {
+              "$ref": "#/$defs/PrimitiveVariableModel"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tool description shown to the LLM during function calling.",
+          "title": "Description"
+        }
+      },
+      "title": "A2AToolModel",
+      "type": "object"
+    },
+    "APIKeySecurityScheme": {
+      "description": "Defines a security scheme using an API key.",
+      "properties": {
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "in": {
+          "$ref": "#/$defs/In"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "const": "apiKey",
+          "default": "apiKey",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "in",
+        "name"
+      ],
+      "title": "APIKeySecurityScheme",
+      "type": "object"
+    },
     "AgentModel": {
       "additionalProperties": false,
       "description": "Configuration model for an agent in the DAO AI framework.\n\nAgents combine an LLM with tools and middleware to create systems that can\nreason about tasks, decide which tools to use, and iteratively work towards solutions.\n\nMiddleware replaces the previous pre_agent_hook and post_agent_hook patterns,\nproviding a more flexible and composable way to customize agent behavior.",
@@ -251,6 +859,12 @@
           "description": "Whether the MLflow AgentServer enables the chat proxy endpoint for Databricks Apps.",
           "title": "Enable Chat Proxy"
         },
+        "mcp_only": {
+          "default": false,
+          "description": "If True, this app:`` block configures an MCP-only deployment (consumed by ``dao-ai generate-mcp`` / ``dao_ai.mcp.server``) and the validators that normally require ``agents`` or a ``registered_model`` are skipped. Use this when you want to set ``app.name`` (which the MCP server reads as ``serverInfo.name`` and as the deployed Databricks App name) without also having to declare a stub agent.",
+          "title": "Mcp Only",
+          "type": "boolean"
+        },
         "environment_vars": {
           "anyOf": [
             {
@@ -303,6 +917,19 @@
           "default": null,
           "description": "Databricks budget policy ID for cost attribution.",
           "title": "Budget Policy Id"
+        },
+        "space": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Name of an existing Databricks App Space to assign this app to. Spaces govern shared resources, user_api_scopes, and the runtime service principal across multiple apps. App Spaces is currently in Private Preview; the space must already exist in the target workspace (create via Terraform `databricks_app_space` or `WorkspaceClient.apps.create_space()`). dao-ai does not create spaces.",
+          "title": "Space"
         },
         "workload_size": {
           "anyOf": [
@@ -507,7 +1134,7 @@
             }
           ],
           "default": null,
-          "description": "Unity Catalog location for storing MLflow traces in OTEL-format Delta tables. Accepts a schema reference or 'catalog.schema' string. When set, set_experiment_trace_location() is called at startup for both Model Serving and Databricks Apps deployments."
+          "description": "Unity Catalog location for storing MLflow traces in OTEL-format Delta tables. Accepts a schema reference or 'catalog.schema' string, with an optional ``table_prefix`` to namespace the OTEL tables. When set, ``mlflow.set_experiment(trace_location=UnityCatalog(...))`` is called at startup and at deploy time for both Model Serving and Databricks Apps deployments."
         },
         "monitoring": {
           "anyOf": [
@@ -521,17 +1148,21 @@
           "default": null,
           "description": "Production monitoring configuration. When present, scorers are registered to continuously evaluate production traces. Works with both experiment-based traces and UC OTEL trace tables. When trace_location is also configured, the SQL warehouse from trace_location is used for monitoring."
         },
-        "long_running": {
+        "background": {
           "anyOf": [
             {
-              "$ref": "#/$defs/LongRunningModel"
+              "$ref": "#/$defs/BackgroundModel"
             },
             {
               "type": "null"
             }
           ],
           "default": null,
-          "description": "Opt-in long-running agent configuration. When set, the ResponsesAgent is wrapped so that requests with background=True or custom_inputs.operation are persisted in the referenced Lakebase database. In Databricks Apps, strict Responses API routes (/v1/responses, /v1/responses/{id}, /v1/responses/{id}/cancel) are additionally exposed. See config/examples/19_long_running_agents/."
+          "description": "Opt-in background agent configuration. When set, the ResponsesAgent is wrapped so that requests with background=True or custom_inputs.operation are persisted in the referenced Lakebase database. In Databricks Apps, strict Responses API routes (/v1/responses, /v1/responses/{id}, /v1/responses/{id}/cancel) are additionally exposed. See config/examples/19_background_agents/."
+        },
+        "a2a": {
+          "$ref": "#/$defs/A2AModel",
+          "description": "Google A2A protocol endpoint configuration for Databricks Apps deployments. Defaults to a fresh A2AModel \u2014 enabled with sensible defaults (skills derived from sub-agents, bearer scheme derived from a2a.on_behalf_of_user). Set a2a.enabled=false to opt out. Ignored for Model Serving deployments. See A2AModel for the full schema."
         }
       },
       "required": [
@@ -574,6 +1205,122 @@
       "title": "AppPermissionModel",
       "type": "object"
     },
+    "AppToolModel": {
+      "additionalProperties": false,
+      "description": "First-class tool that calls a Databricks App as a tool.\n\nSupervisor API ``app`` contract. The target is a Databricks App,\nwhich may host an agent (ResponsesAgent or otherwise) or any other\nHTTP service that speaks OpenAI Responses or Chat Completions.\n\nRoutes via ``DatabricksOpenAI(workspace_client=...)`` against the\nApp's ``/v1/responses`` or ``/v1/chat/completions`` route (selected\nby ``api:``).\n\nDefault ``api:`` behavior: when ``api`` is unset (None), the wire\nshape is discovered lazily on first invocation via\n``GET <app_url>/agent/info`` (the MLflow Agent Server self-describe\nroute). Falls back to ``\"responses\"`` if discovery returns no\nsignal. Setting ``api:`` explicitly skips discovery entirely.\n\nFor other target kinds see ``type: serving_endpoint`` (Model\nServing), ``type: a2a`` (Google A2A protocol), ``type: mcp`` (MCP\napps, ``mcp-`` prefix).",
+      "properties": {
+        "type": {
+          "const": "app",
+          "default": "app",
+          "description": "Function type discriminator. Must be 'app'.",
+          "title": "Type",
+          "type": "string"
+        },
+        "human_in_the_loop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HumanInTheLoopModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-in-the-loop approval configuration for this tool."
+        },
+        "app": {
+          "$ref": "#/$defs/DatabricksAppModel",
+          "description": "Databricks App resource to call. Required. dao-ai dispatches via DatabricksOpenAI(workspace_client=...) using model='apps/<name>'. OBO is auto-derived from app.on_behalf_of_user. MCP apps (mcp- prefix) are rejected \u2014 use type: mcp instead."
+        },
+        "api": {
+          "anyOf": [
+            {
+              "enum": [
+                "responses",
+                "completions"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "OpenAI API contract to use against the App:\n- 'responses' \u2014 POST /v1/responses (canonical for mlflow.agents ResponsesAgent deployments).\n- 'completions' \u2014 POST /v1/chat/completions (apps that expose the OpenAI Chat Completions route).\n- None (default) \u2014 lazy-probe GET <app_url>/agent/info on first invocation; fall back to 'responses' if discovery returns no signal. Setting this field skips discovery entirely.",
+          "title": "Api"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tool name visible to the LLM. Defaults to the app's name.",
+          "title": "Name"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tool description shown to the LLM during function calling.",
+          "title": "Description"
+        }
+      },
+      "required": [
+        "app"
+      ],
+      "title": "AppToolModel",
+      "type": "object"
+    },
+    "AuthorizationCodeOAuthFlow": {
+      "description": "Defines configuration details for the OAuth 2.0 Authorization Code flow.",
+      "properties": {
+        "authorizationUrl": {
+          "title": "Authorizationurl",
+          "type": "string"
+        },
+        "refreshUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Refreshurl"
+        },
+        "scopes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Scopes",
+          "type": "object"
+        },
+        "tokenUrl": {
+          "title": "Tokenurl",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authorizationUrl",
+        "scopes",
+        "tokenUrl"
+      ],
+      "title": "AuthorizationCodeOAuthFlow",
+      "type": "object"
+    },
     "BackendModel": {
       "additionalProperties": false,
       "description": "Storage/execution backend for a deep_agent.\n\nMirrors deepagents' ``BackendProtocol`` factory pattern. ``name`` is a\nfully-qualified factory function or class (e.g. ``deepagents.backends.StateBackend``)\nand ``args`` are passed as keyword arguments. If omitted, deepagents'\ndefault ``StateBackend`` is used.",
@@ -594,6 +1341,53 @@
         "name"
       ],
       "title": "BackendModel",
+      "type": "object"
+    },
+    "BackgroundModel": {
+      "additionalProperties": false,
+      "description": "Opt-in background agent configuration.\n\nEnables Responses-API-compatible kickoff/poll/cancel on top of any\ndao-ai agent, persisted in the referenced Lakebase ``database``.\nWhen present on ``AppModel``, requests can set ``background: true``\n(or ``custom_inputs.operation: retrieve|cancel``) on ``/invocations``;\nin Databricks Apps, strict ``/v1/responses*`` FastAPI routes are\nadditionally mounted and translate to the same contract.",
+      "properties": {
+        "database": {
+          "$ref": "#/$defs/DatabaseModel",
+          "description": "Lakebase (or PostgreSQL) database used to persist response rows and stream events. May be the same database used by the checkpointer."
+        },
+        "default_enabled": {
+          "default": false,
+          "description": "If True, requests are treated as background even when ``background: true`` is not explicitly set on the request.",
+          "title": "Default Enabled",
+          "type": "boolean"
+        },
+        "max_duration_seconds": {
+          "default": 1800,
+          "description": "Hard cap on any single background run. Tasks exceeding this are marked failed.",
+          "minimum": 1,
+          "title": "Max Duration Seconds",
+          "type": "integer"
+        },
+        "poll_interval_seconds": {
+          "default": 1.0,
+          "description": "Interval (seconds) used by streaming retrieve to poll the database for new events.",
+          "exclusiveMinimum": 0.0,
+          "title": "Poll Interval Seconds",
+          "type": "number"
+        },
+        "responses_table_name": {
+          "default": "dao_ai_responses",
+          "description": "Name of the Lakebase table that stores one row per response.",
+          "title": "Responses Table Name",
+          "type": "string"
+        },
+        "messages_table_name": {
+          "default": "dao_ai_response_messages",
+          "description": "Name of the Lakebase table that stores streamed events / final items.",
+          "title": "Messages Table Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "database"
+      ],
+      "title": "BackgroundModel",
       "type": "object"
     },
     "BestOfNConfig": {
@@ -767,6 +1561,40 @@
         "name"
       ],
       "title": "CheckpointerModel",
+      "type": "object"
+    },
+    "ClientCredentialsOAuthFlow": {
+      "description": "Defines configuration details for the OAuth 2.0 Client Credentials flow.",
+      "properties": {
+        "refreshUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Refreshurl"
+        },
+        "scopes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Scopes",
+          "type": "object"
+        },
+        "tokenUrl": {
+          "title": "Tokenurl",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scopes",
+        "tokenUrl"
+      ],
+      "title": "ClientCredentialsOAuthFlow",
       "type": "object"
     },
     "ColumnInfo": {
@@ -1165,7 +1993,7 @@
     },
     "ContextAwareCacheOptimizationModel": {
       "additionalProperties": false,
-      "description": "Configuration for context-aware cache threshold optimization.\n\nUses Optuna Bayesian optimization to find optimal threshold values\nthat maximize cache hit accuracy (F1 score by default).\n\nExample:\n    optimizations:\n      cache_threshold_optimizations:\n        my_optimization:\n          name: optimize_cache_thresholds\n          cache_parameters: *my_cache_params\n          dataset: *my_eval_dataset\n          judge_model: databricks-meta-llama-3-3-70b-instruct\n          n_trials: 50\n          metric: f1",
+      "description": "Configuration for context-aware cache threshold optimization.\n\nUses Optuna Bayesian optimization to find optimal threshold values\nthat maximize cache hit accuracy (F1 score by default).\n\nExample:\n    optimizations:\n      cache_threshold_optimizations:\n        my_optimization:\n          name: optimize_cache_thresholds\n          cache_parameters: *my_cache_params\n          dataset: *my_eval_dataset\n          judge_model: databricks-gpt-5-4-mini\n          n_trials: 50\n          metric: f1",
       "properties": {
         "name": {
           "description": "Unique name for this optimization run (used as the Optuna study name).",
@@ -1200,7 +2028,7 @@
               "type": "null"
             }
           ],
-          "default": "databricks-meta-llama-3-3-70b-instruct",
+          "default": "databricks-gpt-5-4-mini",
           "description": "LLM judge for evaluating match quality when expected_match is None.",
           "title": "Judge Model"
         },
@@ -3177,6 +4005,129 @@
       "title": "GenieExampleSql",
       "type": "object"
     },
+    "GenieInMemoryContextAwareCacheParametersModel": {
+      "additionalProperties": false,
+      "description": "Configuration for in-memory context-aware cache (no database required).\n\nThis cache stores embeddings and cache entries entirely in memory, providing\ncontext-aware similarity matching without requiring external database dependencies\nlike PostgreSQL or Databricks Lakebase.\n\nDefault settings are tuned for ~30 users on an 8GB machine:\n- Capacity: 10,000 entries (~200MB memory, ~330 queries per user)\n- Eviction: LRU (Least Recently Used) - keeps frequently accessed queries\n- TTL: 1 week (accommodates weekly work patterns and batch jobs)\n- Memory overhead: ~4-5% of 8GB system\n\nThe LRU eviction strategy ensures hot queries stay cached while cold queries\nare evicted, providing better hit rates than FIFO eviction.\n\nFor larger deployments or memory-constrained environments, adjust capacity and TTL accordingly.\n\nUse this when:\n- No external database access is available\n- Single-instance deployments (cache not shared across instances)\n- Cache persistence across restarts is not required\n- Cache sizes are moderate (hundreds to low thousands of entries)\n\nFor multi-instance deployments or large cache sizes, use GenieContextAwareCacheParametersModel\nwith PostgreSQL backend instead.",
+      "properties": {
+        "time_to_live_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": 604800,
+          "description": "Cache entry TTL in seconds. Default: 1 week (604800s). None or negative = never expires.",
+          "title": "Time To Live Seconds"
+        },
+        "similarity_threshold": {
+          "default": 0.85,
+          "description": "Minimum similarity score (0-1) for question matching.",
+          "title": "Similarity Threshold",
+          "type": "number"
+        },
+        "context_similarity_threshold": {
+          "default": 0.8,
+          "description": "Minimum similarity score (0-1) for conversation context matching.",
+          "title": "Context Similarity Threshold",
+          "type": "number"
+        },
+        "question_weight": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": 0.6,
+          "description": "Weight for question similarity in the combined score (0-1). Computed as 1 - context_weight if omitted.",
+          "title": "Question Weight"
+        },
+        "context_weight": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Weight for context similarity in the combined score (0-1). Computed as 1 - question_weight if omitted.",
+          "title": "Context Weight"
+        },
+        "embedding_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/InferenceEndpointModel"
+            }
+          ],
+          "default": "databricks-gte-large-en",
+          "description": "Embedding model endpoint for generating similarity vectors.",
+          "title": "Embedding Model"
+        },
+        "embedding_dims": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Embedding vector dimensions. Auto-detected from the model if not set.",
+          "title": "Embedding Dims"
+        },
+        "warehouse": {
+          "$ref": "#/$defs/WarehouseModel",
+          "description": "SQL warehouse used by the Genie API for query execution."
+        },
+        "context_window_size": {
+          "default": 3,
+          "description": "Number of previous conversation turns included as context for matching.",
+          "title": "Context Window Size",
+          "type": "integer"
+        },
+        "max_context_tokens": {
+          "default": 2000,
+          "description": "Maximum token length for context to prevent oversized embeddings.",
+          "title": "Max Context Tokens",
+          "type": "integer"
+        },
+        "invalidate_on_empty_result": {
+          "default": false,
+          "description": "When true, cached SQL that returns an empty result set is treated as stale: the cache entry is invalidated and the question is re-sent to Genie. Useful when cached queries contain date-relative expressions like CURRENT_DATE() that become invalid as underlying data ages.",
+          "title": "Invalidate On Empty Result",
+          "type": "boolean"
+        },
+        "capacity": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": 10000,
+          "description": "Maximum cache entries (~200MB at 10000 with 1024-dim embeddings). LRU eviction when full. None = unlimited.",
+          "title": "Capacity"
+        }
+      },
+      "required": [
+        "warehouse"
+      ],
+      "title": "GenieInMemoryContextAwareCacheParametersModel",
+      "type": "object"
+    },
     "GenieJoinSpec": {
       "additionalProperties": true,
       "description": "A trusted join relationship between two Genie data sources.",
@@ -3252,6 +4203,46 @@
         "sql"
       ],
       "title": "GenieJoinSpec",
+      "type": "object"
+    },
+    "GenieLRUCacheParametersModel": {
+      "additionalProperties": false,
+      "description": "Configuration for a simple LRU (Least Recently Used) Genie response cache.",
+      "properties": {
+        "capacity": {
+          "default": 1000,
+          "description": "Maximum number of cached responses before LRU eviction.",
+          "title": "Capacity",
+          "type": "integer"
+        },
+        "time_to_live_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": 86400,
+          "description": "Cache entry TTL in seconds. None or negative = entries never expire. Default: 1 day.",
+          "title": "Time To Live Seconds"
+        },
+        "warehouse": {
+          "$ref": "#/$defs/WarehouseModel",
+          "description": "SQL warehouse used by the Genie API for query execution."
+        },
+        "invalidate_on_empty_result": {
+          "default": false,
+          "description": "When true, cached SQL that returns an empty result set is treated as stale: the cache entry is invalidated and the question is re-sent to Genie. Useful when cached queries contain date-relative expressions like CURRENT_DATE() that become invalid as underlying data ages.",
+          "title": "Invalidate On Empty Result",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "warehouse"
+      ],
+      "title": "GenieLRUCacheParametersModel",
       "type": "object"
     },
     "GenieMetricViewSource": {
@@ -3910,9 +4901,136 @@
       "title": "GenieTableSource",
       "type": "object"
     },
+    "GenieToolModel": {
+      "additionalProperties": false,
+      "description": "First-class Genie tool that delegates to ``dao_ai.tools.create_genie_tool``.\n\nEquivalent to ``type: factory + name: dao_ai.tools.create_genie_tool``, but\nwith typed fields so beginners get IDE autocomplete and JSON-schema\nvalidation. Returns a single uncached tool when no caching is configured,\nor a ``GenieToolkit`` (query + feedback tools) when any cache is set or\n``enable_feedback=True``.",
+      "properties": {
+        "type": {
+          "const": "genie",
+          "default": "genie",
+          "description": "Function type discriminator. Must be 'genie'.",
+          "title": "Type",
+          "type": "string"
+        },
+        "human_in_the_loop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HumanInTheLoopModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-in-the-loop approval configuration for this tool."
+        },
+        "genie_room": {
+          "$ref": "#/$defs/GenieRoomModel",
+          "description": "Genie space configuration."
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tool name visible to the LLM. Defaults to 'genie_tool'.",
+          "title": "Name"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tool description shown to the LLM during function calling.",
+          "title": "Description"
+        },
+        "persist_conversation": {
+          "default": true,
+          "description": "Persist conversation IDs across calls for multi-turn Genie chats.",
+          "title": "Persist Conversation",
+          "type": "boolean"
+        },
+        "truncate_results": {
+          "default": false,
+          "description": "Truncate large query results returned by Genie.",
+          "title": "Truncate Results",
+          "type": "boolean"
+        },
+        "lru_cache": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GenieLRUCacheParametersModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "LRU cache configuration for fast exact-match SQL caching."
+        },
+        "context_aware_cache": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GenieContextAwareCacheParametersModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "PostgreSQL/Lakebase context-aware (semantic) cache configuration."
+        },
+        "in_memory_context_aware_cache": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GenieInMemoryContextAwareCacheParametersModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "In-memory context-aware (semantic) cache configuration."
+        },
+        "max_consecutive_cache_hits": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Circuit breaker: auto-invalidate after this many consecutive identical cache hits. None disables. Suggested value: 3.",
+          "title": "Max Consecutive Cache Hits"
+        },
+        "enable_feedback": {
+          "default": false,
+          "description": "Force toolkit mode (with feedback tool) even when no cache is configured. Implicitly true whenever any cache is set.",
+          "title": "Enable Feedback",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "genie_room"
+      ],
+      "title": "GenieToolModel",
+      "type": "object"
+    },
     "GuardrailModel": {
       "additionalProperties": false,
-      "description": "Configuration for a guardrail.\n\nGuardrails evaluate agent responses against quality or safety criteria.\nTwo configuration modes are supported:\n\n1. **Custom (LLM-judge)** -- provide *model* and *prompt*.  A\n   ``JudgeScorer`` is created using ``mlflow.genai.judges.make_judge``.\n2. **Scorer-based** -- provide *scorer* (and optionally *scorer_args*).\n   Any ``mlflow.genai.scorers.base.Scorer`` class can be used,\n   including built-in ``GuardrailsScorer`` validators such as\n   ``ToxicLanguage`` and ``DetectPII``.\n\nThe two modes are mutually exclusive.\n\nAttributes:\n    name: Name identifying this guardrail.\n    model: LLM model for the judge.  Accepts a string (model name) or\n        ``InferenceEndpointModel``.  Required when using the custom judge mode.\n    prompt: Evaluation instructions using ``{{ inputs }}`` and\n        ``{{ outputs }}`` template variables.  Required when using\n        the custom judge mode.\n    scorer: Fully qualified name of an MLflow ``Scorer`` class\n        (e.g. ``\"mlflow.genai.scorers.guardrails.DetectPII\"``).\n        Required when using the scorer-based mode.\n    scorer_args: Keyword arguments forwarded to the scorer constructor\n        (e.g. ``{\"pii_entities\": [\"CREDIT_CARD\", \"SSN\"]}``).\n    hub: Optional guardrails-ai hub URI for the scorer validator\n        (e.g. ``\"hub://guardrails/toxic_language\"``).  When set,\n        the validator is auto-installed at startup if the\n        ``GUARDRAILSAI_API_KEY`` environment variable is present.\n        Only valid when *scorer* is also set.\n    num_retries: Maximum retry attempts when evaluation fails (default: 3).\n    fail_on_error: If True, block responses when the evaluation call\n        itself errors (e.g. scorer exception, network timeout).\n        If False (default), let responses through on evaluation\n        errors.\n    max_context_length: Max character length for extracted tool context\n        (default: 8000).\n    apply_to: When to run this guardrail.  ``\"input\"`` runs before\n        the model (on user messages), ``\"output\"`` runs after the\n        model (on agent responses), ``\"both\"`` runs in both places\n        (default: ``\"both\"``).",
+      "description": "Configuration for a guardrail.\n\nGuardrails evaluate agent responses against quality or safety criteria.\nTwo configuration modes are supported:\n\n1. **Custom (LLM-judge)** -- provide *model* and *prompt*.  A\n   ``JudgeScorer`` is created using ``mlflow.genai.judges.make_judge``.\n2. **Scorer-based** -- provide *scorer* (and optionally *scorer_args*).\n   Any ``mlflow.genai.scorers.base.Scorer`` class can be used,\n   including built-in ``GuardrailsScorer`` validators such as\n   ``ToxicLanguage`` and ``DetectPII``.\n\nThe two modes are mutually exclusive.\n\nAttributes:\n    name: Name identifying this guardrail.\n    model: LLM model for the judge.  Accepts a string (model name) or\n        ``InferenceEndpointModel``.  Required when using the custom judge mode.\n    prompt: Evaluation instructions using ``{{ inputs }}`` and\n        ``{{ outputs }}`` template variables.  Required when using\n        the custom judge mode.\n    scorer: Fully qualified name of an MLflow ``Scorer`` class\n        (e.g. ``\"mlflow.genai.scorers.guardrails.DetectPII\"``).\n        Required when using the scorer-based mode.\n    scorer_args: Keyword arguments forwarded to the scorer constructor\n        (e.g. ``{\"pii_entities\": [\"CREDIT_CARD\", \"SSN\"]}``).\n    num_retries: Maximum retry attempts when evaluation fails (default: 3).\n    fail_on_error: If True, block responses when the evaluation call\n        itself errors (e.g. scorer exception, network timeout).\n        If False (default), let responses through on evaluation\n        errors.\n    max_context_length: Max character length for extracted tool context\n        (default: 8000).\n    apply_to: When to run this guardrail.  ``\"input\"`` runs before\n        the model (on user messages), ``\"output\"`` runs after the\n        model (on agent responses), ``\"both\"`` runs in both places\n        (default: ``\"both\"``).",
       "properties": {
         "name": {
           "description": "Name identifying this guardrail.",
@@ -3969,19 +5087,6 @@
           "description": "Keyword arguments forwarded to the scorer constructor (e.g., {'pii_entities': ['CREDIT_CARD', 'SSN']}).",
           "title": "Scorer Args",
           "type": "object"
-        },
-        "hub": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Guardrails-AI hub URI for auto-installing the scorer validator (e.g., 'hub://guardrails/toxic_language'). Requires scorer.",
-          "title": "Hub"
         },
         "num_retries": {
           "anyOf": [
@@ -4065,6 +5170,50 @@
       "title": "GuidelineModel",
       "type": "object"
     },
+    "HTTPAuthSecurityScheme": {
+      "description": "Defines a security scheme using HTTP authentication.",
+      "properties": {
+        "bearerFormat": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bearerformat"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "scheme": {
+          "title": "Scheme",
+          "type": "string"
+        },
+        "type": {
+          "const": "http",
+          "default": "http",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scheme"
+      ],
+      "title": "HTTPAuthSecurityScheme",
+      "type": "object"
+    },
     "HandoffRouteModel": {
       "additionalProperties": false,
       "description": "Configuration model for a handoff route in a swarm.\n\nA handoff route specifies a target agent and whether the handoff should be\ndeterministic (always route to this agent) or agentic (LLM decides via tool call).\n\nWhen ``is_deterministic`` is ``True``, the source agent will **always** transfer\ncontrol to this target agent after completing its turn, without requiring the\nLLM to invoke a handoff tool. This is useful for pipeline-style workflows\nwhere the routing order is predetermined.\n\nWhen ``is_deterministic`` is ``False`` (the default), a handoff tool is created\nfor the target agent and the LLM decides when to invoke it. This is the\nstandard agentic handoff behavior.\n\nExample YAML::\n\n    handoffs:\n      triage_agent:\n        - agent: billing_agent\n          is_deterministic: true\n      billing_agent:\n        - support_agent            # shorthand for agentic handoff",
@@ -4128,6 +5277,50 @@
       },
       "title": "HumanInTheLoopModel",
       "type": "object"
+    },
+    "ImplicitOAuthFlow": {
+      "description": "Defines configuration details for the OAuth 2.0 Implicit flow.",
+      "properties": {
+        "authorizationUrl": {
+          "title": "Authorizationurl",
+          "type": "string"
+        },
+        "refreshUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Refreshurl"
+        },
+        "scopes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Scopes",
+          "type": "object"
+        }
+      },
+      "required": [
+        "authorizationUrl",
+        "scopes"
+      ],
+      "title": "ImplicitOAuthFlow",
+      "type": "object"
+    },
+    "In": {
+      "description": "The location of the API key.",
+      "enum": [
+        "cookie",
+        "header",
+        "query"
+      ],
+      "title": "In",
+      "type": "string"
     },
     "IndexModel": {
       "additionalProperties": false,
@@ -4484,7 +5677,7 @@
           "title": "Pat"
         },
         "name": {
-          "description": "Serving endpoint name (e.g., 'databricks-meta-llama-3-3-70b-instruct').",
+          "description": "Serving endpoint name (e.g., 'databricks-gpt-5-4-mini').",
           "title": "Name",
           "type": "string"
         },
@@ -4769,53 +5962,6 @@
       "title": "LogLevel",
       "type": "string"
     },
-    "LongRunningModel": {
-      "additionalProperties": false,
-      "description": "Opt-in long-running agent configuration.\n\nEnables Responses-API-compatible kickoff/poll/cancel on top of any\ndao-ai agent, persisted in the referenced Lakebase ``database``.\nWhen present on ``AppModel``, requests can set ``background: true``\n(or ``custom_inputs.operation: retrieve|cancel``) on ``/invocations``;\nin Databricks Apps, strict ``/v1/responses*`` FastAPI routes are\nadditionally mounted and translate to the same contract.",
-      "properties": {
-        "database": {
-          "$ref": "#/$defs/DatabaseModel",
-          "description": "Lakebase (or PostgreSQL) database used to persist response rows and stream events. May be the same database used by the checkpointer."
-        },
-        "default_background": {
-          "default": false,
-          "description": "If True, requests are treated as long-running even when background is not explicitly set.",
-          "title": "Default Background",
-          "type": "boolean"
-        },
-        "max_duration_seconds": {
-          "default": 1800,
-          "description": "Hard cap on any single background run. Tasks exceeding this are marked failed.",
-          "minimum": 1,
-          "title": "Max Duration Seconds",
-          "type": "integer"
-        },
-        "poll_interval_seconds": {
-          "default": 1.0,
-          "description": "Interval (seconds) used by streaming retrieve to poll the database for new events.",
-          "exclusiveMinimum": 0.0,
-          "title": "Poll Interval Seconds",
-          "type": "number"
-        },
-        "responses_table_name": {
-          "default": "dao_ai_responses",
-          "description": "Name of the Lakebase table that stores one row per response.",
-          "title": "Responses Table Name",
-          "type": "string"
-        },
-        "messages_table_name": {
-          "default": "dao_ai_response_messages",
-          "description": "Name of the Lakebase table that stores streamed events / final items.",
-          "title": "Messages Table Name",
-          "type": "string"
-        }
-      },
-      "required": [
-        "database"
-      ],
-      "title": "LongRunningModel",
-      "type": "object"
-    },
     "McpFunctionModel": {
       "additionalProperties": false,
       "description": "MCP Function Model with authentication inherited from IsDatabricksResource.\n\nAuthentication for MCP connections uses the same options as other resources:\n- Service Principal (client_id + client_secret + workspace_host)\n- PAT (pat + workspace_host)\n- OBO (on_behalf_of_user)",
@@ -5049,7 +6195,7 @@
             }
           ],
           "default": null,
-          "description": "Direct MCP server URL. Mutually exclusive with app, connection, genie_room, sql, vector_search, functions.",
+          "description": "Direct MCP server URL. Mutually exclusive with app, connection, genie_room, genie, sql, vector_search, functions.",
           "title": "Url"
         },
         "headers": {
@@ -5141,6 +6287,19 @@
           "default": null,
           "description": "Genie space exposed as an MCP server for natural-language SQL."
         },
+        "genie": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Enable the workspace-wide Databricks Genie MCP server (queries across all Genie spaces in the workspace, no space_id required).",
+          "title": "Genie"
+        },
         "sql": {
           "anyOf": [
             {
@@ -5197,6 +6356,47 @@
           "default": null,
           "description": "Optional list of tool names or glob patterns to exclude from the MCP server. Tools matching these patterns will not be loaded. Takes precedence over include_tools. Supports glob patterns: * (any chars), ? (single char), [abc] (char set). Examples: ['drop_*', 'delete_*', 'execute_ddl']",
           "title": "Exclude Tools"
+        },
+        "meta": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/CompositeVariableModel"
+                  },
+                  {
+                    "$ref": "#/$defs/EnvironmentVariableModel"
+                  },
+                  {
+                    "$ref": "#/$defs/SecretVariableModel"
+                  },
+                  {
+                    "$ref": "#/$defs/PrimitiveVariableModel"
+                  },
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Per-MCP-server `_meta` parameters (MCP spec). Sent as `_meta` on every tools/call request to this server. Common Databricks keys: warehouse_id (DBSQL); num_results, filters, query_type, columns, score_threshold, include_score, columns_to_rerank (Vector Search). Values support AnyVariable (env vars, secrets, defaults).",
+          "title": "Meta"
         }
       },
       "title": "McpFunctionModel",
@@ -5444,6 +6644,157 @@
       "title": "MonitoringModel",
       "type": "object"
     },
+    "MutualTLSSecurityScheme": {
+      "description": "Defines a security scheme using mTLS authentication.",
+      "properties": {
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "type": {
+          "const": "mutualTLS",
+          "default": "mutualTLS",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "title": "MutualTLSSecurityScheme",
+      "type": "object"
+    },
+    "OAuth2SecurityScheme": {
+      "description": "Defines a security scheme using OAuth 2.0.",
+      "properties": {
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "flows": {
+          "$ref": "#/$defs/OAuthFlows"
+        },
+        "oauth2MetadataUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Oauth2Metadataurl"
+        },
+        "type": {
+          "const": "oauth2",
+          "default": "oauth2",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "flows"
+      ],
+      "title": "OAuth2SecurityScheme",
+      "type": "object"
+    },
+    "OAuthFlows": {
+      "description": "Defines the configuration for the supported OAuth 2.0 flows.",
+      "properties": {
+        "authorizationCode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuthorizationCodeOAuthFlow"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "clientCredentials": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClientCredentialsOAuthFlow"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "implicit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImplicitOAuthFlow"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "password": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PasswordOAuthFlow"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "OAuthFlows",
+      "type": "object"
+    },
+    "OpenIdConnectSecurityScheme": {
+      "description": "Defines a security scheme using OpenID Connect.",
+      "properties": {
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "openIdConnectUrl": {
+          "title": "Openidconnecturl",
+          "type": "string"
+        },
+        "type": {
+          "const": "openIdConnect",
+          "default": "openIdConnect",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "openIdConnectUrl"
+      ],
+      "title": "OpenIdConnectSecurityScheme",
+      "type": "object"
+    },
     "OptimizationsModel": {
       "additionalProperties": false,
       "description": "Container for prompt and cache threshold optimization configurations.",
@@ -5534,8 +6885,8 @@
           "description": "Memory configuration scoped to the orchestration layer (checkpointer, store, extraction)."
         },
         "output_mode": {
-          "default": "full_history",
-          "description": "How an agent's response flows back into parent state. ``full_history`` returns the agent's full local history including intermediate AI/tool messages, which lets the same agent see its own prior tool results across multi-turn conversations. ``last_message`` returns only the final AI response, which trims tokens but loses intermediate content. Default flipped to ``full_history`` so per-agent ToolMessage tagging actually has messages to identify.",
+          "default": "last_message",
+          "description": "How an agent's response flows back into parent state. ``last_message`` (default) returns only the final AI response from each agent, isolating downstream consumers (supervisor or peer swarm agents) from worker-side message corruption \u2014 middleware mutations that interleave system/tool messages, parallel tool calls that some strict-validation LLMs reject in history, or orphan tool_result blocks. ``full_history`` returns the agent's full local history, preserving cross-agent tool context (one agent can see another's structured tool outputs) at the cost of exposing downstream consumers to any worker-side malformed messages. Override per app via ``orchestration.output_mode: full_history`` when cross-agent tool context is required and the worker-side message-assembly path is known to be clean.",
           "enum": [
             "full_history",
             "last_message"
@@ -5579,6 +6930,40 @@
         }
       },
       "title": "ParameterDeclarationModel",
+      "type": "object"
+    },
+    "PasswordOAuthFlow": {
+      "description": "Defines configuration details for the OAuth 2.0 Resource Owner Password flow.",
+      "properties": {
+        "refreshUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Refreshurl"
+        },
+        "scopes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Scopes",
+          "type": "object"
+        },
+        "tokenUrl": {
+          "title": "Tokenurl",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scopes",
+        "tokenUrl"
+      ],
+      "title": "PasswordOAuthFlow",
       "type": "object"
     },
     "PermissionModel": {
@@ -5772,7 +7157,7 @@
     },
     "PromptOptimizationModel": {
       "additionalProperties": false,
-      "description": "Configuration for prompt optimization using GEPA.\n\nGEPA (Generative Evolution of Prompts and Agents) is an evolutionary\noptimizer that uses reflective mutation to improve prompts based on\nevaluation feedback.\n\nExample:\n    prompt_optimization:\n      name: optimize_my_prompt\n      prompt: *my_prompt\n      agent: *my_agent\n      dataset: *my_training_dataset\n      reflection_model: databricks-meta-llama-3-3-70b-instruct\n      num_candidates: 50",
+      "description": "Configuration for prompt optimization using GEPA.\n\nGEPA (Generative Evolution of Prompts and Agents) is an evolutionary\noptimizer that uses reflective mutation to improve prompts based on\nevaluation feedback.\n\nExample:\n    prompt_optimization:\n      name: optimize_my_prompt\n      prompt: *my_prompt\n      agent: *my_agent\n      dataset: *my_training_dataset\n      reflection_model: databricks-gpt-5-4-mini\n      num_candidates: 50",
       "properties": {
         "name": {
           "description": "Unique name for this optimization run.",
@@ -5835,6 +7220,28 @@
         "dataset"
       ],
       "title": "PromptOptimizationModel",
+      "type": "object"
+    },
+    "ProviderModel": {
+      "additionalProperties": false,
+      "description": "Service-provider information advertised on the A2A Agent Card.\n\nMirrors :class:`a2a.types.AgentProvider`. Both fields are required by\nthe A2A spec.",
+      "properties": {
+        "organization": {
+          "description": "Name of the organization providing the agent (e.g., 'Databricks Field Engineering').",
+          "title": "Organization",
+          "type": "string"
+        },
+        "url": {
+          "description": "URL for the provider's site or relevant documentation.",
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "organization",
+        "url"
+      ],
+      "title": "ProviderModel",
       "type": "object"
     },
     "PythonFunctionModel": {
@@ -6324,6 +7731,33 @@
       "title": "SearchParametersModel",
       "type": "object"
     },
+    "SearchToolModel": {
+      "additionalProperties": false,
+      "description": "First-class web search tool that delegates to ``dao_ai.tools.create_search_tool``.\n\nEquivalent to ``type: factory + name: dao_ai.tools.create_search_tool``.\nNo configuration required.",
+      "properties": {
+        "type": {
+          "const": "search",
+          "default": "search",
+          "description": "Function type discriminator. Must be 'search'.",
+          "title": "Type",
+          "type": "string"
+        },
+        "human_in_the_loop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HumanInTheLoopModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-in-the-loop approval configuration for this tool."
+        }
+      },
+      "title": "SearchToolModel",
+      "type": "object"
+    },
     "SecretVariableModel": {
       "description": "A variable resolved from a Databricks secret scope at runtime.",
       "properties": {
@@ -6355,6 +7789,26 @@
       ],
       "title": "SecretVariableModel",
       "type": "object"
+    },
+    "SecurityScheme": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/APIKeySecurityScheme"
+        },
+        {
+          "$ref": "#/$defs/HTTPAuthSecurityScheme"
+        },
+        {
+          "$ref": "#/$defs/OAuth2SecurityScheme"
+        },
+        {
+          "$ref": "#/$defs/OpenIdConnectSecurityScheme"
+        },
+        {
+          "$ref": "#/$defs/MutualTLSSecurityScheme"
+        }
+      ],
+      "title": "SecurityScheme"
     },
     "ServicePrincipalModel": {
       "description": "Databricks service principal credentials for OAuth M2M authentication.",
@@ -6425,6 +7879,125 @@
         "client_secret"
       ],
       "title": "ServicePrincipalModel",
+      "type": "object"
+    },
+    "ServingEndpointToolModel": {
+      "additionalProperties": false,
+      "description": "First-class tool that calls a Databricks Model Serving endpoint.\n\nSupervisor API ``serving_endpoint`` contract. Covers FMAPI /\nFoundation Model API endpoints (Chat Completions) AND UC-registered\nagents deployed to Model Serving (ResponsesAgent). The wire shape\nis selected by ``api:``.\n\nDefault ``api:`` behavior: when ``api`` is unset (None), the wire\nshape is discovered lazily on first invocation via\n``WorkspaceClient.serving_endpoints.get(name).task``; mapped to\n``\"responses\"`` for ``task=\"agent/v1/responses\"`` and\n``\"completions\"`` for ``task=\"llm/v1/chat\"``. Falls back to\n``\"completions\"`` if discovery returns no signal. Setting ``api:``\nexplicitly skips discovery entirely.\n\n``endpoint`` accepts two shapes:\n\n- **String / variable** (sugar) \u2014 just the endpoint name. dao-ai\n  promotes it to a minimal ``InferenceEndpointModel`` internally.\n- **Full ``InferenceEndpointModel``** \u2014 when you need\n  ``temperature``, ``max_tokens``, ``ai_gateway``, or\n  ``on_behalf_of_user`` on the endpoint itself.",
+      "properties": {
+        "type": {
+          "const": "serving_endpoint",
+          "default": "serving_endpoint",
+          "description": "Function type discriminator. Must be 'serving_endpoint'.",
+          "title": "Type",
+          "type": "string"
+        },
+        "human_in_the_loop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HumanInTheLoopModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-in-the-loop approval configuration for this tool."
+        },
+        "endpoint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InferenceEndpointModel"
+            },
+            {
+              "$ref": "#/$defs/CompositeVariableModel"
+            },
+            {
+              "$ref": "#/$defs/EnvironmentVariableModel"
+            },
+            {
+              "$ref": "#/$defs/SecretVariableModel"
+            },
+            {
+              "$ref": "#/$defs/PrimitiveVariableModel"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ],
+          "description": "Model Serving endpoint to call. Accepts either an endpoint name string (sugar) or a full InferenceEndpointModel with temperature / max_tokens / ai_gateway / on_behalf_of_user. For a UC-registered agent endpoint or a Knowledge Assistant this is the endpoint name (e.g., 'ka-customer-reviews', 'hardware_store_dao'). For FMAPI it's the foundation model endpoint name (e.g., 'databricks-claude-sonnet-4').",
+          "title": "Endpoint"
+        },
+        "api": {
+          "anyOf": [
+            {
+              "enum": [
+                "responses",
+                "completions"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "OpenAI API contract to use against the endpoint:\n- 'responses' \u2014 ChatDatabricks(use_responses_api=True). Required for UC-registered agent endpoints (task = 'agent/v1/responses').\n- 'completions' \u2014 ChatDatabricks (legacy default). Required for FMAPI endpoints (task = 'llm/v1/chat').\n- None (default) \u2014 lazy-probe serving_endpoints.get(name).task on first invocation and map to the right contract; fall back to 'completions' if discovery returns no signal. Setting this field skips discovery entirely.",
+          "title": "Api"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tool name visible to the LLM. Defaults to the endpoint name.",
+          "title": "Name"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tool description shown to the LLM during function calling.",
+          "title": "Description"
+        },
+        "on_behalf_of_user": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "If True, call the endpoint on behalf of the calling user by forwarding their bearer token. If False or None, the agent's service principal calls. Ignored when ``endpoint`` is a full InferenceEndpointModel that already sets on_behalf_of_user.",
+          "title": "On Behalf Of User"
+        }
+      },
+      "required": [
+        "endpoint"
+      ],
+      "title": "ServingEndpointToolModel",
       "type": "object"
     },
     "SkillModel": {
@@ -7005,6 +8578,24 @@
               "$ref": "#/$defs/McpFunctionModel"
             },
             {
+              "$ref": "#/$defs/GenieToolModel"
+            },
+            {
+              "$ref": "#/$defs/VectorSearchToolModel"
+            },
+            {
+              "$ref": "#/$defs/SearchToolModel"
+            },
+            {
+              "$ref": "#/$defs/AppToolModel"
+            },
+            {
+              "$ref": "#/$defs/ServingEndpointToolModel"
+            },
+            {
+              "$ref": "#/$defs/A2AToolModel"
+            },
+            {
               "type": "string"
             }
           ],
@@ -7021,7 +8612,7 @@
     },
     "TraceLocationModel": {
       "additionalProperties": false,
-      "description": "Unity Catalog location for storing MLflow traces in OTEL-format Delta tables.\n\nAccepts either a SchemaModel reference (aliased to \"schema\") or a string\nin \"catalog.schema\" format. When configured on AppModel, traces are stored\nin UC Delta tables via set_experiment_trace_location().",
+      "description": "Unity Catalog location for storing MLflow traces in OTEL-format Delta tables.\n\nWhen configured on AppModel, traces are stored in UC Delta tables via\n``mlflow.set_experiment(experiment_id=..., trace_location=UnityCatalog(...))``.\nProvide an optional ``table_prefix`` to namespace the OTEL tables when\nmultiple agents share a single UC schema. Without a prefix, MLflow uses\nthe literal default ``mlflow_experiment_trace`` \u2014 table names become\n``<catalog>.<schema>.mlflow_experiment_trace_otel_{spans,logs,metrics,annotations}``\n(see ``mlflow.entities.trace_location._UC_SCHEMA_DEFAULT_SPANS_TABLE_NAME``).\nAll experiments linked to the same schema with no prefix end up writing\nto the same shared table set, distinguished by the ``experiment_id``\ncolumn inside the tables \u2014 convenient for cross-experiment analytics,\nbut ambiguous if you want per-app isolation. Set ``table_prefix`` to\nnamespace the tables per agent (e.g. ``table_prefix: sales_genie`` yields\n``<catalog>.<schema>.sales_genie_otel_spans``).\n\ndao-ai does NOT include the OTEL trace tables in the model's auth_policy\nor App resources list because the table names depend on the configured\n``table_prefix`` and aren't fully predictable at deploy time. Instead,\nusers grant the deployed serving identity USE_CATALOG + USE_SCHEMA +\nSELECT + MODIFY on the trace schema as a one-time post-deploy step\n(mirrors the Apps SP grant pattern documented in README).",
       "properties": {
         "schema": {
           "$ref": "#/$defs/SchemaModel",
@@ -7033,11 +8624,66 @@
               "$ref": "#/$defs/WarehouseModel"
             },
             {
+              "$ref": "#/$defs/CompositeVariableModel"
+            },
+            {
+              "$ref": "#/$defs/EnvironmentVariableModel"
+            },
+            {
+              "$ref": "#/$defs/SecretVariableModel"
+            },
+            {
+              "$ref": "#/$defs/PrimitiveVariableModel"
+            },
+            {
               "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
             }
           ],
-          "description": "SQL warehouse for creating views and querying traces. Accepts a WarehouseModel reference or a warehouse ID string.",
+          "description": "SQL warehouse for creating views and querying traces. Accepts a WarehouseModel reference, a bare warehouse-id string, or an AnyVariable (env var / secret / composite / primitive) \u2014 useful when the warehouse id is environment-specific or held in a secret scope rather than baked into the YAML.",
           "title": "Warehouse"
+        },
+        "table_prefix": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompositeVariableModel"
+            },
+            {
+              "$ref": "#/$defs/EnvironmentVariableModel"
+            },
+            {
+              "$ref": "#/$defs/SecretVariableModel"
+            },
+            {
+              "$ref": "#/$defs/PrimitiveVariableModel"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional table-prefix passed into MLflow's ``UnityCatalog`` trace location. When set, OTEL trace tables are named ``<catalog>.<schema>.<table_prefix>_otel_{spans,logs,metrics}`` instead of the unprefixed default \u2014 useful when multiple agents share a single trace schema and you want each agent's traces in its own table set. Leave unset (None) to fall back to the shared default (all experiments writing to this schema share one table set, distinguished by experiment_id rows inside the tables).",
+          "title": "Table Prefix"
         }
       },
       "required": [
@@ -7240,6 +8886,83 @@
       ],
       "title": "VectorSearchEndpointType",
       "type": "string"
+    },
+    "VectorSearchToolModel": {
+      "additionalProperties": false,
+      "description": "First-class Vector Search tool that delegates to ``dao_ai.tools.create_vector_search_tool``.\n\nEquivalent to ``type: factory + name: dao_ai.tools.create_vector_search_tool``,\nbut with typed fields. Exactly one of ``retriever`` or ``vector_store`` is\nrequired.",
+      "properties": {
+        "type": {
+          "const": "vector_search",
+          "default": "vector_search",
+          "description": "Function type discriminator. Must be 'vector_search'.",
+          "title": "Type",
+          "type": "string"
+        },
+        "human_in_the_loop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HumanInTheLoopModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-in-the-loop approval configuration for this tool."
+        },
+        "retriever": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetrieverModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Full retriever configuration with search parameters and reranking. Mutually exclusive with vector_store."
+        },
+        "vector_store": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VectorStoreModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Direct vector store reference (uses default search parameters). Mutually exclusive with retriever."
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tool name visible to the LLM.",
+          "title": "Name"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tool description shown to the LLM during function calling.",
+          "title": "Description"
+        }
+      },
+      "title": "VectorSearchToolModel",
+      "type": "object"
     },
     "VectorStoreModel": {
       "additionalProperties": false,

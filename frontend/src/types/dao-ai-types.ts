@@ -504,7 +504,22 @@ export interface InstructionAwareRerankModel {
   top_n?: number;
 }
 
-export type ToolFunctionType = "python" | "factory" | "unity_catalog" | "mcp" | "inline";
+// dao-ai 0.1.99 expands FunctionType with six first-class shortcut tool types.
+// Each is equivalent to `type: factory + name: <dao_ai.tools.create_*>` but
+// surfaces typed fields so users get autocomplete and the YAML stays terse.
+// Authoritative source: src/dao_ai/config.py:4458 (FunctionType enum).
+export type ToolFunctionType =
+  | "python"
+  | "factory"
+  | "unity_catalog"
+  | "mcp"
+  | "inline"
+  | "genie"
+  | "vector_search"
+  | "search"
+  | "app"
+  | "serving_endpoint"
+  | "a2a";
 
 export interface PythonFunctionModel {
   type: "python";
@@ -559,12 +574,108 @@ export interface McpFunctionModel {
   exclude_tools?: string[];  // Exclude tools matching these patterns (takes precedence over include)
 }
 
+// ---------------------------------------------------------------------------
+// First-class shortcut tool types (dao-ai 0.1.99+).
+// These are NOT factory wrappers — they are discriminated tool function types
+// parsed directly by dao-ai's FunctionType enum. The dao-ai-side classes:
+//   GenieToolModel             (config.py:5073)
+//   VectorSearchToolModel      (config.py:5157)
+//   SearchToolModel            (config.py:5212)
+//   AppToolModel               (config.py:5231)
+//   ServingEndpointToolModel   (config.py:5314)
+//   A2AToolModel               (config.py:5420)
+// ---------------------------------------------------------------------------
+
+export interface GenieFunctionModel {
+  type: "genie";
+  genie_room: GenieRoomModel | string;
+  name?: string;
+  description?: string;
+  persist_conversation?: boolean;          // default: true
+  truncate_results?: boolean;              // default: false
+  lru_cache?: GenieLRUCacheParametersModel;
+  context_aware_cache?: GenieContextAwareCacheParametersModel;
+  in_memory_context_aware_cache?: GenieInMemoryContextAwareCacheParametersModel;
+  max_consecutive_cache_hits?: number;
+  enable_feedback?: boolean;               // default: false
+  human_in_the_loop?: HumanInTheLoopModel;
+}
+
+export interface VectorSearchFunctionModel {
+  type: "vector_search";
+  // Exactly one of retriever or vector_store is required.
+  retriever?: RetrieverModel | string;
+  vector_store?: VectorStoreModel | string;
+  name?: string;
+  description?: string;
+  human_in_the_loop?: HumanInTheLoopModel;
+}
+
+// dao-ai 0.1.99 SearchToolModel uses `extra="forbid"` and only declares the
+// `type` discriminator -- no name, description, or HITL fields. The parent
+// `ToolModel.name` still applies (visible to the LLM); customization lives at
+// the factory form for everything else.
+export interface SearchFunctionModel {
+  type: "search";
+}
+
+export interface AppFunctionModel {
+  type: "app";
+  app: DatabricksAppModel | string;
+  api?: "responses" | "completions";       // default: lazy-probe /agent/info
+  name?: string;
+  description?: string;
+  human_in_the_loop?: HumanInTheLoopModel;
+}
+
+export interface ServingEndpointFunctionModel {
+  type: "serving_endpoint";
+  // String shorthand (endpoint name) OR full InferenceEndpointModel.
+  endpoint: InferenceEndpointModel | string;
+  api?: "responses" | "completions";       // default: lazy-probe serving_endpoints.get(name).task
+  name?: string;
+  description?: string;
+  on_behalf_of_user?: boolean;             // only honored when endpoint is a string
+  human_in_the_loop?: HumanInTheLoopModel;
+}
+
+export type A2AFunctionAuthType =
+  | "bearer"
+  | "gcp_service_account"
+  | "none"
+  | "forwarded_user_token"
+  | "databricks_app_sp";
+
+export interface A2AFunctionModel {
+  type: "a2a";
+  // Mode 1: endpoint (external A2A agent). Mode 2: app (Databricks App).
+  endpoint?: VariableValue;
+  app?: DatabricksAppModel | string;
+  auth?: VariableValue;
+  auth_type?: A2AFunctionAuthType;         // default: bearer (mode 1) / derived from app.on_behalf_of_user (mode 2)
+  streaming?: boolean;                     // default: true
+  timeout_seconds?: number;                // default: 300
+  card_path?: string;
+  card_fallback_path?: string;
+  user_id?: VariableValue;
+  extra_metadata?: Record<string, VariableValue>;
+  name?: VariableValue;
+  description?: VariableValue;
+  human_in_the_loop?: HumanInTheLoopModel;
+}
+
 export type ToolFunctionModel =
   | PythonFunctionModel
   | FactoryFunctionModel
   | InlineFunctionModel
   | UnityCatalogFunctionModel
   | McpFunctionModel
+  | GenieFunctionModel
+  | VectorSearchFunctionModel
+  | SearchFunctionModel
+  | AppFunctionModel
+  | ServingEndpointFunctionModel
+  | A2AFunctionModel
   | string;
 
 export interface ToolModel {
@@ -911,9 +1022,19 @@ export interface RegisteredModelModel {
   name: string;
 }
 
+/**
+ * dao-ai 0.1.99+ accepts a string shorthand `"catalog.schema"` for
+ * `trace_location`, gained an optional `table_prefix` to namespace OTEL trace
+ * tables when multiple agents share a single UC schema, and widened
+ * `warehouse` to accept an `AnyVariable` (env/secret/composite/primitive) in
+ * addition to a `WarehouseModel` reference or bare warehouse-id string.
+ *
+ * Authoritative source: src/dao_ai/config.py:7080.
+ */
 export interface TraceLocationModel {
   schema: SchemaModel;
-  warehouse: WarehouseModel | string;
+  warehouse: WarehouseModel | VariableValue;
+  table_prefix?: VariableValue;
 }
 
 export interface MonitoringModel {
@@ -923,14 +1044,26 @@ export interface MonitoringModel {
   guidelines_sample_rate?: number;
 }
 
-export interface LongRunningModel {
+/**
+ * dao-ai 0.1.99+ renamed `LongRunningModel` -> `BackgroundModel`, the field
+ * `default_background` -> `default_enabled`, and the AppModel field
+ * `long_running` -> `background`. dao-ai's parser only accepts the new names
+ * in 0.1.99. The builder emits the new shape; the legacy `LongRunningModel`
+ * alias below is kept for round-trip-safe consumption of older configs.
+ *
+ * Authoritative source: src/dao_ai/config.py:7209.
+ */
+export interface BackgroundModel {
   database: DatabaseModel | string;
-  default_background?: boolean;
+  default_enabled?: boolean;
   max_duration_seconds?: number;
   poll_interval_seconds?: number;
   responses_table_name?: string;
   messages_table_name?: string;
 }
+
+/** Deprecated alias for BackgroundModel. Kept so older imports keep working. */
+export type LongRunningModel = BackgroundModel;
 
 /**
  * dao-ai 0.1.80+: A2A protocol task-persistence configuration.
@@ -1007,7 +1140,28 @@ export interface AppModel {
   endpoint_name?: string;
   trace_location?: TraceLocationModel;
   monitoring?: MonitoringModel;
-  long_running?: LongRunningModel;
+  /**
+   * dao-ai 0.1.99+: opt-in background-agent persistence (Responses-API
+   * kickoff/poll/cancel). Renamed from `long_running`. The legacy
+   * `long_running` field is accepted on read for round-tripping older configs
+   * but the builder always emits `background`.
+   */
+  background?: BackgroundModel;
+  /** @deprecated Renamed to `background` in dao-ai 0.1.99. Read-only fallback. */
+  long_running?: BackgroundModel;
+  /**
+   * dao-ai 0.1.99+: optional Databricks App Space name. Private Preview;
+   * the space must pre-exist (Terraform or
+   * `WorkspaceClient.apps.create_space()`). Groups apps that share runtime
+   * SP / user_api_scopes / governance.
+   */
+  space?: string;
+  /**
+   * dao-ai 0.1.99+: when true, the deployment is MCP-only and the
+   * agent-side validators (require at least one AgentModel, etc.) are
+   * skipped. Pair with `dao-ai generate-mcp` to ship a tools-only server.
+   */
+  mcp_only?: boolean;
   /**
    * dao-ai 0.1.80+: A2A protocol configuration. Defaults to a fresh
    * `A2AModel()` -- enabled with sensible defaults (skills derived from
