@@ -9,7 +9,7 @@ import Textarea from '../ui/Textarea';
 import Card from '../ui/Card';
 import Badge from '../ui/Badge';
 import MultiSelect from '../ui/MultiSelect';
-import { LogLevel, VariableValue, TraceLocationModel, MonitoringModel, LongRunningModel, A2AModel, OrchestrationOutputMode } from '@/types/dao-ai-types';
+import { LogLevel, VariableValue, TraceLocationModel, MonitoringModel, BackgroundModel, A2AModel, OrchestrationOutputMode } from '@/types/dao-ai-types';
 import { clsx } from 'clsx';
 import { normalizeRefName } from '@/utils/name-utils';
 
@@ -510,30 +510,35 @@ export default function AppConfigSection() {
   const [newGuidelineName, setNewGuidelineName] = useState('');
   const [newGuidelineText, setNewGuidelineText] = useState('');
 
-  // Long-Running Agents state
-  const [enableLongRunning, setEnableLongRunning] = useState(!!app?.long_running);
-  const [longRunningDatabaseKey, setLongRunningDatabaseKey] = useState<string>(() => {
-    if (app?.long_running?.database) {
-      const lrDb = app.long_running.database;
-      if (typeof lrDb === 'string') return '';
+  // Background Agents state.
+  // dao-ai 0.1.99 renamed `app.long_running` -> `app.background` (and field
+  // `default_background` -> `default_enabled`). All reads prefer the new
+  // names, falling back to legacy on import for round-tripping older
+  // configs; emission is always under `app.background`.
+  const savedBackground = app?.background ?? (app?.long_running as BackgroundModel | undefined);
+  const savedDefaultEnabled =
+    app?.background?.default_enabled
+    ?? (app?.long_running as { default_background?: boolean } | undefined)?.default_background
+    ?? false;
+  const [enableBackground, setEnableBackground] = useState(!!savedBackground);
+  const [backgroundDatabaseKey, setBackgroundDatabaseKey] = useState<string>(() => {
+    if (savedBackground?.database) {
+      const bgDb = savedBackground.database;
+      if (typeof bgDb === 'string') return '';
       for (const [key, configuredDb] of Object.entries(databases)) {
-        if (lrDb.project && configuredDb.project === lrDb.project) return key;
-        if (lrDb.instance_name && configuredDb.instance_name === lrDb.instance_name) return key;
-        if (lrDb.host && configuredDb.host === lrDb.host) return key;
+        if (bgDb.project && configuredDb.project === bgDb.project) return key;
+        if (bgDb.instance_name && configuredDb.instance_name === bgDb.instance_name) return key;
+        if (bgDb.host && configuredDb.host === bgDb.host) return key;
       }
     }
     return '';
   });
-  // dao-ai 0.1.99 renamed long_running -> background and default_background -> default_enabled.
-  // Read prefers the new name; falls back to legacy for round-tripping older configs.
-  const [longRunningDefaultBackground, setLongRunningDefaultBackground] = useState(
-    app?.background?.default_enabled ?? (app?.long_running as { default_background?: boolean } | undefined)?.default_background ?? false
-  );
-  const [longRunningMaxDuration, setLongRunningMaxDuration] = useState(app?.long_running?.max_duration_seconds ?? 1800);
-  const [longRunningPollInterval, setLongRunningPollInterval] = useState(app?.long_running?.poll_interval_seconds ?? 1.0);
-  const [longRunningResponsesTable, setLongRunningResponsesTable] = useState(app?.long_running?.responses_table_name ?? 'dao_ai_responses');
-  const [longRunningMessagesTable, setLongRunningMessagesTable] = useState(app?.long_running?.messages_table_name ?? 'dao_ai_response_messages');
-  const [showLongRunningAdvanced, setShowLongRunningAdvanced] = useState(false);
+  const [backgroundDefaultEnabled, setBackgroundDefaultEnabled] = useState(savedDefaultEnabled);
+  const [backgroundMaxDuration, setBackgroundMaxDuration] = useState(savedBackground?.max_duration_seconds ?? 1800);
+  const [backgroundPollInterval, setBackgroundPollInterval] = useState(savedBackground?.poll_interval_seconds ?? 1.0);
+  const [backgroundResponsesTable, setBackgroundResponsesTable] = useState(savedBackground?.responses_table_name ?? 'dao_ai_responses');
+  const [backgroundMessagesTable, setBackgroundMessagesTable] = useState(savedBackground?.messages_table_name ?? 'dao_ai_response_messages');
+  const [showBackgroundAdvanced, setShowBackgroundAdvanced] = useState(false);
 
   // A2A Protocol state (dao-ai 0.1.80+)
   // `a2a.enabled` defaults to true in dao-ai. We treat "no a2a block" and
@@ -765,7 +770,7 @@ export default function AppConfigSection() {
       if (a2aObo !== savedObo) return true;
       if (a2aServerUrl !== (app?.a2a?.server_url ?? '')) return true;
       if (a2aTaskStoreTable !== (app?.a2a?.task_store?.table ?? 'dao_ai_a2a_tasks')) return true;
-      // task_store.database is keyed by DatabaseModel matching, like long-running.
+      // task_store.database is keyed by DatabaseModel matching, like background.
       let savedTsDbKey = '';
       const tsDb = app?.a2a?.task_store?.database;
       if (tsDb && typeof tsDb !== 'string') {
@@ -777,27 +782,24 @@ export default function AppConfigSection() {
       if (a2aTaskStoreDatabaseKey !== savedTsDbKey) return true;
     }
 
-    // Check long-running agents
-    const savedLongRunningEnabled = !!app?.long_running;
-    if (enableLongRunning !== savedLongRunningEnabled) return true;
-    if (enableLongRunning) {
-      const savedDefaultEnabled = app?.background?.default_enabled ?? (app?.long_running as { default_background?: boolean } | undefined)?.default_background ?? false;
-      if (longRunningDefaultBackground !== savedDefaultEnabled) return true;
-      if (longRunningMaxDuration !== (app?.long_running?.max_duration_seconds ?? 1800)) return true;
-      if (longRunningPollInterval !== (app?.long_running?.poll_interval_seconds ?? 1.0)) return true;
-      if (longRunningResponsesTable !== (app?.long_running?.responses_table_name ?? 'dao_ai_responses')) return true;
-      if (longRunningMessagesTable !== (app?.long_running?.messages_table_name ?? 'dao_ai_response_messages')) return true;
-      // Check database key
+    // Check background agents (dao-ai 0.1.99 renamed long_running -> background).
+    if (enableBackground !== !!savedBackground) return true;
+    if (enableBackground) {
+      if (backgroundDefaultEnabled !== savedDefaultEnabled) return true;
+      if (backgroundMaxDuration !== (savedBackground?.max_duration_seconds ?? 1800)) return true;
+      if (backgroundPollInterval !== (savedBackground?.poll_interval_seconds ?? 1.0)) return true;
+      if (backgroundResponsesTable !== (savedBackground?.responses_table_name ?? 'dao_ai_responses')) return true;
+      if (backgroundMessagesTable !== (savedBackground?.messages_table_name ?? 'dao_ai_response_messages')) return true;
       let savedDbKey = '';
-      if (app?.long_running?.database && typeof app.long_running.database !== 'string') {
-        const lrDb = app.long_running.database;
+      if (savedBackground?.database && typeof savedBackground.database !== 'string') {
+        const bgDb = savedBackground.database;
         for (const [key, configuredDb] of Object.entries(databases)) {
-          if (lrDb.project && configuredDb.project === lrDb.project) { savedDbKey = key; break; }
-          if (lrDb.instance_name && configuredDb.instance_name === lrDb.instance_name) { savedDbKey = key; break; }
-          if (lrDb.host && configuredDb.host === lrDb.host) { savedDbKey = key; break; }
+          if (bgDb.project && configuredDb.project === bgDb.project) { savedDbKey = key; break; }
+          if (bgDb.instance_name && configuredDb.instance_name === bgDb.instance_name) { savedDbKey = key; break; }
+          if (bgDb.host && configuredDb.host === bgDb.host) { savedDbKey = key; break; }
         }
       }
-      if (longRunningDatabaseKey !== savedDbKey) return true;
+      if (backgroundDatabaseKey !== savedDbKey) return true;
     }
     
     return false;
@@ -1458,16 +1460,17 @@ export default function AppConfigSection() {
       };
     }
 
-    // Build long_running config
-    let longRunning: LongRunningModel | undefined = undefined;
-    if (enableLongRunning && longRunningDatabaseKey && databases[longRunningDatabaseKey]) {
-      longRunning = {
-        database: databases[longRunningDatabaseKey],
-        ...(longRunningDefaultBackground && { default_background: true }),
-        ...(longRunningMaxDuration !== 1800 && { max_duration_seconds: longRunningMaxDuration }),
-        ...(longRunningPollInterval !== 1.0 && { poll_interval_seconds: longRunningPollInterval }),
-        ...(longRunningResponsesTable !== 'dao_ai_responses' && { responses_table_name: longRunningResponsesTable }),
-        ...(longRunningMessagesTable !== 'dao_ai_response_messages' && { messages_table_name: longRunningMessagesTable }),
+    // Build background config (dao-ai 0.1.99 renamed long_running -> background;
+    // default_background -> default_enabled).
+    let background: BackgroundModel | undefined = undefined;
+    if (enableBackground && backgroundDatabaseKey && databases[backgroundDatabaseKey]) {
+      background = {
+        database: databases[backgroundDatabaseKey],
+        ...(backgroundDefaultEnabled && { default_enabled: true }),
+        ...(backgroundMaxDuration !== 1800 && { max_duration_seconds: backgroundMaxDuration }),
+        ...(backgroundPollInterval !== 1.0 && { poll_interval_seconds: backgroundPollInterval }),
+        ...(backgroundResponsesTable !== 'dao_ai_responses' && { responses_table_name: backgroundResponsesTable }),
+        ...(backgroundMessagesTable !== 'dao_ai_response_messages' && { messages_table_name: backgroundMessagesTable }),
       };
     }
 
@@ -1512,7 +1515,10 @@ export default function AppConfigSection() {
       ...(registeredModel && { registered_model: registeredModel }),
       trace_location: traceLocation,
       monitoring,
-      long_running: longRunning,
+      background,
+      // Explicitly clear the legacy `long_running` field so saving an
+      // older imported config doesn't emit both keys.
+      long_running: undefined,
       a2a,
       workload_size: formData.workloadSize as 'Small' | 'Medium' | 'Large',
       scale_to_zero: formData.scaleToZero,
@@ -3158,18 +3164,18 @@ export default function AppConfigSection() {
         )}
       </Card>
 
-      {/* Long-Running Agents */}
+      {/* Background Agents (dao-ai 0.1.99 renamed from long-running) */}
       <Card className="space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <Timer className="w-5 h-5 text-slate-400" />
-            <h3 className="font-medium text-white">Long-Running Agents</h3>
+            <h3 className="font-medium text-white">Background Agents</h3>
           </div>
           <label className="flex items-center space-x-2 cursor-pointer">
             <input
               type="checkbox"
-              checked={enableLongRunning}
-              onChange={(e) => setEnableLongRunning(e.target.checked)}
+              checked={enableBackground}
+              onChange={(e) => setEnableBackground(e.target.checked)}
               className="rounded border-slate-600 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-900"
             />
             <span className="text-xs text-slate-400">Enable</span>
@@ -3179,12 +3185,12 @@ export default function AppConfigSection() {
           Responses-API-compatible kickoff/poll/cancel for background tasks backed by Lakebase
         </p>
 
-        {enableLongRunning && (
+        {enableBackground && (
           <div className="space-y-4 p-4 bg-slate-800/30 rounded-lg border border-slate-700/50">
             <Select
               label="Database"
-              value={longRunningDatabaseKey}
-              onChange={(e) => setLongRunningDatabaseKey(e.target.value)}
+              value={backgroundDatabaseKey}
+              onChange={(e) => setBackgroundDatabaseKey(e.target.value)}
               options={[
                 { value: '', label: 'Select a database...' },
                 ...Object.keys(databases).map((name) => ({ value: name, label: name })),
@@ -3204,8 +3210,8 @@ export default function AppConfigSection() {
                 label="Max Duration (seconds)"
                 type="number"
                 min={1}
-                value={longRunningMaxDuration}
-                onChange={(e) => setLongRunningMaxDuration(parseInt(e.target.value) || 1800)}
+                value={backgroundMaxDuration}
+                onChange={(e) => setBackgroundMaxDuration(parseInt(e.target.value) || 1800)}
                 hint="Hard cap per background run (default: 1800)"
               />
               <Input
@@ -3213,8 +3219,8 @@ export default function AppConfigSection() {
                 type="number"
                 min={0.1}
                 step={0.1}
-                value={longRunningPollInterval}
-                onChange={(e) => setLongRunningPollInterval(parseFloat(e.target.value) || 1.0)}
+                value={backgroundPollInterval}
+                onChange={(e) => setBackgroundPollInterval(parseFloat(e.target.value) || 1.0)}
                 hint="Database poll interval for streaming retrieve (default: 1.0)"
               />
             </div>
@@ -3222,35 +3228,35 @@ export default function AppConfigSection() {
             <label className="flex items-center space-x-2 cursor-pointer">
               <input
                 type="checkbox"
-                checked={longRunningDefaultBackground}
-                onChange={(e) => setLongRunningDefaultBackground(e.target.checked)}
+                checked={backgroundDefaultEnabled}
+                onChange={(e) => setBackgroundDefaultEnabled(e.target.checked)}
                 className="rounded border-slate-600 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-900"
               />
               <span className="text-sm text-slate-300">Default to background mode</span>
-              <span className="text-xs text-slate-500">(treat all requests as long-running)</span>
+              <span className="text-xs text-slate-500">(treat all requests as background)</span>
             </label>
 
             <div>
               <button
                 type="button"
-                onClick={() => setShowLongRunningAdvanced(!showLongRunningAdvanced)}
+                onClick={() => setShowBackgroundAdvanced(!showBackgroundAdvanced)}
                 className="text-xs text-slate-400 hover:text-slate-300 flex items-center space-x-1"
               >
-                <span>{showLongRunningAdvanced ? '▾' : '▸'} Advanced</span>
+                <span>{showBackgroundAdvanced ? '▾' : '▸'} Advanced</span>
               </button>
-              {showLongRunningAdvanced && (
+              {showBackgroundAdvanced && (
                 <div className="grid grid-cols-2 gap-4 mt-3">
                   <Input
                     label="Responses Table Name"
-                    value={longRunningResponsesTable}
-                    onChange={(e) => setLongRunningResponsesTable(e.target.value)}
+                    value={backgroundResponsesTable}
+                    onChange={(e) => setBackgroundResponsesTable(e.target.value)}
                     placeholder="dao_ai_responses"
                     hint="Table storing one row per response"
                   />
                   <Input
                     label="Messages Table Name"
-                    value={longRunningMessagesTable}
-                    onChange={(e) => setLongRunningMessagesTable(e.target.value)}
+                    value={backgroundMessagesTable}
+                    onChange={(e) => setBackgroundMessagesTable(e.target.value)}
                     placeholder="dao_ai_response_messages"
                     hint="Table storing streamed events / final items"
                   />
@@ -3324,7 +3330,7 @@ export default function AppConfigSection() {
                   { value: '', label: '(none — in-memory; tasks lost on restart)' },
                   ...Object.keys(databases).map((name) => ({ value: name, label: name })),
                 ]}
-                hint="Lakebase database for persisting A2A Task lifecycle. Independent of app.long_running; point both at the same database to share a connection pool."
+                hint="Lakebase database for persisting A2A Task lifecycle. Independent of app.background; point both at the same database to share a connection pool."
               />
               {a2aTaskStoreDatabaseKey && (
                 <Input
