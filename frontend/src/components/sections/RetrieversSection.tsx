@@ -1,7 +1,7 @@
 import { useState, ChangeEvent } from 'react';
 import { Plus, Trash2, Edit2, Search, Layers, Filter, X, ChevronDown, ChevronRight, Zap, CheckCircle, Route, ArrowUpDown, Sparkles } from 'lucide-react';
 import { useConfigStore } from '@/stores/configStore';
-import { RetrieverModel, SearchParametersModel, RerankParametersModel, RouterModel, InstructedRetrieverModel, DecompositionModel, VerifierModel, ColumnInfo, InstructionAwareRerankModel } from '@/types/dao-ai-types';
+import { AiSearchVectorStoreModel, LakebaseVectorStoreModel, AnyRetriever, SearchParametersModel, RerankParametersModel, RouterModel, InstructedRetrieverModel, DecompositionModel, VerifierModel, ColumnInfo, InstructionAwareRerankModel } from '@/types/dao-ai-types';
 import Textarea from '../ui/Textarea';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
@@ -180,11 +180,15 @@ export default function RetrieversSection() {
   
   const hasVectorStores = Object.keys(vectorStores).length > 0;
 
-  // Get vector store options
-  const vectorStoreOptions = Object.entries(vectorStores).map(([key, vs]) => ({
-    value: key,
-    label: `${key} (${vs.embedding_source_column || 'no column'})`,
-  }));
+  // Get vector store options. Label differs by backend: AI Search shows its
+  // embedding source column; Lakebase shows schema.table.
+  const vectorStoreOptions = Object.entries(vectorStores).map(([key, vsAny]) => {
+    const lvs = vsAny as LakebaseVectorStoreModel;
+    const label = lvs.type === 'lakebase_search'
+      ? `${key} (lakebase: ${lvs.schema_name || 'public'}.${lvs.table || '?'})`
+      : `${key} (${(vsAny as AiSearchVectorStoreModel).embedding_source_column || 'no column'})`;
+    return { value: key, label };
+  });
 
   // Get LLM options for model selection
   const llmOptions = Object.entries(models).map(([key, llm]) => ({
@@ -281,15 +285,22 @@ export default function RetrieversSection() {
     scrollToAsset(key);
     const retriever = retrievers[key];
     
-    // Find the vector store reference by checking for matching vector store
+    // Find the vector store reference by checking for matching vector store.
+    // dao-ai 0.2.x: match differs by backend (AI Search vs Lakebase).
     let vectorStoreRef = '';
     if (retriever.vector_store) {
-      // Try to find matching configured vector store
-      const matchedKey = Object.entries(vectorStores).find(
-        ([, vs]) => 
-          vs.embedding_source_column === retriever.vector_store.embedding_source_column &&
-          vs.source_table?.name === retriever.vector_store.source_table?.name
-      );
+      const rvsLake = retriever.vector_store as LakebaseVectorStoreModel;
+      const rvsAi = retriever.vector_store as AiSearchVectorStoreModel;
+      const isLake = rvsLake.type === 'lakebase_search';
+      const matchedKey = Object.entries(vectorStores).find(([, vsAny]) => {
+        if (isLake) {
+          const lvs = vsAny as LakebaseVectorStoreModel;
+          return lvs.type === 'lakebase_search' && lvs.table === rvsLake.table && lvs.content_column === rvsLake.content_column;
+        }
+        const avs = vsAny as AiSearchVectorStoreModel;
+        return avs.embedding_source_column === rvsAi.embedding_source_column &&
+          avs.source_table?.name === rvsAi.source_table?.name;
+      });
       if (matchedKey) {
         vectorStoreRef = matchedKey[0];
       }
@@ -391,15 +402,24 @@ export default function RetrieversSection() {
     
     // Parse existing filters from search_parameters
     // First, get available columns from the vector store to determine column source
-    const vs = vectorStoreRef ? vectorStores[vectorStoreRef] : null;
+    const vsResolved = vectorStoreRef ? vectorStores[vectorStoreRef] : null;
     const vsColumns: Set<string> = new Set();
-    if (vs) {
-      if (vs.columns && Array.isArray(vs.columns)) {
-        vs.columns.forEach(col => vsColumns.add(col));
+    if (vsResolved) {
+      if ((vsResolved as LakebaseVectorStoreModel).type === 'lakebase_search') {
+        // Lakebase: available columns come from metadata_columns + content column.
+        const lvs = vsResolved as LakebaseVectorStoreModel;
+        (lvs.metadata_columns || []).forEach(col => vsColumns.add(col));
+        if (lvs.content_column) vsColumns.add(lvs.content_column);
+        if (lvs.id_column) vsColumns.add(lvs.id_column);
+      } else {
+        const vs = vsResolved as AiSearchVectorStoreModel;
+        if (vs.columns && Array.isArray(vs.columns)) {
+          vs.columns.forEach(col => vsColumns.add(col));
+        }
+        if (vs.embedding_source_column) vsColumns.add(vs.embedding_source_column);
+        if (vs.primary_key) vsColumns.add(vs.primary_key);
+        if (vs.doc_uri) vsColumns.add(vs.doc_uri);
       }
-      if (vs.embedding_source_column) vsColumns.add(vs.embedding_source_column);
-      if (vs.primary_key) vsColumns.add(vs.primary_key);
-      if (vs.doc_uri) vsColumns.add(vs.doc_uri);
     }
     
     const filters: FilterEntry[] = [];
@@ -632,8 +652,13 @@ export default function RetrieversSection() {
       };
     }
 
-    const retriever: RetrieverModel = {
-      vector_store: vectorStore,
+    // dao-ai 0.2.x: a retriever's backend is discriminated by the referenced
+    // vector store's `type` (ai_search default, or lakebase_search).
+    const isLakebaseStore = (vectorStore as LakebaseVectorStoreModel).type === 'lakebase_search';
+    const retriever: AnyRetriever = {
+      ...(isLakebaseStore
+        ? { type: 'lakebase_search', vector_store: vectorStore as LakebaseVectorStoreModel }
+        : { vector_store: vectorStore as AiSearchVectorStoreModel }),
       columns: columns.length > 0 ? columns : undefined,
       search_parameters: searchParameters,
       rerank,
@@ -678,9 +703,11 @@ export default function RetrieversSection() {
     setFormData(prev => {
       const newData = { ...prev, vectorStoreRef: value };
       
-      // Auto-select ALL columns from vector store when changing selection
-      if (vectorStores[value]?.columns) {
-        newData.columns = vectorStores[value].columns.join(', ');
+      // Auto-select ALL columns from vector store when changing selection.
+      // Only AI Search stores carry a `columns` list; Lakebase stores don't.
+      const selected = vectorStores[value] as AiSearchVectorStoreModel | undefined;
+      if (selected?.columns) {
+        newData.columns = selected.columns.join(', ');
       } else {
         // Clear columns if new vector store has no columns defined
         newData.columns = '';
@@ -698,32 +725,43 @@ export default function RetrieversSection() {
   // Get available columns from the selected vector store
   const getAvailableColumns = (): string[] => {
     if (!formData.vectorStoreRef) return [];
-    const vs = vectorStores[formData.vectorStoreRef];
-    if (!vs) return [];
-    
+    const vsAny = vectorStores[formData.vectorStoreRef];
+    if (!vsAny) return [];
+
     // Collect columns from various sources in the vector store
     const columns: Set<string> = new Set();
-    
+
+    if ((vsAny as LakebaseVectorStoreModel).type === 'lakebase_search') {
+      // Lakebase: metadata columns + content/id columns.
+      const lvs = vsAny as LakebaseVectorStoreModel;
+      (lvs.metadata_columns || []).forEach(col => columns.add(col));
+      if (lvs.content_column) columns.add(lvs.content_column);
+      if (lvs.id_column) columns.add(lvs.id_column);
+      return Array.from(columns);
+    }
+
+    const vs = vsAny as AiSearchVectorStoreModel;
+
     // Add configured columns
     if (vs.columns && Array.isArray(vs.columns)) {
       vs.columns.forEach(col => columns.add(col));
     }
-    
+
     // Add embedding source column
     if (vs.embedding_source_column) {
       columns.add(vs.embedding_source_column);
     }
-    
+
     // Add primary key
     if (vs.primary_key) {
       columns.add(vs.primary_key);
     }
-    
+
     // Add doc_uri if present
     if (vs.doc_uri) {
       columns.add(vs.doc_uri);
     }
-    
+
     return Array.from(columns).sort();
   };
 
@@ -948,7 +986,9 @@ export default function RetrieversSection() {
               <label className="block text-sm font-medium text-slate-300">Return Columns</label>
               {(() => {
                 const selectedVs = formData.vectorStoreRef ? vectorStores[formData.vectorStoreRef] : null;
-                const availableColumns = selectedVs?.columns || [];
+                // AI Search stores expose a `columns` list; Lakebase stores use
+                // getAvailableColumns() semantics instead (no top-level columns).
+                const availableColumns = (selectedVs as AiSearchVectorStoreModel | null)?.columns || [];
                 
                 if (availableColumns.length > 0) {
                   return (

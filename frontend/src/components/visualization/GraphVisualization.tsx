@@ -15,7 +15,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { Bot, Cpu, Shield, Wrench, GitBranch, Users, ArrowRightLeft } from 'lucide-react';
-import { AppConfig } from '@/types/dao-ai-types';
+import { AppConfig, modelDisplayName } from '@/types/dao-ai-types';
 
 interface GraphVisualizationProps {
   config: AppConfig;
@@ -328,7 +328,7 @@ function buildGraph(config: AppConfig): { nodes: Node[]; edges: Edge[] } {
         data: {
           name: agent.name,
           description: agent.description,
-          modelName: agent.model?.name || 'Unknown',
+          modelName: modelDisplayName(agent.model),
           toolCount: agent.tools?.length || 0,
           guardrailCount: agent.guardrails?.length || 0,
         } as AgentNodeData,
@@ -418,7 +418,7 @@ function buildGraph(config: AppConfig): { nodes: Node[]; edges: Edge[] } {
       return {
         name: agent.name,
         description: agent.description,
-        modelName: agent.model?.name || 'Unknown',
+        modelName: modelDisplayName(agent.model),
         toolCount: agent.tools?.length || 0,
         guardrailCount: agent.guardrails?.length || 0,
         isDefault,
@@ -596,7 +596,7 @@ function buildGraph(config: AppConfig): { nodes: Node[]; edges: Edge[] } {
         data: {
           name: agent.name,
           description: agent.description,
-          modelName: agent.model?.name || 'Unknown',
+          modelName: modelDisplayName(agent.model),
           toolCount: agent.tools?.length || 0,
           guardrailCount: agent.guardrails?.length || 0,
           isDefault: index === 0,

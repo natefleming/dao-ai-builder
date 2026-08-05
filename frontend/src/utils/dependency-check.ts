@@ -179,27 +179,22 @@ export function findSchemaDependencies(config: AppConfig, schemaKey: string): De
           deps.push({ type: 'vector_store', name: key, field: refs[0] });
           continue;
         }
-        // Check source_table.schema and index.schema
-        if (vs.source_table?.schema && objectMatchesKey(vs.source_table.schema, schemaKey, config, 'schema')) {
+        // Check source_table.schema and index.schema (AI Search stores only;
+        // Lakebase stores have no source_table/index).
+        const aiVs = vs as { source_table?: { schema?: unknown }; index?: { schema?: unknown } };
+        if (aiVs.source_table?.schema && objectMatchesKey(aiVs.source_table.schema, schemaKey, config, 'schema')) {
           deps.push({ type: 'vector_store', name: key, field: 'source_table.schema' });
         }
-        if (vs.index?.schema && objectMatchesKey(vs.index.schema, schemaKey, config, 'schema')) {
+        if (aiVs.index?.schema && objectMatchesKey(aiVs.index.schema, schemaKey, config, 'schema')) {
           deps.push({ type: 'vector_store', name: key, field: 'index.schema' });
         }
       }
     }
   }
   
-  // Check prompts
-  if (config.prompts) {
-    for (const [key, prompt] of Object.entries(config.prompts)) {
-      if (valueContainsRef(prompt.schema, schemaKey) ||
-          objectMatchesKey(prompt.schema, schemaKey, config, 'schema')) {
-        deps.push({ type: 'prompt', name: key, field: 'schema' });
-      }
-    }
-  }
-  
+  // dao-ai 0.2.6 removed PromptModel.schema, so prompts no longer depend on
+  // any schema — nothing to check here.
+
   // Check app registered_model
   if (config.app?.registered_model) {
     if (valueContainsRef(config.app.registered_model.schema, schemaKey)) {

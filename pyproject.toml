@@ -7,28 +7,41 @@ requires-python = ">=3.11"
 dependencies = [
     "flask>=3.0.0",
     "gunicorn>=21.0.0",
-    # dao-ai 0.1.99 expanded FunctionType with six first-class shortcut
-    # tool types parsed directly (no factory wrapper):
-    #   * type: genie             - GenieToolModel (genie_room + flags)
-    #   * type: vector_search     - VectorSearchToolModel (retriever | vector_store)
-    #   * type: search            - SearchToolModel (no args)
-    #   * type: app               - AppToolModel (Databricks App + api selector)
-    #   * type: serving_endpoint  - ServingEndpointToolModel (endpoint + api)
-    #   * type: a2a               - A2AToolModel (endpoint OR app, 5-state auth)
-    # The legacy factory form (type: factory + name: dao_ai.tools.create_*)
-    # still works; the builder now emits the shortcut form by default.
-    # Other AppModel changes the builder mirrors:
-    #   * `long_running` -> `background` (and `default_background` ->
-    #     `default_enabled`). Builder reads legacy, emits new name.
-    #   * `space: Optional[str]` -- App Spaces (Private Preview)
-    #   * `mcp_only: bool` -- skip agent-required validators
-    #   * `trace_location` accepts "catalog.schema" shorthand and gained
-    #     optional `table_prefix` to namespace OTEL trace tables.
-    # 0.1.80 shipped Google A2A v0.3 (A2AModel, A2ATaskStoreModel,
-    # security_schemes, on_behalf_of_user three-state). 0.1.77 carried
-    # `ai_gateway: bool` on InferenceEndpointModel. 0.1.75 renamed
-    # `resources.llms` -> `resources.models`.
-    "dao-ai>=0.1.99",
+    # Pin floor is the latest PyPI-resolvable release (0.2.5); the vendored JSON
+    # schema tracks local 0.2.6, which is not yet published. A deployed Databricks
+    # App resolves dao-ai from PyPI, so the floor must be resolvable. The 0.2.6
+    # changes the builder reflects are forward-compatible with 0.2.5:
+    #   * PromptModel cleanup — REMOVED `schema` and `tags` (and `full_name`);
+    #     a prompt is now just name/description/template. (extra="forbid", so
+    #     the builder must not emit schema/tags.)
+    #   * deploy_agent(target=...) renamed to deploy_agent(mode=...).
+    # Key changes since 0.1.99 the builder emits/consumes:
+    #   * Vector Search family renamed to "AI Search" (fully back-compat):
+    #     resources.vector_stores + retrievers are now discriminated on `type`
+    #     (`ai_search` default, or `lakebase_search` — new Lakebase Postgres
+    #     backend: LakebaseVectorStoreModel / LakebaseRetrieverModel). Tool
+    #     `type: vector_search` stays accepted as a legacy alias for `ai_search`.
+    #   * New tool types: `type: sql` (SqlToolModel: warehouse XOR database +
+    #     typed StatementParams) and `type: lakebase_search`.
+    #   * Every tool gains `audit` (AuditModel) + `call_limit` (ToolCallLimitModel).
+    #     AgentModel gains `call_limit` (ModelCallLimitModel) + `internal`, and
+    #     its `model` may be a GenieAgentModel (Genie space as the brain).
+    #   * AppModel: REMOVED `deployment_target` (now a deploy-action param /
+    #     ServingMode, not config) and `mcp_only`; ADDED `experiment`
+    #     (ExperimentModel), `manage_permissions`, `mcp_server`
+    #     (McpServerCapabilitiesModel), `resource_paths`, `workers`.
+    #   * PromptModel: MLflow Prompt Registry + GEPA removed — `template` is now
+    #     required and inline; `alias`/`version`/`auto_register`/`default_template`
+    #     are gone (and in 0.2.6 also `schema`/`tags`). OptimizationsModel dropped
+    #     `prompt_optimizations`.
+    #   * Misc: OrchestrationModel.interrupt_model, HandoffRouteModel fan-out
+    #     (`agents`/`join`), McpFunctionModel.capabilities, GenieToolModel.verbatim,
+    #     ParameterDeclarationModel.provided, InferenceEndpointModel.extra_params,
+    #     DatabaseModel.database_id.
+    # (Retained from earlier: 0.1.99 first-class shortcut tool types; 0.1.80 A2A
+    # v0.3; 0.1.77 ai_gateway; 0.1.75 resources.llms -> resources.models;
+    # 0.1.99 long_running -> background.)
+    "dao-ai>=0.2.5",
     "databricks-sdk>=0.74.0",
     "mlflow[databricks]>=3.8.1",
     "python-dotenv>=1.2.1",

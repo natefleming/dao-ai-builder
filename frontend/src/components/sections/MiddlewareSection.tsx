@@ -54,7 +54,7 @@ function parsePromptArg(
       return { source: 'configured', ref: matchedKey, inline: '' };
     }
     // Fallback: PromptModel but not found in config, show default_template as inline
-    return { source: 'inline', ref: '', inline: promptModel.default_template || '' };
+    return { source: 'inline', ref: '', inline: promptModel.template || '' };
   }
   return { source: 'inline', ref: '', inline: typeof value === 'string' ? value : '' };
 }
@@ -975,10 +975,10 @@ function MiddlewarePromptField({
               {prompts[promptRef].description && (
                 <p className="text-xs text-slate-400 mb-2">{prompts[promptRef].description}</p>
               )}
-              {prompts[promptRef].default_template && (
+              {prompts[promptRef].template && (
                 <pre className="text-xs text-slate-500 bg-slate-900/50 p-2 rounded overflow-auto max-h-32">
-                  {prompts[promptRef].default_template?.substring(0, 300)}
-                  {(prompts[promptRef].default_template?.length || 0) > 300 ? '...' : ''}
+                  {prompts[promptRef].template?.substring(0, 300)}
+                  {(prompts[promptRef].template?.length || 0) > 300 ? '...' : ''}
                 </pre>
               )}
             </div>

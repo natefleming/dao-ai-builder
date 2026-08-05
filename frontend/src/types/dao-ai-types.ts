@@ -92,6 +92,11 @@ export interface InferenceEndpointModel {
   fallbacks?: (string | InferenceEndpointModel)[];
   /** dao-ai 0.1.72+: best-of-N + LLM-as-judge wrapper. */
   best_of_n?: BestOfNConfig;
+  /**
+   * dao-ai 0.2.x+: extra request params forwarded verbatim to the serving
+   * endpoint (e.g. reasoning-mode knobs). Merged into the outbound payload.
+   */
+  extra_params?: Record<string, any>;
   // Authentication fields
   service_principal?: ServicePrincipalModel | string;
   client_id?: VariableValue;
@@ -107,10 +112,17 @@ export interface InferenceEndpointModel {
  */
 export type LLMModel = InferenceEndpointModel;
 
-// VectorStoreModel supports two configuration modes:
-// 1. Use Existing Index: Provide only 'index' to reference a pre-built vector search index
-// 2. Provision New Index: Provide 'source_table' and 'embedding_source_column' to create a new index
-export interface VectorStoreModel {
+// dao-ai 0.2.x renamed the Vector Search family to "AI Search" (Databricks AI
+// Search). The rename is fully backward-compatible: the YAML resource key stays
+// `resources.vector_stores:`, the discriminator default `type: ai_search` is
+// canonical, and `type: vector_search` is still accepted as a legacy alias.
+//
+// AiSearchVectorStoreModel supports two configuration modes:
+// 1. Use Existing Index: Provide only 'index' to reference a pre-built index
+// 2. Provision New Index: Provide 'source_table' and 'embedding_source_column'
+export interface AiSearchVectorStoreModel {
+  /** Discriminator. Default (and canonical) is "ai_search"; "vector_search" is a legacy alias. */
+  type?: "ai_search" | "vector_search";
   on_behalf_of_user?: boolean;
   // Required for use_existing mode, optional (auto-generated) for provision mode
   index?: IndexModel;
@@ -118,7 +130,7 @@ export interface VectorStoreModel {
   source_table?: TableModel;
   embedding_source_column?: string;  // Required for provision mode, omitted for use_existing
   embedding_model?: InferenceEndpointModel;        // Optional, defaults to databricks-gte-large-en for provision mode
-  endpoint?: VectorSearchEndpoint;   // Optional, auto-discovered for provision mode
+  endpoint?: AiSearchEndpoint;       // Optional, auto-discovered for provision mode
   // Optional for both modes
   source_path?: VolumePathModel;
   checkpoint_path?: VolumePathModel;
@@ -133,16 +145,47 @@ export interface VectorStoreModel {
   pat?: VariableValue;
 }
 
+/** Backward-compatible alias. dao-ai keeps `VectorStoreModel` exported too. */
+export type VectorStoreModel = AiSearchVectorStoreModel;
+
+// dao-ai 0.2.x: new Lakebase (Postgres) retrieval backend. A `vector_stores`
+// entry (or retriever) with `type: lakebase_search` targets a Lakebase table
+// with pgvector / tsvector columns instead of a Databricks AI Search index.
+export interface LakebaseVectorStoreModel {
+  type: "lakebase_search";
+  database: DatabaseModel | string;   // Lakebase/Postgres database (inline or reference)
+  schema_name?: string;               // default: "public"
+  table: string;
+  id_column?: string;                 // default: "id"
+  content_column: string;
+  embedding_column: string;
+  tsvector_column?: string | null;    // optional full-text column for hybrid search
+  metadata_columns?: string[] | null;
+  embedding_model: InferenceEndpointModel | string;  // bare string coerces to a model
+  bm25_index_name?: string | null;    // auto-derived if omitted
+  distance_metric?: "cosine" | "l2" | "ip";  // default: "cosine"
+  tsv_language?: string;              // default: "english"
+}
+
+/** Discriminated union of vector-store backends (dao-ai `AnyVectorStore`). */
+export type AnyVectorStore = AiSearchVectorStoreModel | LakebaseVectorStoreModel;
+
 export interface IndexModel {
   on_behalf_of_user?: boolean;
   schema?: SchemaModel;
   name: string;
 }
 
-export interface VectorSearchEndpoint {
+/** Renamed from VectorSearchEndpoint in dao-ai 0.2.x (alias kept). */
+export interface AiSearchEndpoint {
   name: string;
   type?: "STANDARD" | "OPTIMIZED_STORAGE";
+  /** Public Preview: provision target QPS on STANDARD endpoints (>0). */
+  target_qps?: number;
 }
+
+/** Backward-compatible alias. */
+export type VectorSearchEndpoint = AiSearchEndpoint;
 
 export interface TableModel {
   on_behalf_of_user?: boolean;
@@ -279,6 +322,8 @@ export interface GenieEntitlement {
 export interface ParameterDeclarationModel {
   description?: string;
   default?: string | null;
+  /** dao-ai 0.2.x+: when true, the value is supplied dynamically at runtime. */
+  provided?: boolean;
 }
 
 export interface FunctionModel {
@@ -377,6 +422,8 @@ export interface DatabaseModel {
   node_count?: number;  // Horizontal scaling node count
   // --- Common fields ---
   description?: string;
+  /** dao-ai 0.2.x+: Databricks Lakebase resource id. */
+  database_id?: VariableValue;
   host?: VariableValue;  // PostgreSQL hostname (can be variable or string)
   database?: VariableValue;  // Database name (default: "databricks_postgres")
   port?: VariableValue;  // Port number (default: 5432)
@@ -426,13 +473,33 @@ export interface DatabricksAppModel {
   pat?: VariableValue;
 }
 
-export interface RetrieverModel {
-  vector_store: VectorStoreModel;
-  columns?: string[];
+// dao-ai 0.2.x renamed RetrieverModel -> AiSearchRetrieverModel and added a
+// `type` discriminator (default "ai_search", back-compat when omitted). A
+// sibling LakebaseRetrieverModel (`type: lakebase_search`) targets Lakebase.
+export interface AiSearchRetrieverModel {
+  /** Discriminator. Default "ai_search" (omitting `type` is treated as ai_search). */
+  type?: "ai_search";
+  vector_store: AiSearchVectorStoreModel;
+  columns?: (string | ColumnInfo)[];
   search_parameters?: SearchParametersModel;
   rerank?: RerankParametersModel | boolean;  // FlashRank/Databricks reranking only
   instructed?: InstructedRetrieverModel;
 }
+
+/** Backward-compatible alias. */
+export type RetrieverModel = AiSearchRetrieverModel;
+
+export interface LakebaseRetrieverModel {
+  type: "lakebase_search";
+  vector_store: LakebaseVectorStoreModel;
+  columns?: (string | ColumnInfo)[];
+  search_parameters?: SearchParametersModel;
+  rerank?: RerankParametersModel | boolean;
+  instructed?: InstructedRetrieverModel;
+}
+
+/** Discriminated union of retriever backends (dao-ai `AnyRetriever`). */
+export type AnyRetriever = AiSearchRetrieverModel | LakebaseRetrieverModel;
 
 // Router for selecting standard vs instructed execution mode
 export interface RouterModel {
@@ -504,10 +571,39 @@ export interface InstructionAwareRerankModel {
   top_n?: number;
 }
 
-// dao-ai 0.1.99 expands FunctionType with six first-class shortcut tool types.
-// Each is equivalent to `type: factory + name: <dao_ai.tools.create_*>` but
-// surfaces typed fields so users get autocomplete and the YAML stays terse.
-// Authoritative source: src/dao_ai/config.py:4458 (FunctionType enum).
+// dao-ai 0.2.x: tamper-evident audit receipts for a tool invocation. When set
+// on a tool's function, invocations are logged to a Lakebase table. Works with
+// or without human_in_the_loop.
+export interface AuditModel {
+  database: DatabaseModel | string;   // Lakebase database (inline or reference)
+  table?: string;                     // default: "audit_receipts"
+  nonce_ttl_seconds?: number;         // default: 300
+}
+
+// dao-ai 0.2.x: cap how many times a tool may be called. A bare integer is
+// shorthand for { run_limit: <int> }. Aliases: turn_limit -> run_limit,
+// conversation_limit -> thread_limit.
+export interface ToolCallLimitModel {
+  run_limit?: number | null;          // max calls per agent invocation
+  thread_limit?: number | null;       // max calls across the whole conversation
+  exit_behavior?: "continue" | "error" | "end";  // default: "continue"
+}
+
+// dao-ai 0.2.x: cap how many LLM (model) calls an agent may make. A bare
+// integer is shorthand for { run_limit: <int> }. Note "continue" is not a
+// valid exit_behavior for model-call limits.
+export interface ModelCallLimitModel {
+  run_limit?: number | null;
+  thread_limit?: number | null;
+  exit_behavior?: "error" | "end";    // default: "end"
+}
+
+// dao-ai 0.1.99 expanded FunctionType with first-class shortcut tool types;
+// dao-ai 0.2.x adds `sql` (first-class SQL statement tool) and `lakebase_search`
+// (Lakebase retrieval), and makes `ai_search` the canonical name for the former
+// `vector_search` shortcut (both accepted). Each is equivalent to a
+// `type: factory` wrapper but surfaces typed fields for autocomplete + terse
+// YAML. Authoritative source: src/dao_ai/config.py (FunctionType enum).
 export type ToolFunctionType =
   | "python"
   | "factory"
@@ -515,13 +611,23 @@ export type ToolFunctionType =
   | "mcp"
   | "inline"
   | "genie"
-  | "vector_search"
+  | "ai_search"
+  | "vector_search"  // legacy alias for ai_search
+  | "lakebase_search"
+  | "sql"
   | "search"
   | "app"
   | "serving_endpoint"
   | "a2a";
 
-export interface PythonFunctionModel {
+// dao-ai 0.2.x: every tool function may carry `audit` and `call_limit`.
+// (Inherited from the base tool model; shared here to avoid repetition.)
+export interface ToolAuditableFields {
+  audit?: AuditModel;
+  call_limit?: number | ToolCallLimitModel;
+}
+
+export interface PythonFunctionModel extends ToolAuditableFields {
   type: "python";
   name: string;
   human_in_the_loop?: HumanInTheLoopModel;
@@ -529,27 +635,27 @@ export interface PythonFunctionModel {
 
 // Inline function model for defining tool code directly in YAML configuration
 // New in dao-ai 0.1.21
-export interface InlineFunctionModel {
+export interface InlineFunctionModel extends ToolAuditableFields {
   type: "inline";
   code: string;  // Python code defining a tool function decorated with @tool
   human_in_the_loop?: HumanInTheLoopModel;
 }
 
-export interface FactoryFunctionModel {
+export interface FactoryFunctionModel extends ToolAuditableFields {
   type: "factory";
   name: string;
   args?: Record<string, any>;
   human_in_the_loop?: HumanInTheLoopModel;
 }
 
-export interface UnityCatalogFunctionModel {
+export interface UnityCatalogFunctionModel extends ToolAuditableFields {
   type: "unity_catalog";
   resource?: FunctionModel | string; // Reference to FunctionModel in resources.functions
   partial_args?: Record<string, any>;
   human_in_the_loop?: HumanInTheLoopModel;
 }
 
-export interface McpFunctionModel {
+export interface McpFunctionModel extends ToolAuditableFields {
   type: "mcp";
   // NOTE: 'name' is NOT part of McpFunctionModel - it's in the parent ToolModel
   transport?: "streamable_http" | "stdio";
@@ -572,6 +678,45 @@ export interface McpFunctionModel {
   // Tool filtering - supports glob patterns (* for any chars, ? for single char)
   include_tools?: string[];  // Only include tools matching these patterns
   exclude_tools?: string[];  // Exclude tools matching these patterns (takes precedence over include)
+  /** dao-ai 0.2.x+: advanced MCP client capabilities (progress, elicitation, structured output). */
+  capabilities?: McpCapabilitiesModel;
+}
+
+// dao-ai 0.2.x: advanced MCP capabilities the client (McpFunctionModel) opts
+// into when consuming an external MCP server.
+export interface McpCapabilitiesModel {
+  progress?: boolean;                       // consume server progress notifications (default false)
+  elicitation?: "hitl" | "reject" | null;   // how to handle server-initiated elicitation
+  structured_output?: boolean;              // prefer CallToolResult.structuredContent (default true)
+}
+
+// dao-ai 0.2.x: advanced capabilities dao-ai emits when deployed AS an MCP
+// server (AppModel.mcp_server). Server-side complement to McpCapabilitiesModel.
+export interface McpResourceModel {
+  uri: string;
+  name: string;
+  description?: string;
+  mime_type?: string;                       // default "text/plain"
+  content: string;
+}
+
+export interface McpPromptArgumentModel {
+  name: string;
+  description?: string;
+  required?: boolean;                       // default false
+}
+
+export interface McpPromptModel {
+  name: string;
+  description?: string;
+  template: string;
+  arguments?: McpPromptArgumentModel[];
+}
+
+export interface McpServerCapabilitiesModel {
+  progress?: boolean;                       // emit progress notifications (default true)
+  resources?: McpResourceModel[];
+  prompts?: McpPromptModel[];
 }
 
 // ---------------------------------------------------------------------------
@@ -586,13 +731,15 @@ export interface McpFunctionModel {
 //   A2AToolModel               (config.py:5420)
 // ---------------------------------------------------------------------------
 
-export interface GenieFunctionModel {
+export interface GenieFunctionModel extends ToolAuditableFields {
   type: "genie";
   genie_room: GenieRoomModel | string;
   name?: string;
   description?: string;
   persist_conversation?: boolean;          // default: true
   truncate_results?: boolean;              // default: false
+  /** dao-ai 0.2.x+: return Genie's answer verbatim (skip LLM post-processing). */
+  verbatim?: boolean;
   lru_cache?: GenieLRUCacheParametersModel;
   context_aware_cache?: GenieContextAwareCacheParametersModel;
   in_memory_context_aware_cache?: GenieInMemoryContextAwareCacheParametersModel;
@@ -601,11 +748,56 @@ export interface GenieFunctionModel {
   human_in_the_loop?: HumanInTheLoopModel;
 }
 
-export interface VectorSearchFunctionModel {
-  type: "vector_search";
+// dao-ai 0.2.x: AI Search tool (renamed from VectorSearchToolModel; `type:
+// vector_search` still accepted as a legacy alias for `ai_search`).
+export interface AiSearchFunctionModel extends ToolAuditableFields {
+  type: "ai_search" | "vector_search";
   // Exactly one of retriever or vector_store is required.
-  retriever?: RetrieverModel | string;
-  vector_store?: VectorStoreModel | string;
+  retriever?: AiSearchRetrieverModel | string;
+  vector_store?: AiSearchVectorStoreModel | string;
+  name?: string;
+  description?: string;
+  human_in_the_loop?: HumanInTheLoopModel;
+}
+
+/** Backward-compatible alias for the pre-0.2.x name. */
+export type VectorSearchFunctionModel = AiSearchFunctionModel;
+
+// dao-ai 0.2.x: Lakebase retrieval tool. Exactly one of retriever or
+// vector_store is required.
+export interface LakebaseSearchFunctionModel extends ToolAuditableFields {
+  type: "lakebase_search";
+  retriever?: LakebaseRetrieverModel | string;
+  vector_store?: LakebaseVectorStoreModel | string;
+  name?: string;
+  description?: string;
+  human_in_the_loop?: HumanInTheLoopModel;
+}
+
+// dao-ai 0.2.x: single bound parameter for a first-class SQL tool. Values are
+// bound natively (`:name` for warehouse, `%(name)s` for Lakebase) — never
+// string-interpolated. `source: llm` surfaces the param in the tool schema the
+// model sees; `source: context` binds it server-side from the runtime Context.
+export type StatementParamSource = "llm" | "context";
+
+export interface StatementParam {
+  name: string;
+  type?: "string" | "int" | "float" | "bool";  // default: "string"
+  source?: StatementParamSource;                // default: "llm"
+  required?: boolean;                           // default: true
+  default?: any;
+  description?: string;
+  context_key?: string;                         // Context attribute to read (defaults to name)
+}
+
+// dao-ai 0.2.x: first-class SQL statement tool. Exactly one of warehouse or
+// database (Lakebase/Postgres) is required.
+export interface SqlFunctionModel extends ToolAuditableFields {
+  type: "sql";
+  warehouse?: WarehouseModel | string;
+  database?: DatabaseModel | string;
+  statement: string;
+  params?: StatementParam[];
   name?: string;
   description?: string;
   human_in_the_loop?: HumanInTheLoopModel;
@@ -614,12 +806,12 @@ export interface VectorSearchFunctionModel {
 // dao-ai 0.1.99 SearchToolModel uses `extra="forbid"` and only declares the
 // `type` discriminator -- no name, description, or HITL fields. The parent
 // `ToolModel.name` still applies (visible to the LLM); customization lives at
-// the factory form for everything else.
-export interface SearchFunctionModel {
+// the factory form for everything else. dao-ai 0.2.x adds audit/call_limit.
+export interface SearchFunctionModel extends ToolAuditableFields {
   type: "search";
 }
 
-export interface AppFunctionModel {
+export interface AppFunctionModel extends ToolAuditableFields {
   type: "app";
   app: DatabricksAppModel | string;
   api?: "responses" | "completions";       // default: lazy-probe /agent/info
@@ -628,7 +820,7 @@ export interface AppFunctionModel {
   human_in_the_loop?: HumanInTheLoopModel;
 }
 
-export interface ServingEndpointFunctionModel {
+export interface ServingEndpointFunctionModel extends ToolAuditableFields {
   type: "serving_endpoint";
   // String shorthand (endpoint name) OR full InferenceEndpointModel.
   endpoint: InferenceEndpointModel | string;
@@ -646,7 +838,7 @@ export type A2AFunctionAuthType =
   | "forwarded_user_token"
   | "databricks_app_sp";
 
-export interface A2AFunctionModel {
+export interface A2AFunctionModel extends ToolAuditableFields {
   type: "a2a";
   // Mode 1: endpoint (external A2A agent). Mode 2: app (Databricks App).
   endpoint?: VariableValue;
@@ -671,7 +863,9 @@ export type ToolFunctionModel =
   | UnityCatalogFunctionModel
   | McpFunctionModel
   | GenieFunctionModel
-  | VectorSearchFunctionModel
+  | AiSearchFunctionModel
+  | LakebaseSearchFunctionModel
+  | SqlFunctionModel
   | SearchFunctionModel
   | AppFunctionModel
   | ServingEndpointFunctionModel
@@ -814,10 +1008,44 @@ export interface ResponseFormatModel {
   response_schema?: string;
 }
 
+// dao-ai 0.2.x: a Genie space used as an agent's reasoning model (a streaming
+// "brain"). AgentModel.model may be either an InferenceEndpointModel or this.
+export interface GenieAgentModel {
+  genie_room: GenieRoomModel | string;
+  timeout_seconds?: number;   // default: 300
+}
+
+/** True when an agent's `model` is a Genie-space brain rather than a serving endpoint. */
+export function isGenieAgentModel(
+  model: InferenceEndpointModel | GenieAgentModel | string | undefined | null,
+): model is GenieAgentModel {
+  return !!model && typeof model === 'object' && 'genie_room' in model && !('name' in model);
+}
+
+/** Display name for an agent's model, handling both InferenceEndpointModel and GenieAgentModel. */
+export function modelDisplayName(
+  model: InferenceEndpointModel | GenieAgentModel | string | undefined | null,
+): string {
+  if (!model) return 'Unknown';
+  if (typeof model === 'string') return model;
+  if (isGenieAgentModel(model)) {
+    const gr = model.genie_room;
+    const roomName = typeof gr === 'string'
+      ? gr
+      : (gr?.name || (typeof gr?.space_id === 'string' ? gr.space_id : undefined));
+    return roomName ? `Genie: ${roomName}` : 'Genie Agent';
+  }
+  return model.name || 'Unknown';
+}
+
 export interface AgentModel {
   name: string;
   description?: string;
-  model: InferenceEndpointModel;
+  /**
+   * dao-ai 0.2.x: reasoning model — an InferenceEndpointModel (Model Serving
+   * chat endpoint) OR a GenieAgentModel (a Genie space used as the brain).
+   */
+  model: InferenceEndpointModel | GenieAgentModel;
   tools?: ToolModel[];
   guardrails?: GuardrailModel[];
   prompt?: string | PromptModel;
@@ -829,17 +1057,30 @@ export interface AgentModel {
    * Added in dao-ai 0.1.55. Defaults to LangGraph's 25 when null/omitted.
    */
   recursion_limit?: number | null;
+  /**
+   * dao-ai 0.2.x: cap LLM (model) calls this agent may make. Bare integer is
+   * shorthand for { run_limit: <int> }. Complements recursion_limit.
+   */
+  call_limit?: number | ModelCallLimitModel;
+  /**
+   * dao-ai 0.2.x: when true, this agent is filtered from the context of
+   * downstream non-internal agents (internal/helper agent).
+   */
+  internal?: boolean;
+  /** Prerequisite agents that must run before this one (swarm handoff constraints). */
+  requires?: string[];
 }
 
+// dao-ai 0.2.x removed the MLflow Prompt Registry + GEPA: PromptModel now
+// carries its template inline. `template` is required; `alias`, `version`,
+// `auto_register`, and `default_template` were removed.
+// dao-ai 0.2.6 cleaned up PromptModel: `schema`, `tags`, and the derived
+// `full_name` were removed (vestiges of the deleted MLflow Prompt Registry).
+// A prompt is now just a name + inline template (+ optional description).
 export interface PromptModel {
-  schema?: SchemaModel;
   name: string;
   description?: string;
-  default_template?: string;
-  alias?: string;
-  version?: number;
-  tags?: Record<string, any>;
-  auto_register?: boolean;  // Whether to automatically register the prompt in MLflow
+  template: string;
 }
 
 export interface PermissionModel {
@@ -860,8 +1101,12 @@ export interface SupervisorModel {
 }
 
 export interface HandoffRouteModel {
-  agent: AgentModel | string;
+  agent?: AgentModel | string;
   is_deterministic?: boolean;
+  /** dao-ai 0.2.x: parallel fan-out cohort — sibling agents run together. */
+  agents?: (AgentModel | string)[];
+  /** dao-ai 0.2.x: shared join agent for the fan-out cohort. */
+  join?: AgentModel | string;
 }
 
 export interface SwarmModel {
@@ -1015,6 +1260,8 @@ export interface OrchestrationModel {
    * AI/tool messages; last_message returns only the final AI response.
    */
   output_mode?: OrchestrationOutputMode;
+  /** dao-ai 0.2.x: LLM used to parse free-text HITL interrupt responses. */
+  interrupt_model?: InferenceEndpointModel | string;
 }
 
 export interface RegisteredModelModel {
@@ -1131,6 +1378,15 @@ export interface A2AModel {
   on_behalf_of_user?: boolean | null;  // three-state (null = auto-derive)
 }
 
+// dao-ai 0.2.x: reference an MLflow experiment by name and/or id. At least one
+// of name/id must be set. When AppModel.experiment is omitted, dao-ai falls
+// back to /Users/<deployer>/<app.name>.
+export interface ExperimentModel {
+  name?: VariableValue;   // full workspace path, e.g. "/Shared/team/agent_traces"
+  id?: VariableValue;     // numeric MLflow experiment id
+  create_if_not_exists?: boolean;  // default: true
+}
+
 export interface AppModel {
   name: string;
   description?: string;
@@ -1139,6 +1395,15 @@ export interface AppModel {
   registered_model?: RegisteredModelModel;  // Optional in dao-ai 0.1.55+
   endpoint_name?: string;
   trace_location?: TraceLocationModel;
+  /** dao-ai 0.2.x: reference/auto-create the MLflow experiment for traces. */
+  experiment?: ExperimentModel;
+  /**
+   * dao-ai 0.2.x: when true (default), dao-ai attempts UC + MLflow-experiment
+   * permission grants at deploy time. Set false if the deployer lacks GRANT.
+   */
+  manage_permissions?: boolean;
+  /** dao-ai 0.2.x: advertise server-side MCP capabilities (progress/resources/prompts). */
+  mcp_server?: McpServerCapabilitiesModel;
   monitoring?: MonitoringModel;
   /**
    * dao-ai 0.1.99+: opt-in background-agent persistence (Responses-API
@@ -1156,12 +1421,6 @@ export interface AppModel {
    * SP / user_api_scopes / governance.
    */
   space?: string;
-  /**
-   * dao-ai 0.1.99+: when true, the deployment is MCP-only and the
-   * agent-side validators (require at least one AgentModel, etc.) are
-   * skipped. Pair with `dao-ai generate-mcp` to ship a tools-only server.
-   */
-  mcp_only?: boolean;
   /**
    * dao-ai 0.1.80+: A2A protocol configuration. Defaults to a fresh
    * `A2AModel()` -- enabled with sensible defaults (skills derived from
@@ -1185,8 +1444,19 @@ export interface AppModel {
   budget_policy_id?: string;
   python_version?: string;  // Python version for the deployment environment
   workload_size?: "Small" | "Medium" | "Large";
-  // "both" is intentionally unsupported in the builder — pick one target.
+  /**
+   * BUILDER-UI-ONLY. dao-ai 0.2.x REMOVED AppModel.deployment_target — the
+   * deploy target (model_serving | apps) is now a deploy-action parameter
+   * (`deploy_agent(target=ServingMode.…)` / CLI), not config. The builder keeps
+   * this as local UI state to drive the target picker + deploy request, but the
+   * yaml-generator never emits it (mirrors the `_uiType` DatabaseModel pattern).
+   */
   deployment_target?: "model_serving" | "apps";
+  /**
+   * dao-ai 0.2.x: backend worker count for Databricks Apps (gunicorn, >0).
+   * Apps-target only; no effect on Model Serving.
+   */
+  workers?: number;
   permissions?: AppPermissionModel[];
   agents: AgentModel[];
   orchestration?: OrchestrationModel;
@@ -1196,6 +1466,8 @@ export interface AppModel {
   input_example?: ChatPayload;
   chat_history?: ChatHistoryModel;
   code_paths?: string[];
+  /** dao-ai 0.2.x: additional Databricks Asset Bundle resource files (*.yml). */
+  resource_paths?: string[];
   pip_requirements?: string[];
 }
 
@@ -1263,7 +1535,12 @@ export interface ResourcesModel {
    * import path migrates legacy `llms:` from imported YAML.
    */
   models?: Record<string, InferenceEndpointModel>;
-  vector_stores?: Record<string, VectorStoreModel>;
+  /**
+   * dao-ai 0.2.x: `vector_stores` is now a discriminated union on `type` —
+   * `ai_search` (default, Databricks AI Search) or `lakebase_search` (Lakebase
+   * Postgres). Entries omitting `type` are treated as AI Search (back-compat).
+   */
+  vector_stores?: Record<string, AnyVectorStore>;
   genie_rooms?: Record<string, GenieRoomModel>;
   tables?: Record<string, TableModel>;
   volumes?: Record<string, VolumeModel>;
@@ -1293,7 +1570,12 @@ export interface AppConfig {
   schemas?: Record<string, SchemaModel>;
   service_principals?: Record<string, ServicePrincipalModel>;
   resources?: ResourcesModel;
-  retrievers?: Record<string, RetrieverModel>;
+  /**
+   * dao-ai 0.2.x: `retrievers` is now a discriminated union on `type` —
+   * `ai_search` (default) or `lakebase_search`. Entries omitting `type` are
+   * treated as AI Search (back-compat).
+   */
+  retrievers?: Record<string, AnyRetriever>;
   tools?: Record<string, ToolModel>;
   guardrails?: Record<string, GuardrailModel>;
   middleware?: Record<string, MiddlewareModel>;
@@ -1302,9 +1584,12 @@ export interface AppConfig {
   agents?: Record<string, AgentModel>;
   app?: AppModel;
   evaluation?: EvaluationModel;
+  /**
+   * dao-ai 0.2.x removed GEPA prompt optimization; `prompt_optimizations` no
+   * longer exists. `training_datasets` (offline eval) is retained.
+   */
   optimizations?: {
     training_datasets?: Record<string, any>;
-    prompt_optimizations?: Record<string, any>;
   };
   datasets?: DatasetModel[];
   unity_catalog_functions?: UnityCatalogFunctionSqlModel[];

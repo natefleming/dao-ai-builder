@@ -18,8 +18,8 @@ import {
   WarehouseModel,
   ConnectionModel,
   DatabricksAppModel,
-  VectorStoreModel,
-  RetrieverModel,
+  AnyVectorStore,
+  AnyRetriever,
   ServicePrincipalModel,
   ParameterDeclarationModel,
   SkillModel,
@@ -165,13 +165,13 @@ interface ConfigState {
   removeServicePrincipal: (name: string) => void;
   
   // Vector Stores
-  addVectorStore: (name: string, vectorStore: VectorStoreModel) => void;
-  updateVectorStore: (name: string, updates: Partial<VectorStoreModel>) => void;
+  addVectorStore: (name: string, vectorStore: AnyVectorStore) => void;
+  updateVectorStore: (name: string, updates: Partial<AnyVectorStore>) => void;
   removeVectorStore: (name: string) => void;
   
   // Retrievers (top-level, not in resources)
-  addRetriever: (name: string, retriever: RetrieverModel) => void;
-  updateRetriever: (name: string, updates: Partial<RetrieverModel>) => void;
+  addRetriever: (name: string, retriever: AnyRetriever) => void;
+  updateRetriever: (name: string, updates: Partial<AnyRetriever>) => void;
   removeRetriever: (name: string) => void;
   
   // Tools
@@ -902,7 +902,9 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
     set((state) => {
       const vector_stores = { ...state.config.resources?.vector_stores };
       if (vector_stores?.[name]) {
-        vector_stores[name] = { ...vector_stores[name], ...updates };
+        // Cast: merging Partial<AnyVectorStore> onto a union loses the discriminant
+        // in TS's eyes, but the discriminant `type` is never changed by an update.
+        vector_stores[name] = { ...vector_stores[name], ...updates } as AnyVectorStore;
       }
       return {
         config: {
@@ -946,7 +948,7 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
     set((state) => {
       const retrievers = { ...state.config.retrievers };
       if (retrievers?.[name]) {
-        retrievers[name] = { ...retrievers[name], ...updates };
+        retrievers[name] = { ...retrievers[name], ...updates } as AnyRetriever;
       }
       return {
         config: {

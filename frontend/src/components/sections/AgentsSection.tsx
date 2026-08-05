@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, ChangeEvent } from 'react';
 import { Plus, Trash2, Bot, Pencil, FileText, Sparkles, Loader2 } from 'lucide-react';
 import { useConfigStore } from '@/stores/configStore';
 import Button from '../ui/Button';
@@ -9,7 +9,7 @@ import Card from '../ui/Card';
 import Modal from '../ui/Modal';
 import Badge from '../ui/Badge';
 import MultiSelect from '../ui/MultiSelect';
-import { AgentModel, AppConfig, PromptModel } from '@/types/dao-ai-types';
+import { AgentModel, AppConfig, PromptModel, modelDisplayName, isGenieAgentModel } from '@/types/dao-ai-types';
 import { normalizeRefNameWhileTyping } from '@/utils/name-utils';
 import { safeDelete } from '@/utils/safe-delete';
 import { useYamlScrollStore } from '@/stores/yamlScrollStore';
@@ -239,7 +239,7 @@ export default function AgentsSection() {
                 </div>
                 <div className="flex items-center space-x-3">
                   <Badge variant="info">
-                    {typeof agent.model === 'object' ? agent.model.name : agent.model}
+                    {modelDisplayName(agent.model)}
                   </Badge>
                   <Badge variant="default">{agent.tools?.length || 0} tools</Badge>
                   {agent.response_format && (
@@ -372,6 +372,8 @@ function AgentModal({
   onRemove,
 }: AgentModalProps) {
   const { config } = useConfigStore();
+  // dao-ai 0.2.x: Genie spaces usable as an agent's reasoning model.
+  const genieRooms = config.resources?.genie_rooms || {};
   const [promptSource, setPromptSource] = useState<PromptSource>('inline');
   const [isGeneratingPrompt, setIsGeneratingPrompt] = useState(false);
   const [isGeneratingHandoff, setIsGeneratingHandoff] = useState(false);
@@ -384,7 +386,15 @@ function AgentModal({
     refName: '',  // Reference name used as the key in YAML
     name: '',
     description: '',
+    // dao-ai 0.2.x: an agent's reasoning model is an InferenceEndpointModel
+    // (modelSource='endpoint') OR a GenieAgentModel (modelSource='genie').
+    modelSource: 'endpoint' as 'endpoint' | 'genie',
     modelKey: '',
+    genieRoomRef: '',              // reference key into resources.genie_rooms
+    genieTimeoutSeconds: '',       // optional; blank = dao-ai default (300)
+    // dao-ai 0.2.x: cap LLM calls (blank = unset) and mark internal/helper agents.
+    callLimit: '',
+    internal: false,
     promptRef: '', // Reference to configured prompt
     prompt: 'You are a helpful assistant.',
     handoffPrompt: '',
@@ -479,8 +489,13 @@ function AgentModal({
     if (!isOpen) return;
     
     if (editingAgent && editingKey) {
+      // Match by serving-endpoint name; a Genie-agent model has no `name` and
+      // won't match a configured InferenceEndpointModel.
+      const editingModelName = isGenieAgentModel(editingAgent.model)
+        ? undefined
+        : (editingAgent.model as { name?: string } | undefined)?.name;
       const modelKey = Object.entries(models).find(
-        ([, llm]) => llm.name === editingAgent.model?.name
+        ([, llm]) => llm.name === editingModelName
       )?.[0] || '';
       
       // Detect if using a configured prompt
@@ -535,10 +550,43 @@ function AgentModal({
         }
       }
       
+      // dao-ai 0.2.x: detect Genie-agent-as-model + call_limit/internal.
+      const isGenieModel = isGenieAgentModel(editingAgent.model);
+      const genieModel = editingAgent.model as { genie_room?: unknown; timeout_seconds?: number } | undefined;
+      let genieRoomRefVal = '';
+      if (isGenieModel) {
+        const gr = genieModel?.genie_room;
+        if (typeof gr === 'string') {
+          genieRoomRefVal = gr.startsWith('*') ? gr.slice(1) : gr;
+        } else if (gr) {
+          // Resolved inline room object (post yaml.load): match to a room key.
+          const room = gr as { space_id?: unknown; name?: string };
+          genieRoomRefVal = Object.entries(genieRooms).find(([, r]) =>
+            (room.space_id !== undefined && r.space_id === room.space_id) ||
+            (room.name !== undefined && r.name === room.name),
+          )?.[0] || '';
+        }
+      }
+      const genieTimeoutVal = isGenieModel && genieModel?.timeout_seconds != null
+        ? String(genieModel.timeout_seconds) : '';
+      const callLimitVal = typeof editingAgent.call_limit === 'number'
+        ? String(editingAgent.call_limit)
+        : (editingAgent.call_limit?.run_limit != null ? String(editingAgent.call_limit.run_limit) : '');
+      const internalVal = editingAgent.internal === true;
+
+      const modelExtras = {
+        modelSource: (isGenieModel ? 'genie' : 'endpoint') as 'endpoint' | 'genie',
+        genieRoomRef: genieRoomRefVal,
+        genieTimeoutSeconds: genieTimeoutVal,
+        callLimit: callLimitVal,
+        internal: internalVal,
+      };
+
       const newFormData = {
         refName: editingKey, // Use the existing key as refName
         name: editingAgent.name,
         description: editingAgent.description || '',
+        ...modelExtras,
         modelKey,
         promptRef,
         prompt: inlinePrompt,
@@ -551,12 +599,13 @@ function AgentModal({
         responseSchema,
         useTool,
       };
-      
+
       // Create a separate copy for initial state comparison
       const initialData = {
         refName: editingKey,
         name: editingAgent.name,
         description: editingAgent.description || '',
+        ...modelExtras,
         modelKey,
         promptRef,
         prompt: inlinePrompt,
@@ -580,7 +629,12 @@ function AgentModal({
         refName: '',
         name: '',
         description: '',
+        modelSource: 'endpoint' as 'endpoint' | 'genie',
         modelKey: '',
+        genieRoomRef: '',
+        genieTimeoutSeconds: '',
+        callLimit: '',
+        internal: false,
         promptRef: '',
         prompt: 'You are a helpful assistant.',
         handoffPrompt: '',
@@ -604,7 +658,13 @@ function AgentModal({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!formData.refName || !formData.name || !formData.modelKey || !models[formData.modelKey]) return;
+    // dao-ai 0.2.x: require either a serving-endpoint model or a Genie room.
+    if (!formData.refName || !formData.name) return;
+    if (formData.modelSource === 'genie') {
+      if (!formData.genieRoomRef) return;
+    } else if (!formData.modelKey || !models[formData.modelKey]) {
+      return;
+    }
 
     // Determine prompt value based on source
     let promptValue: string | PromptModel | undefined;
@@ -624,16 +684,28 @@ function AgentModal({
       };
     }
 
+    // dao-ai 0.2.x: model is either a serving endpoint or a Genie-space brain.
+    const agentModel = formData.modelSource === 'genie'
+      ? {
+          genie_room: `__REF__${formData.genieRoomRef}` as unknown as string,
+          ...(formData.genieTimeoutSeconds && { timeout_seconds: parseInt(formData.genieTimeoutSeconds) }),
+        }
+      : models[formData.modelKey];
+
+    const callLimitNum = formData.callLimit ? parseInt(formData.callLimit) : undefined;
+
     const agent: AgentModel = {
       name: formData.name,
       description: formData.description || undefined,
-      model: models[formData.modelKey],
+      model: agentModel,
       prompt: promptValue,
       handoff_prompt: formData.handoffPrompt || undefined,
       tools: formData.selectedTools.map((key) => tools[key]).filter(Boolean),
       guardrails: formData.selectedGuardrails.map((key) => guardrails[key]).filter(Boolean),
       middleware: formData.selectedMiddleware.map((key) => middleware[key]).filter(Boolean),
       response_format: responseFormat,
+      ...(callLimitNum && !Number.isNaN(callLimitNum) && { call_limit: callLimitNum }),
+      ...(formData.internal && { internal: true }),
     };
 
     if (editingKey) {
@@ -708,14 +780,51 @@ function AgentModal({
             hint="Type naturally - spaces become underscores"
             required
           />
-          <Select
-            label="Model"
-            options={llmOptions}
-            value={formData.modelKey}
-            onChange={(e) => setFormData({ ...formData, modelKey: e.target.value })}
-            placeholder="Select an LLM..."
-            required
-          />
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium text-slate-300">Model</label>
+              {/* dao-ai 0.2.x: reasoning model may be a serving endpoint or a Genie space. */}
+              <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setFormData({ ...formData, modelSource: 'endpoint', genieRoomRef: '' })}
+                  className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${formData.modelSource === 'endpoint' ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40' : 'text-slate-400 border border-transparent hover:text-slate-300'}`}
+                >
+                  Serving Endpoint
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFormData({ ...formData, modelSource: 'genie', modelKey: '' })}
+                  className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${formData.modelSource === 'genie' ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40' : 'text-slate-400 border border-transparent hover:text-slate-300'}`}
+                >
+                  Genie Space
+                </button>
+              </div>
+            </div>
+            {formData.modelSource === 'endpoint' ? (
+              <Select
+                options={llmOptions}
+                value={formData.modelKey}
+                onChange={(e) => setFormData({ ...formData, modelKey: e.target.value })}
+                placeholder="Select an LLM..."
+                required
+              />
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                <Select
+                  options={[{ value: '', label: 'Select Genie space...' }, ...Object.keys(genieRooms).map(k => ({ value: k, label: k }))]}
+                  value={formData.genieRoomRef}
+                  onChange={(e) => setFormData({ ...formData, genieRoomRef: e.target.value })}
+                  required
+                />
+                <Input
+                  placeholder="Timeout seconds (default 300)"
+                  value={formData.genieTimeoutSeconds}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, genieTimeoutSeconds: e.target.value.replace(/[^0-9]/g, '') })}
+                />
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-4">
@@ -791,10 +900,10 @@ function AgentModal({
                   {prompts[formData.promptRef].description && (
                     <p className="text-xs text-slate-400 mb-2">{prompts[formData.promptRef].description}</p>
                   )}
-                  {prompts[formData.promptRef].default_template && (
+                  {prompts[formData.promptRef].template && (
                     <pre className="text-xs text-slate-500 bg-slate-900/50 p-2 rounded overflow-auto max-h-32">
-                      {prompts[formData.promptRef].default_template?.substring(0, 300)}
-                      {(prompts[formData.promptRef].default_template?.length || 0) > 300 ? '...' : ''}
+                      {prompts[formData.promptRef].template?.substring(0, 300)}
+                      {(prompts[formData.promptRef].template?.length || 0) > 300 ? '...' : ''}
                     </pre>
                   )}
                 </div>
@@ -1034,6 +1143,27 @@ function AgentModal({
           placeholder="Select middleware..."
           hint="Middleware to customize agent execution behavior"
         />
+
+        {/* dao-ai 0.2.x: LLM call cap + internal-agent visibility */}
+        <div className="grid grid-cols-2 gap-4 p-4 bg-slate-800/30 rounded-lg border border-slate-700/50">
+          <Input
+            label="Call Limit (optional)"
+            placeholder="Max LLM calls per run"
+            value={formData.callLimit}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, callLimit: e.target.value.replace(/[^0-9]/g, '') })}
+            hint="Caps LLM (model) calls this agent may make"
+          />
+          <label className="flex items-center space-x-2 cursor-pointer mt-6">
+            <input
+              type="checkbox"
+              checked={formData.internal}
+              onChange={(e) => setFormData({ ...formData, internal: e.target.checked })}
+              className="rounded border-slate-600 bg-slate-800 text-violet-500 focus:ring-violet-500"
+            />
+            <span className="text-sm text-slate-300">Internal agent</span>
+            <span className="text-xs text-slate-500">(hidden from downstream non-internal agents)</span>
+          </label>
+        </div>
 
         {/* Response Format Configuration */}
         <div className="space-y-3 p-4 bg-slate-800/30 rounded-lg border border-slate-700/50">

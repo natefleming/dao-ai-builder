@@ -1,5 +1,5 @@
 import yaml from 'js-yaml';
-import { AppConfig, VariableModel, DatabaseModel, OrchestrationModel, ToolFunctionModel, HumanInTheLoopModel } from '@/types/dao-ai-types';
+import { AppConfig, VariableModel, DatabaseModel, OrchestrationModel, ToolFunctionModel, HumanInTheLoopModel, AiSearchVectorStoreModel, LakebaseVectorStoreModel, LakebaseRetrieverModel, StatementParam } from '@/types/dao-ai-types';
 import { getYamlReferences, getOriginalAnchorName, getRequiredMergeAnchors, getRequiredAliasAnchors, setSectionAnchor, getSectionAnchor, clearSectionAnchors } from './yaml-references';
 
 /**
@@ -263,6 +263,9 @@ function addYamlAnchors(yamlString: string): string {
     'connections',
     'databases',
     'apps',
+    // dao-ai 0.1.73+: skills are referenced by anchor from
+    // orchestration.deep_agent.skills / subagents[].skills.
+    'skills',
   ];
   
   // Sections that should NOT have anchors
@@ -462,6 +465,10 @@ function convertReferencesToAliases(yamlString: string): string {
  * Use this when you want to reference a previously defined resource.
  */
 function createReference(refName: string): string {
+  // Idempotent: forms may pass a value that is already a "__REF__<name>" marker
+  // (or a raw "*alias"); never double-wrap it.
+  if (refName.startsWith('__REF__')) return refName;
+  if (refName.startsWith('*')) return `__REF__${refName.slice(1)}`;
   return `__REF__${refName}`;
 }
 
@@ -673,7 +680,7 @@ export function processObjectWithReferences(
  * @param definedModels - Map of defined inference-endpoint keys to InferenceEndpointModel objects
  * @param basePath - The path in the YAML structure (e.g., "agents.my_agent.model") for reference lookup
  */
-function formatModelReference(model: any, definedModels: Record<string, any>, basePath?: string): any {
+function formatModelReference(model: any, definedModels: Record<string, any>, basePath?: string, definedGenieRooms?: Record<string, any>): any {
   if (typeof model === 'string') {
     // If it's a string, check if it's a defined LLM reference
     if (definedModels[model]) {
@@ -681,7 +688,34 @@ function formatModelReference(model: any, definedModels: Record<string, any>, ba
     }
     return model;
   }
-  
+
+  // dao-ai 0.2.x: an agent's model may be a GenieAgentModel (Genie space used
+  // as the reasoning brain) — identified by `genie_room` rather than `name`.
+  if (model && typeof model === 'object' && 'genie_room' in model && !('name' in model)) {
+    const gr = model.genie_room;
+    let genieRoom: any;
+    if (typeof gr === 'string') {
+      genieRoom = createReference(gr.startsWith('*') ? gr.slice(1) : gr);
+    } else {
+      // Resolve to a *alias when the room matches a configured genie_room:
+      // first via the imported-YAML reference for this path, then by identity.
+      const roomRef = basePath ? findOriginalReference(`${basePath}.genie_room`, gr) : null;
+      const rooms = definedGenieRooms || {};
+      const matchKey = roomRef && rooms[roomRef]
+        ? roomRef
+        : Object.entries(rooms).find(([, r]) =>
+            ((r as any).space_id !== undefined && (r as any).space_id === gr?.space_id) ||
+            ((r as any).name !== undefined && (r as any).name === gr?.name),
+          )?.[0];
+      genieRoom = matchKey ? createReference(matchKey) : gr;
+    }
+    return {
+      genie_room: genieRoom,
+      ...(model.timeout_seconds !== undefined && model.timeout_seconds !== 300 && { timeout_seconds: model.timeout_seconds }),
+    };
+  }
+
+
   if (model && typeof model === 'object' && model.name) {
     // FIRST: Check if we have an original reference for this path
     // This is critical to preserve the correct reference when multiple LLMs have the same name
@@ -715,6 +749,7 @@ function formatModelReference(model: any, definedModels: Record<string, any>, ba
       ...(model.disable_streaming !== undefined && { disable_streaming: model.disable_streaming }),
       ...(model.ai_gateway !== undefined && { ai_gateway: model.ai_gateway }),
       ...(model.fallbacks && model.fallbacks.length > 0 && { fallbacks: model.fallbacks }),
+      ...(model.extra_params && Object.keys(model.extra_params).length > 0 && { extra_params: model.extra_params }),
     };
   }
   
@@ -931,9 +966,38 @@ function formatOrchestration(
   definedMiddleware: Record<string, any>,
   definedAgents: Record<string, any>,
   definedSkills: Record<string, any> = {},
+  definedGenieRooms: Record<string, any> = {},
 ): any {
   const result: any = {};
-  
+
+  // dao-ai 0.2.x: resolve a tool entry (string key or resolved object) to a
+  // *alias when it matches a defined tool. Shared by deep_agent + subagents.
+  const resolveToolRef = (tool: any): any => {
+    const toolName = typeof tool === 'string' ? tool : tool?.name;
+    if (!toolName) return tool;
+    if (definedTools[toolName]) return createReference(toolName);
+    const matched = Object.entries(definedTools).find(([, t]) => (t as any).name === toolName);
+    return matched ? createReference(matched[0]) : createReference(toolName);
+  };
+  const resolveMiddlewareRef = (mw: any): any => {
+    if (typeof mw === 'string') return mw.startsWith('*') ? createReference(mw.slice(1)) : createReference(mw);
+    const mwName = mw?.name;
+    if (!mwName) return mw;
+    const matched = Object.entries(definedMiddleware).find(([, m]) => (m as any).name === mwName);
+    return matched ? createReference(matched[0]) : createReference(mwName);
+  };
+  const resolveSkillRef = (skill: any): any => {
+    const skillRefName = (defKey: string) => getOriginalAnchorName(`resources.skills.${defKey}`) || defKey;
+    if (typeof skill === 'string') {
+      const k = skill.startsWith('*') ? skill.slice(1) : skill;
+      return definedSkills[k] ? createReference(skillRefName(k)) : skill;
+    }
+    const skillName = skill?.name;
+    if (skillName && definedSkills[skillName]) return createReference(skillRefName(skillName));
+    const matched = skillName && Object.entries(definedSkills).find(([, s]) => (s as any).name === skillName);
+    return matched ? createReference(skillRefName(matched[0])) : skill;
+  };
+
   if (orchestration.supervisor) {
     // Format supervisor tools as references - tools should be referenced using *tool_name
     let supervisorToolsValue: string[] | undefined;
@@ -1064,15 +1128,25 @@ function formatOrchestration(
           } else {
             // Specific targets - create references to agents or HandoffRouteModel objects
             result.swarm.handoffs[agentName] = targets.map(t => {
-              // Check if this is a HandoffRouteModel (has 'agent' and 'is_deterministic' fields)
-              if (typeof t === 'object' && t !== null && 'agent' in t && 'is_deterministic' in t) {
-                const handoffRoute = t as { agent: string | { name: string }; is_deterministic: boolean };
-                const agentRef = findAgentReference(handoffRoute.agent);
-                if (handoffRoute.is_deterministic) {
-                  return { agent: agentRef, is_deterministic: true };
+              if (typeof t === 'object' && t !== null) {
+                // dao-ai 0.2.x: parallel fan-out cohort — { agents: [...], join? }.
+                if ('agents' in t && Array.isArray((t as any).agents)) {
+                  const route = t as { agents: any[]; join?: any };
+                  return {
+                    agents: route.agents.map((a) => findAgentReference(a)),
+                    ...(route.join !== undefined && route.join !== null && { join: findAgentReference(route.join) }),
+                  };
                 }
-                // Non-deterministic HandoffRouteModel: emit as plain agent reference
-                return agentRef;
+                // HandoffRouteModel single-target (agent + is_deterministic).
+                if ('agent' in t && 'is_deterministic' in t) {
+                  const handoffRoute = t as { agent: string | { name: string }; is_deterministic: boolean };
+                  const agentRef = findAgentReference(handoffRoute.agent);
+                  if (handoffRoute.is_deterministic) {
+                    return { agent: agentRef, is_deterministic: true };
+                  }
+                  // Non-deterministic HandoffRouteModel: emit as plain agent reference
+                  return agentRef;
+                }
               }
               // Plain string or AgentModel - standard agentic handoff
               return findAgentReference(t);
@@ -1139,20 +1213,7 @@ function formatOrchestration(
 
     // Tools — resolve to *tool_name when the entry is a known tool
     if (Array.isArray(da.tools) && da.tools.length > 0) {
-      deepAgent.tools = da.tools.map((tool: any) => {
-        const toolName = typeof tool === 'string' ? tool : tool?.name;
-        if (toolName && definedTools[toolName]) {
-          return createReference(toolName);
-        }
-        if (toolName) {
-          const matched = Object.entries(definedTools).find(
-            ([, t]) => (t as any).name === toolName,
-          );
-          if (matched) return createReference(matched[0]);
-          return createReference(toolName);
-        }
-        return tool;
-      });
+      deepAgent.tools = da.tools.map(resolveToolRef);
     }
 
     // System prompt — string passes through; PromptModel emits as-is
@@ -1162,51 +1223,52 @@ function formatOrchestration(
 
     // Middleware — same resolution as supervisor.middleware
     if (Array.isArray(da.middleware) && da.middleware.length > 0) {
-      deepAgent.middleware = da.middleware.map((mw: any) => {
-        if (typeof mw === 'string') {
-          return mw.startsWith('*') ? createReference(mw.slice(1)) : createReference(mw);
-        }
-        const mwName = mw?.name;
-        if (mwName) {
-          const matched = Object.entries(definedMiddleware).find(
-            ([, m]) => (m as any).name === mwName,
-          );
-          if (matched) return createReference(matched[0]);
-          return createReference(mwName);
-        }
-        return mw;
-      });
+      deepAgent.middleware = da.middleware.map(resolveMiddlewareRef);
     }
 
-    // Subagents — strings resolve against config.agents; inline objects
-    // pass through verbatim so SubAgentModel fields round-trip.
+    // Subagents — three forms (dao-ai): (1) a reference to a defined agent
+    // (AgentModel anchor), (2) a string name looked up in app.agents, (3) an
+    // inline SubAgentModel dict. Forms 1/2 emit as *alias; form 3 stays inline
+    // but its nested model/tools/middleware/skills refs are converted to
+    // aliases (post-yaml.load they arrive as resolved objects).
     if (Array.isArray(da.subagents) && da.subagents.length > 0) {
+      const subAgentKeyByName = (name: string): string | null => {
+        if (definedAgents[name]) return getOriginalAnchorName(`agents.${name}`) || name;
+        const matched = Object.entries(definedAgents).find(([, a]) => (a as any).name === name);
+        return matched ? (getOriginalAnchorName(`agents.${matched[0]}`) || matched[0]) : null;
+      };
       deepAgent.subagents = da.subagents.map((sub: any) => {
         if (typeof sub === 'string') {
-          if (definedAgents[sub]) return createReference(sub);
-          const matched = Object.entries(definedAgents).find(
-            ([, a]) => (a as any).name === sub,
-          );
-          return matched ? createReference(matched[0]) : sub;
+          const key = subAgentKeyByName(sub);
+          return key ? createReference(key) : sub;
         }
-        // Inline SubAgentModel/AgentModel — emit as-is. Tool refs inside
-        // sub-agents are not rewritten to YAML aliases here; the dao-ai
-        // config_vars layer resolves them at load time by string lookup.
-        return sub;
+        // An inline object that actually matches a defined top-level agent
+        // (Form 1, resolved by yaml.load) should collapse back to a *alias.
+        if (sub && typeof sub === 'object' && sub.name) {
+          const matchKey = Object.entries(definedAgents).find(
+            ([, a]) => JSON.stringify(a) === JSON.stringify(sub),
+          )?.[0] || (definedAgents[sub.name] ? sub.name : null);
+          if (matchKey) return createReference(getOriginalAnchorName(`agents.${matchKey}`) || matchKey);
+        }
+        // Genuine inline SubAgentModel — convert its nested references.
+        const out: any = { ...sub };
+        if (sub.model !== undefined && sub.model !== null) {
+          out.model = typeof sub.model === 'string'
+            ? sub.model
+            : formatModelReference(sub.model, definedModels, undefined, definedGenieRooms);
+        }
+        if (Array.isArray(sub.tools) && sub.tools.length > 0) out.tools = sub.tools.map(resolveToolRef);
+        if (Array.isArray(sub.middleware) && sub.middleware.length > 0) out.middleware = sub.middleware.map(resolveMiddlewareRef);
+        if (Array.isArray(sub.skills) && sub.skills.length > 0) out.skills = sub.skills.map(resolveSkillRef);
+        return out;
       });
     }
 
-    // Skills — strings resolve against config.resources.skills as *alias
+    // Skills — resolve against config.resources.skills and emit *alias, using
+    // the original anchor name when the YAML key differs from it (e.g. key
+    // `governed_lookup` with anchor `&governed_lookup_skill`).
     if (Array.isArray(da.skills) && da.skills.length > 0) {
-      deepAgent.skills = da.skills.map((skill: any) => {
-        if (typeof skill === 'string') {
-          if (definedSkills[skill]) return createReference(skill);
-          return skill;
-        }
-        const skillName = skill?.name;
-        if (skillName && definedSkills[skillName]) return createReference(skillName);
-        return skill;
-      });
+      deepAgent.skills = da.skills.map(resolveSkillRef);
     }
 
     // Instruction files — plain string array
@@ -1243,6 +1305,15 @@ function formatOrchestration(
     }
 
     result.deep_agent = deepAgent;
+  }
+
+  // dao-ai 0.2.x: LLM used to parse free-text HITL interrupt responses.
+  if ((orchestration as any).interrupt_model) {
+    result.interrupt_model = formatModelReference(
+      (orchestration as any).interrupt_model,
+      definedModels,
+      'orchestration.interrupt_model',
+    );
   }
 
   // Handle memory - can be a string reference like '*memory' or a MemoryModel object
@@ -1550,13 +1621,22 @@ function formatToolFunction(func: ToolFunctionModel, toolKey?: string, definedCo
     if ('exclude_tools' in func && func.exclude_tools && (func.exclude_tools as string[]).length > 0) {
       result.exclude_tools = func.exclude_tools;
     }
+    // dao-ai 0.2.x: advanced MCP client capabilities.
+    if ('capabilities' in func && (func as any).capabilities) {
+      const cap = (func as any).capabilities as { progress?: boolean; elicitation?: string | null; structured_output?: boolean };
+      const capOut: Record<string, any> = {};
+      if (cap.progress === true) capOut.progress = true;
+      if (cap.elicitation) capOut.elicitation = cap.elicitation;
+      if (cap.structured_output === false) capOut.structured_output = false;
+      if (Object.keys(capOut).length > 0) result.capabilities = capOut;
+    }
   }
 
   // dao-ai 0.1.99+ first-class shortcut tool types.
   // Each emits the shortcut form (e.g. `type: genie` + `genie_room: *room`)
   // rather than the legacy `type: factory + name: dao_ai.tools.create_*` wrapper.
   // Authoritative shapes: src/dao_ai/config.py:5073-5555.
-  const SHORTCUT_TYPES = ['genie', 'vector_search', 'search', 'app', 'serving_endpoint', 'a2a'];
+  const SHORTCUT_TYPES = ['genie', 'ai_search', 'vector_search', 'lakebase_search', 'sql', 'search', 'app', 'serving_endpoint', 'a2a'];
   if (SHORTCUT_TYPES.includes(func.type)) {
     const f = func as any;
     // SearchToolModel has `extra="forbid"` and rejects description.
@@ -1594,14 +1674,36 @@ function formatToolFunction(func: ToolFunctionModel, toolKey?: string, definedCo
       if (f.max_consecutive_cache_hits !== undefined && f.max_consecutive_cache_hits !== null) {
         result.max_consecutive_cache_hits = f.max_consecutive_cache_hits;
       }
+      if (f.verbatim === true) result.verbatim = true;
       if (f.lru_cache) result.lru_cache = f.lru_cache;
       if (f.context_aware_cache) result.context_aware_cache = f.context_aware_cache;
       if (f.in_memory_context_aware_cache) result.in_memory_context_aware_cache = f.in_memory_context_aware_cache;
-    } else if (func.type === 'vector_search') {
+    } else if (func.type === 'ai_search' || func.type === 'vector_search' || func.type === 'lakebase_search') {
+      // dao-ai 0.2.x: AI Search (canonical `ai_search`, legacy `vector_search`)
+      // and Lakebase (`lakebase_search`) tools share the retriever XOR
+      // vector_store shape. The `type` discriminator is preserved verbatim.
       const r = refOrInline('retriever', f.retriever);
       if (r !== undefined) result.retriever = r;
       const vs = refOrInline('vector_store', f.vector_store);
       if (vs !== undefined) result.vector_store = vs;
+    } else if (func.type === 'sql') {
+      // dao-ai 0.2.x: first-class SQL statement tool (warehouse XOR database).
+      const wh = refOrInline('warehouse', f.warehouse);
+      if (wh !== undefined) result.warehouse = wh;
+      const db = refOrInline('database', f.database);
+      if (db !== undefined) result.database = db;
+      if (f.statement) result.statement = f.statement;
+      if (Array.isArray(f.params) && f.params.length > 0) {
+        result.params = (f.params as StatementParam[]).map((p) => ({
+          name: p.name,
+          ...(p.type && p.type !== 'string' && { type: p.type }),
+          ...(p.source && p.source !== 'llm' && { source: p.source }),
+          ...(p.required === false && { required: false }),
+          ...(p.default !== undefined && p.default !== null && { default: p.default }),
+          ...(p.description && { description: p.description }),
+          ...(p.context_key && { context_key: p.context_key }),
+        }));
+      }
     } else if (func.type === 'app') {
       const a = refOrInline('app', f.app, definedApps);
       if (a !== undefined) result.app = a;
@@ -1635,12 +1737,53 @@ function formatToolFunction(func: ToolFunctionModel, toolKey?: string, definedCo
     }
   }
 
+  // dao-ai 0.2.x: audit + call_limit apply to every tool function.
+  if ('audit' in func && (func as any).audit) {
+    result.audit = formatAudit((func as any).audit, toolKey);
+  }
+  if ('call_limit' in func && (func as any).call_limit != null) {
+    result.call_limit = formatCallLimit((func as any).call_limit);
+  }
+
   // Add Human In The Loop if present (applies to all types)
   if ('human_in_the_loop' in func && func.human_in_the_loop) {
     result.human_in_the_loop = formatHITL(func.human_in_the_loop);
   }
 
   return result;
+}
+
+/**
+ * dao-ai 0.2.x: emit a tool's `audit` block (tamper-evident receipts). The
+ * `database` may be an inline DatabaseModel or a reference key.
+ */
+function formatAudit(audit: { database: DatabaseModel | string; table?: string; nonce_ttl_seconds?: number }, toolKey?: string): any {
+  const path = toolKey ? `tools.${toolKey}.function.audit.database` : 'function.audit.database';
+  let database: any;
+  if (typeof audit.database === 'string') {
+    database = createReference(audit.database.startsWith('*') ? audit.database.slice(1) : audit.database);
+  } else {
+    const ref = findOriginalReference(path, audit.database);
+    database = ref ? createReference(ref) : formatDatabaseRef(audit.database, path);
+  }
+  return {
+    database,
+    ...(audit.table && audit.table !== 'audit_receipts' && { table: audit.table }),
+    ...(audit.nonce_ttl_seconds != null && audit.nonce_ttl_seconds !== 300 && { nonce_ttl_seconds: audit.nonce_ttl_seconds }),
+  };
+}
+
+/**
+ * dao-ai 0.2.x: emit a `call_limit`. A bare number is passed through as
+ * shorthand for { run_limit: <n> }; otherwise emit the structured object.
+ */
+function formatCallLimit(callLimit: number | { run_limit?: number | null; thread_limit?: number | null; exit_behavior?: string }): any {
+  if (typeof callLimit === 'number') return callLimit;
+  const out: Record<string, any> = {};
+  if (callLimit.run_limit != null) out.run_limit = callLimit.run_limit;
+  if (callLimit.thread_limit != null) out.thread_limit = callLimit.thread_limit;
+  if (callLimit.exit_behavior) out.exit_behavior = callLimit.exit_behavior;
+  return out;
 }
 
 /**
@@ -1671,7 +1814,11 @@ function formatDatabaseRef(database: DatabaseModel, basePath?: string): any {
   if (database.host) {
     db.host = formatCredentialWithPath(database.host, basePath ? `${basePath}.host` : undefined);
   }
-  
+  // dao-ai 0.2.x: Databricks Lakebase resource id
+  if (database.database_id) {
+    db.database_id = formatCredentialWithPath(database.database_id, basePath ? `${basePath}.database_id` : undefined);
+  }
+
   // Common fields
   if (database.description) db.description = database.description;
   if (database.max_pool_size) db.max_pool_size = database.max_pool_size;
@@ -1721,8 +1868,88 @@ function formatDatabaseRef(database: DatabaseModel, basePath?: string): any {
   if (database.on_behalf_of_user && (database.instance_name || database.project)) {
     db.on_behalf_of_user = database.on_behalf_of_user;
   }
-  
+
   return db;
+}
+
+/**
+ * Resolve a `database` field that may be an inline DatabaseModel, a string
+ * reference key, or an object that matches a defined `resources.databases`
+ * entry. Emits a YAML alias (`*key`) when a reference is found, else an inline
+ * database block. Mirrors the pattern used for memory.checkpointer.database.
+ */
+function formatDatabaseFieldRef(
+  database: DatabaseModel | string | undefined,
+  path: string,
+  definedDatabases: Record<string, DatabaseModel>,
+): any {
+  if (!database) return undefined;
+  if (typeof database === 'string') {
+    return createReference(database.startsWith('*') ? database.slice(1) : database);
+  }
+  const dbRef = findOriginalReference(path, database);
+  if (dbRef) {
+    return createReference(dbRef);
+  }
+  const matchingDbKey = Object.entries(definedDatabases).find(([, d]) => {
+    if (database.instance_name && d.instance_name === database.instance_name) return true;
+    if (database.project && d.project === database.project) return true;
+    if (database.name && d.name === database.name) return true;
+    return false;
+  })?.[0];
+  if (matchingDbKey) {
+    return createReference(matchingDbKey);
+  }
+  return formatDatabaseRef(database, path);
+}
+
+/**
+ * dao-ai 0.2.x: emit AppModel.experiment (name/id may be AnyVariable).
+ */
+function formatExperiment(experiment: { name?: unknown; id?: unknown; create_if_not_exists?: boolean }): any {
+  return {
+    ...(experiment.name != null && experiment.name !== '' && { name: formatCredential(experiment.name) }),
+    ...(experiment.id != null && experiment.id !== '' && { id: formatCredential(experiment.id) }),
+    // Default is true — only emit when explicitly disabled.
+    ...(experiment.create_if_not_exists === false && { create_if_not_exists: false }),
+  };
+}
+
+/**
+ * dao-ai 0.2.x: emit AppModel.mcp_server (server-side MCP capabilities).
+ */
+function formatMcpServerCapabilities(mcp: {
+  progress?: boolean;
+  resources?: Array<Record<string, any>>;
+  prompts?: Array<Record<string, any>>;
+}): any {
+  const out: Record<string, any> = {};
+  // Default is true — only emit when explicitly disabled.
+  if (mcp.progress === false) out.progress = false;
+  if (mcp.resources && mcp.resources.length > 0) {
+    out.resources = mcp.resources.map((r) => ({
+      uri: r.uri,
+      name: r.name,
+      ...(r.description && { description: r.description }),
+      ...(r.mime_type && r.mime_type !== 'text/plain' && { mime_type: r.mime_type }),
+      content: r.content,
+    }));
+  }
+  if (mcp.prompts && mcp.prompts.length > 0) {
+    out.prompts = mcp.prompts.map((p) => ({
+      name: p.name,
+      ...(p.description && { description: p.description }),
+      template: p.template,
+      ...(p.arguments && p.arguments.length > 0 && {
+        arguments: p.arguments.map((a: Record<string, any>) => ({
+          name: a.name,
+          ...(a.description && { description: a.description }),
+          ...(a.required === true && { required: true }),
+        })),
+      }),
+    }));
+  }
+  return out;
 }
 
 /**
@@ -1925,6 +2152,10 @@ export function generateYAML(config: AppConfig): string {
       if (param.default !== undefined && param.default !== null) {
         entry.default = param.default;
       }
+      // dao-ai 0.2.x: value supplied dynamically at runtime.
+      if (param.provided === true) {
+        entry.provided = true;
+      }
       yamlConfig.parameters[key] = entry;
     });
   }
@@ -2032,15 +2263,43 @@ export function generateYAML(config: AppConfig): string {
 
     if (config.resources!.vector_stores && Object.keys(config.resources!.vector_stores).length > 0) {
       const definedVolumes = config.resources!.volumes || {};
+      const definedDatabases = config.resources!.databases || {};
       yamlConfig.resources.vector_stores = {};
-      Object.entries(config.resources!.vector_stores).forEach(([key, vs]) => {
-        
+      Object.entries(config.resources!.vector_stores).forEach(([key, vsAny]) => {
+
+        // dao-ai 0.2.x: dispatch on the `type` discriminator. `lakebase_search`
+        // targets a Lakebase Postgres table; anything else (incl. omitted type)
+        // is AI Search — emitted exactly as before to preserve back-compat.
+        if ((vsAny as LakebaseVectorStoreModel).type === 'lakebase_search') {
+          const vs = vsAny as LakebaseVectorStoreModel;
+          const embeddingModelRef = findOriginalReference(
+            `resources.vector_stores.${key}.embedding_model`, vs.embedding_model);
+          yamlConfig.resources.vector_stores[key] = {
+            type: 'lakebase_search',
+            database: formatDatabaseFieldRef(vs.database, `resources.vector_stores.${key}.database`, definedDatabases),
+            ...(vs.schema_name && vs.schema_name !== 'public' && { schema_name: vs.schema_name }),
+            table: vs.table,
+            ...(vs.id_column && vs.id_column !== 'id' && { id_column: vs.id_column }),
+            content_column: vs.content_column,
+            embedding_column: vs.embedding_column,
+            ...(vs.tsvector_column && { tsvector_column: vs.tsvector_column }),
+            ...(vs.metadata_columns && vs.metadata_columns.length > 0 && { metadata_columns: vs.metadata_columns }),
+            embedding_model: embeddingModelRef ? createReference(embeddingModelRef) : vs.embedding_model,
+            ...(vs.bm25_index_name && { bm25_index_name: vs.bm25_index_name }),
+            ...(vs.distance_metric && vs.distance_metric !== 'cosine' && { distance_metric: vs.distance_metric }),
+            ...(vs.tsv_language && vs.tsv_language !== 'english' && { tsv_language: vs.tsv_language }),
+          };
+          return;
+        }
+
+        const vs = vsAny as AiSearchVectorStoreModel;
+
         // Format source_table with schema reference
         let sourceTable: any = undefined;
         if (vs.source_table) {
           const sourceTableSchema = formatSchemaReference(
-            vs.source_table.schema, 
-            definedSchemas, 
+            vs.source_table.schema,
+            definedSchemas,
             `resources.vector_stores.${key}.source_table.schema`
           );
           sourceTable = {
@@ -2048,13 +2307,13 @@ export function generateYAML(config: AppConfig): string {
             ...(vs.source_table.name && { name: vs.source_table.name }),
           };
         }
-        
+
         // Format index with schema reference
         let index: any = undefined;
         if (vs.index && vs.index.name) {
           const indexSchema = formatSchemaReference(
-            vs.index.schema, 
-            definedSchemas, 
+            vs.index.schema,
+            definedSchemas,
             `resources.vector_stores.${key}.index.schema`
           );
           index = {
@@ -2062,7 +2321,7 @@ export function generateYAML(config: AppConfig): string {
             name: vs.index.name,
           };
         }
-        
+
         // Format embedding_model - check for original reference
         let embeddingModel: any = undefined;
         if (vs.embedding_model) {
@@ -2073,8 +2332,12 @@ export function generateYAML(config: AppConfig): string {
             embeddingModel = vs.embedding_model;
           }
         }
-        
+
         yamlConfig.resources.vector_stores[key] = {
+          // Emit the canonical discriminator only when explicitly set to a
+          // non-default value; omitting it keeps back-compat (defaults to
+          // ai_search) and avoids churn in existing configs.
+          ...(vs.type === 'vector_search' && { type: 'vector_search' }),
           // Index is always included (required for both modes)
           ...(index && { index: index }),
           // Provisioning mode fields - only include if specified
@@ -2233,32 +2496,68 @@ export function generateYAML(config: AppConfig): string {
         yamlConfig.resources.skills[key] = skillEntry;
       });
     }
+
+    // dao-ai 0.2.x: a `lakebase_search` vector store references a database via a
+    // YAML alias (`database: *db`). YAML requires an anchor to appear before any
+    // alias to it, so `vector_stores` must be emitted AFTER every resource kind
+    // it can reference. Reorder the resources object accordingly (js-yaml dumps
+    // keys in insertion order).
+    const resourceEmitOrder = [
+      'models', 'databases', 'warehouses', 'genie_rooms', 'connections',
+      'volumes', 'tables', 'functions', 'apps', 'skills',
+      'vector_stores',
+    ];
+    const orderedResources: Record<string, any> = {};
+    for (const k of resourceEmitOrder) {
+      if (yamlConfig.resources[k] !== undefined) orderedResources[k] = yamlConfig.resources[k];
+    }
+    // Preserve any keys not in the explicit order (future-proofing).
+    for (const k of Object.keys(yamlConfig.resources)) {
+      if (orderedResources[k] === undefined) orderedResources[k] = yamlConfig.resources[k];
+    }
+    yamlConfig.resources = orderedResources;
   }
 
   // Retrievers
   if (config.retrievers && Object.keys(config.retrievers).length > 0) {
     yamlConfig.retrievers = {};
     Object.entries(config.retrievers).forEach(([key, retriever]) => {
+      // dao-ai 0.2.x: retrievers are discriminated on `type`. lakebase_search
+      // wraps a LakebaseVectorStoreModel; anything else is AI Search (default).
+      const isLakebase = (retriever as LakebaseRetrieverModel).type === 'lakebase_search';
+
       // First check if vector_store was originally a reference in imported YAML
-      let vectorStoreRef: string | undefined;
+      let vectorStoreRef: any;
       const originalVsRef = findOriginalReference(`retrievers.${key}.vector_store`, retriever.vector_store);
-      if (originalVsRef) {
+      if (typeof retriever.vector_store === 'string') {
+        const s = retriever.vector_store as string;
+        vectorStoreRef = createReference(s.startsWith('*') ? s.slice(1) : s);
+      } else if (originalVsRef) {
         vectorStoreRef = createReference(originalVsRef);
       } else {
-        // Try to find a matching vector store reference by matching properties
+        // Try to find a matching vector store reference by matching properties.
         const vectorStores = config.resources?.vector_stores || {};
-        const matchedVsKey = Object.entries(vectorStores).find(
-          ([, vs]) => 
-            vs.embedding_source_column === retriever.vector_store?.embedding_source_column &&
-            vs.source_table?.name === retriever.vector_store?.source_table?.name
-        )?.[0];
-        
+        const matchedVsKey = Object.entries(vectorStores).find(([, vsAny]) => {
+          if (isLakebase) {
+            const lvs = vsAny as LakebaseVectorStoreModel;
+            const rvs = retriever.vector_store as LakebaseVectorStoreModel;
+            return lvs.type === 'lakebase_search' && lvs.table === rvs?.table && lvs.content_column === rvs?.content_column;
+          }
+          const avs = vsAny as AiSearchVectorStoreModel;
+          const rvs = retriever.vector_store as AiSearchVectorStoreModel;
+          return avs.embedding_source_column === rvs?.embedding_source_column &&
+            avs.source_table?.name === rvs?.source_table?.name;
+        })?.[0];
+
         if (matchedVsKey) {
           vectorStoreRef = createReference(matchedVsKey);
         }
       }
-      
+
       const retrieverConfig: Record<string, any> = {
+        // Emit `type` only for lakebase_search; omitting it keeps AI Search
+        // back-compat (dao-ai defaults an untyped retriever to ai_search).
+        ...(isLakebase && { type: 'lakebase_search' }),
         vector_store: vectorStoreRef || retriever.vector_store,
       };
       
@@ -2595,19 +2894,12 @@ export function generateYAML(config: AppConfig): string {
   if (config.prompts && Object.keys(config.prompts).length > 0) {
     yamlConfig.prompts = {};
     Object.entries(config.prompts).forEach(([key, prompt]) => {
-      // If alias is present, use alias (no version) - alias already points to a specific version
-      // If no alias, use version (if available) to specify which version to use
-      const hasAlias = prompt.alias && prompt.alias.trim() !== '';
-      
+      // dao-ai 0.2.6 cleaned up PromptModel to just name/description/template
+      // (schema + tags removed; extra="forbid" rejects them). Emit only those.
       yamlConfig.prompts[key] = {
         name: prompt.name,
-        ...(prompt.schema && { schema: formatSchemaReference(prompt.schema, definedSchemas, `prompts.${key}.schema`) }),
         ...(prompt.description && { description: prompt.description }),
-        ...(prompt.default_template && { default_template: prompt.default_template }),
-        ...(hasAlias && { alias: prompt.alias }),
-        ...(!hasAlias && prompt.version !== undefined && { version: prompt.version }),
-        ...(prompt.tags && Object.keys(prompt.tags).length > 0 && { tags: prompt.tags }),
-        ...(prompt.auto_register !== undefined && { auto_register: prompt.auto_register }),
+        template: prompt.template ?? '',
       };
     });
   }
@@ -2875,7 +3167,7 @@ export function generateYAML(config: AppConfig): string {
 
       yamlConfig.agents[key] = {
         name: agent.name,
-        model: formatModelReference(agent.model, definedModels, `agents.${key}.model`),
+        model: formatModelReference(agent.model, definedModels, `agents.${key}.model`, config.resources?.genie_rooms),
         ...(agent.description && { description: agent.description }),
         ...(toolsValue && toolsValue.length > 0 && { tools: toolsValue }),
         ...(guardrailsValue && guardrailsValue.length > 0 && { guardrails: guardrailsValue }),
@@ -2883,6 +3175,11 @@ export function generateYAML(config: AppConfig): string {
         ...(promptValue && { prompt: promptValue }),
         ...(agent.handoff_prompt && { handoff_prompt: agent.handoff_prompt }),
         ...(responseFormatValue && { response_format: responseFormatValue }),
+        ...(agent.recursion_limit != null && { recursion_limit: agent.recursion_limit }),
+        // dao-ai 0.2.x: cap LLM calls; filter internal agents; handoff prereqs.
+        ...(agent.call_limit != null && { call_limit: formatCallLimit(agent.call_limit) }),
+        ...(agent.internal === true && { internal: true }),
+        ...(agent.requires && agent.requires.length > 0 && { requires: agent.requires }),
       };
     });
   }
@@ -2989,18 +3286,29 @@ export function generateYAML(config: AppConfig): string {
       ...(config.app.description && { description: config.app.description }),
       ...(config.app.log_level && { log_level: config.app.log_level }),
       ...(appServicePrincipal && { service_principal: appServicePrincipal }),
-      ...(config.app.deployment_target && { deployment_target: config.app.deployment_target }),
-      ...((config.app.deployment_target === 'model_serving' || !config.app.deployment_target) && config.app.endpoint_name && { endpoint_name: config.app.endpoint_name }),
-      ...((config.app.deployment_target === 'model_serving' || !config.app.deployment_target) && config.app.workload_size && { workload_size: config.app.workload_size }),
-      ...((config.app.deployment_target === 'model_serving' || !config.app.deployment_target) && config.app.scale_to_zero !== undefined && { scale_to_zero: config.app.scale_to_zero }),
+      // dao-ai 0.2.x removed AppModel.deployment_target — deployment target is
+      // now a deploy-action parameter (CLI/`deploy_agent(target=...)`), not
+      // config. endpoint_name / workload_size / scale_to_zero remain valid
+      // config that dao-ai applies for the relevant target.
+      ...(config.app.endpoint_name && { endpoint_name: config.app.endpoint_name }),
+      ...(config.app.workload_size && { workload_size: config.app.workload_size }),
+      ...(config.app.scale_to_zero !== undefined && { scale_to_zero: config.app.scale_to_zero }),
       ...(config.app.python_version && { python_version: config.app.python_version }),
       ...(config.app.budget_policy_id && { budget_policy_id: config.app.budget_policy_id }),
-      // dao-ai 0.1.99+: Databricks App Space assignment (Private Preview) and
-      // MCP-only deployments. Pure pass-through scalars.
+      // dao-ai 0.1.99+: Databricks App Space assignment (Private Preview).
       ...(config.app.space && { space: config.app.space }),
-      ...(config.app.mcp_only === true && { mcp_only: true }),
-      ...(config.app.environment_vars && Object.keys(config.app.environment_vars).length > 0 && { 
-        environment_vars: formatEnvironmentVars(config.app.environment_vars, config.variables || {}) 
+      // dao-ai 0.2.x: backend worker count (Apps-only).
+      ...(config.app.workers != null && { workers: config.app.workers }),
+      // dao-ai 0.2.x: MLflow experiment reference / auto-create.
+      ...(config.app.experiment && (config.app.experiment.name || config.app.experiment.id) && {
+        experiment: formatExperiment(config.app.experiment),
+      }),
+      // dao-ai 0.2.x: default is True — only emit when explicitly disabled.
+      ...(config.app.manage_permissions === false && { manage_permissions: false }),
+      // dao-ai 0.2.x: server-side MCP capabilities.
+      ...(config.app.mcp_server && { mcp_server: formatMcpServerCapabilities(config.app.mcp_server) }),
+      ...(config.app.environment_vars && Object.keys(config.app.environment_vars).length > 0 && {
+        environment_vars: formatEnvironmentVars(config.app.environment_vars, config.variables || {})
       }),
       ...(config.app.tags && Object.keys(config.app.tags).length > 0 && { tags: config.app.tags }),
       ...(config.app.permissions && config.app.permissions.length > 0 && { permissions: config.app.permissions }),
@@ -3008,6 +3316,7 @@ export function generateYAML(config: AppConfig): string {
       ...(config.app.shutdown_hooks && config.app.shutdown_hooks.length > 0 && { shutdown_hooks: config.app.shutdown_hooks }),
       ...(config.app.input_example && { input_example: config.app.input_example }),
       ...(config.app.code_paths && config.app.code_paths.length > 0 && { code_paths: config.app.code_paths }),
+      ...(config.app.resource_paths && config.app.resource_paths.length > 0 && { resource_paths: config.app.resource_paths }),
       ...(config.app.pip_requirements && config.app.pip_requirements.length > 0 && { pip_requirements: config.app.pip_requirements }),
       // Emit `app.agents` only when non-empty. Under the deep_agent
       // orchestration pattern the planning agent IS the orchestration
@@ -3026,6 +3335,7 @@ export function generateYAML(config: AppConfig): string {
       const definedMiddleware = config.middleware || {};
       const definedAgents = config.agents || {};
       const definedSkills = config.resources?.skills || {};
+      const definedGenieRooms = config.resources?.genie_rooms || {};
       yamlConfig.app.orchestration = formatOrchestration(
         config.app.orchestration,
         definedModels,
@@ -3033,6 +3343,7 @@ export function generateYAML(config: AppConfig): string {
         definedMiddleware,
         definedAgents,
         definedSkills,
+        definedGenieRooms,
       );
     }
     

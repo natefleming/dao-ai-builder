@@ -24,8 +24,9 @@ env:
     value: "natefleming/dao-ai"
   - name: GITHUB_CONFIG_BRANCH
     value: "main"
+  # dao-ai 0.2.x renamed the example-config dir `config/` -> `examples/`.
   - name: GITHUB_CONFIG_PATH
-    value: "config"
+    value: "examples"
 
 # Note: user_api_scopes are configured in databricks.yml, not here
 # This file is for runtime configuration only
