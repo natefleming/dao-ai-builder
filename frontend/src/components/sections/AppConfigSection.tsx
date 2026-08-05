@@ -164,6 +164,12 @@ export default function AppConfigSection() {
       deploymentTarget: app?.deployment_target || 'model_serving',
       pythonVersion: app?.python_version || '',
       servicePrincipalRef: spRef,
+      // dao-ai 0.2.x additions
+      workers: app?.workers != null ? String(app.workers) : '',
+      managePermissions: app?.manage_permissions ?? true,
+      resourcePaths: (app?.resource_paths || []).join(', '),
+      experimentName: (typeof app?.experiment?.name === 'string' ? app.experiment.name : '') || '',
+      experimentId: (typeof app?.experiment?.id === 'string' ? app.experiment.id : '') || '',
     };
   });
   
@@ -584,7 +590,13 @@ export default function AppConfigSection() {
     if (formData.scaleToZero !== (app?.scale_to_zero ?? true)) return true;
     if (formData.deploymentTarget !== (app?.deployment_target || 'model_serving')) return true;
     if (formData.pythonVersion !== (app?.python_version || '')) return true;
-    
+    // dao-ai 0.2.x additions
+    if (formData.workers !== (app?.workers != null ? String(app.workers) : '')) return true;
+    if (formData.managePermissions !== (app?.manage_permissions ?? true)) return true;
+    if (formData.resourcePaths !== ((app?.resource_paths || []).join(', '))) return true;
+    if (formData.experimentName !== ((typeof app?.experiment?.name === 'string' ? app.experiment.name : '') || '')) return true;
+    if (formData.experimentId !== ((typeof app?.experiment?.id === 'string' ? app.experiment.id : '') || '')) return true;
+
     // Check model schema
     let savedModelSchemaKey = '';
     if (app?.registered_model?.schema) {
@@ -942,8 +954,13 @@ export default function AppConfigSection() {
       deploymentTarget: app?.deployment_target || 'model_serving',
       pythonVersion: app?.python_version || '',
       servicePrincipalRef: spRef,
+      workers: app?.workers != null ? String(app.workers) : '',
+      managePermissions: app?.manage_permissions ?? true,
+      resourcePaths: (app?.resource_paths || []).join(', '),
+      experimentName: (typeof app?.experiment?.name === 'string' ? app.experiment.name : '') || '',
+      experimentId: (typeof app?.experiment?.id === 'string' ? app.experiment.id : '') || '',
     });
-    
+
     setSchemaSource(detectedSchemaSource);
     
     // Sync selected agents - default to all if none are explicitly configured
@@ -1524,6 +1541,18 @@ export default function AppConfigSection() {
       scale_to_zero: formData.scaleToZero,
       deployment_target: formData.deploymentTarget as 'model_serving' | 'apps',
       python_version: formData.pythonVersion || undefined,
+      // dao-ai 0.2.x additions
+      workers: formData.workers ? parseInt(formData.workers) : undefined,
+      manage_permissions: formData.managePermissions === false ? false : undefined,
+      resource_paths: formData.resourcePaths
+        ? formData.resourcePaths.split(',').map(p => p.trim()).filter(Boolean)
+        : undefined,
+      experiment: (formData.experimentName || formData.experimentId)
+        ? {
+            ...(formData.experimentName && { name: formData.experimentName }),
+            ...(formData.experimentId && { id: formData.experimentId }),
+          }
+        : undefined,
       orchestration,
       agents: appAgents.length > 0 ? appAgents : undefined,
       tags: Object.keys(tags).length > 0 ? tags : undefined,
@@ -1665,6 +1694,56 @@ export default function AppConfigSection() {
           onChange={(e) => setFormData({ ...formData, pythonVersion: e.target.value })}
           hint="Python version for the deployment environment"
         />
+
+        {/* dao-ai 0.2.x: Apps backend workers (only meaningful for the apps target) */}
+        {formData.deploymentTarget === 'apps' && (
+          <Input
+            label="Workers (Optional)"
+            placeholder="e.g., 2"
+            value={formData.workers}
+            onChange={(e) => setFormData({ ...formData, workers: e.target.value.replace(/[^0-9]/g, '') })}
+            hint="Databricks Apps backend worker count (gunicorn). Apps-target only."
+          />
+        )}
+
+        {/* dao-ai 0.2.x: MLflow experiment reference (name and/or id) */}
+        <div className="grid grid-cols-2 gap-4">
+          <Input
+            label="MLflow Experiment Name (Optional)"
+            placeholder="/Shared/team/agent_traces"
+            value={formData.experimentName}
+            onChange={(e) => setFormData({ ...formData, experimentName: e.target.value })}
+            hint="Workspace path; auto-created at deploy"
+          />
+          <Input
+            label="MLflow Experiment ID (Optional)"
+            placeholder="e.g., 1234567890"
+            value={formData.experimentId}
+            onChange={(e) => setFormData({ ...formData, experimentId: e.target.value })}
+            hint="Numeric experiment id (alternative to name)"
+          />
+        </div>
+
+        {/* dao-ai 0.2.x: extra DAB resource files */}
+        <Input
+          label="Resource Paths (Optional, comma-separated)"
+          placeholder="resources/extra.yml, resources/jobs.yml"
+          value={formData.resourcePaths}
+          onChange={(e) => setFormData({ ...formData, resourcePaths: e.target.value })}
+          hint="Additional Databricks Asset Bundle resource files to include"
+        />
+
+        {/* dao-ai 0.2.x: permission-grant management toggle (default on) */}
+        <label className="flex items-center space-x-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={formData.managePermissions}
+            onChange={(e) => setFormData({ ...formData, managePermissions: e.target.checked })}
+            className="rounded border-slate-600 bg-slate-800 text-violet-500 focus:ring-violet-500"
+          />
+          <span className="text-sm text-slate-300">Manage permissions at deploy</span>
+          <span className="text-xs text-slate-500">(auto-grant UC + MLflow experiment; disable if the deployer lacks GRANT)</span>
+        </label>
 
         {/* Service Principal Selection */}
         <Select

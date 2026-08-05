@@ -23,11 +23,7 @@ function guardrailPromptSnippet(prompt: unknown): string | null {
   }
   if (typeof prompt === 'object' && prompt !== null && 'name' in prompt) {
     const p = prompt as PromptModel;
-    const schema = p.schema;
-    const loc = schema
-      ? `${String(schema.catalog_name)}.${String(schema.schema_name)}.${p.name}`
-      : p.name;
-    return `MLflow prompt: ${loc}`;
+    return `Prompt: ${p.name}`;
   }
   return 'Custom prompt (structured)';
 }

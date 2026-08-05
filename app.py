@@ -3333,25 +3333,30 @@ def validate_deployment():
         
         data = request.get_json()
         config = data.get('config')
-        
+
         if not config:
             return jsonify({'error': 'config is required'}), 400
-        
+
         # Check required fields for deployment
         errors = []
         warnings = []
         requirements = []
-        
+
         app_config = config.get('app', {})
-        
+
         # Check app name
         if not app_config.get('name'):
             errors.append('app.name is required')
-        
+
         # Check registered model — only required for model_serving (dao-ai 0.1.55
-        # made it optional for deployment_target: apps where the App process
-        # handles MLflow registration at runtime, or skips it entirely).
-        deployment_target = app_config.get('deployment_target', 'model_serving')
+        # made it optional for the apps target where the App process handles MLflow
+        # registration at runtime, or skips it entirely).
+        #
+        # dao-ai 0.2.x REMOVED AppModel.deployment_target — the deploy target is
+        # now a deploy-action parameter, not config. The builder sends it in the
+        # request body (`target`); fall back to the legacy config field, then to
+        # 'model_serving', for backward compatibility with older payloads.
+        deployment_target = data.get('target') or app_config.get('deployment_target', 'model_serving')
         registered_model = app_config.get('registered_model')
         if deployment_target != 'apps':
             if not registered_model:
@@ -3896,13 +3901,17 @@ def deploy_quick():
                         status['current_step'] = 2
                         status['status'] = 'deploying'
                     
-                    # Import DeploymentTarget enum
-                    from dao_ai.config import DeploymentTarget
-                    target = DeploymentTarget(deployment_target)
-                    
-                    log('info', f"Deploying agent with {'PAT token' if auth_token else 'service principal'} auth for host: {auth_host}, target: {deployment_target}")
+                    # dao-ai 0.2.x renamed DeploymentTarget -> ServingMode and made
+                    # the deploy target a deploy-action parameter (no longer an
+                    # AppModel config field). dao-ai 0.2.6 renamed the
+                    # deploy_agent kwarg `target=` -> `mode=`. String values are
+                    # unchanged ('model_serving' | 'apps' | 'mcp').
+                    from dao_ai.config import ServingMode
+                    mode = ServingMode(deployment_target)
+
+                    log('info', f"Deploying agent with {'PAT token' if auth_token else 'service principal'} auth for host: {auth_host}, mode: {deployment_target}")
                     app_config.deploy_agent(
-                        target=target,
+                        mode=mode,
                         pat=auth_token,
                         client_id=sp_client_id,
                         client_secret=sp_client_secret,
@@ -4428,7 +4437,8 @@ def get_github_config():
     return jsonify({
         'repo': os.environ.get('GITHUB_CONFIG_REPO', 'natefleming/dao-ai'),
         'branch': os.environ.get('GITHUB_CONFIG_BRANCH', 'main'),
-        'path': os.environ.get('GITHUB_CONFIG_PATH', 'config'),
+        # dao-ai 0.2.x renamed the example-config dir `config/` -> `examples/`.
+        'path': os.environ.get('GITHUB_CONFIG_PATH', 'examples'),
     })
 
 

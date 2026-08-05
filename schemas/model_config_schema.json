@@ -42,9 +42,7 @@
         "security_schemes": {
           "anyOf": [
             {
-              "additionalProperties": {
-                "$ref": "#/$defs/SecurityScheme"
-              },
+              "additionalProperties": true,
               "type": "object"
             },
             {
@@ -52,7 +50,7 @@
             }
           ],
           "default": null,
-          "description": "Overrides the Agent Card 'securitySchemes'. Keys are scheme names; values are validated against a2a-sdk's SecurityScheme discriminated union at config-load time. See ``dao_ai.apps.a2a.security`` for ready-made constants (BEARER_DATABRICKS_PAT, BEARER_DATABRICKS_M2M, BEARER_DATABRICKS_OBO) and factories (oauth2_databricks_authorization_code, oauth2_databricks_obo, openid_connect_databricks, api_key_header). When unset, derived from :attr:`on_behalf_of_user` (bearer scheme with OBO-aware description).",
+          "description": "Overrides the Agent Card 'securitySchemes'. Keys are scheme names; values are validated against a2a-sdk's SecurityScheme discriminated union at config-load time (requires the 'a2a' extra). See ``dao_ai.apps.a2a.security`` for ready-made constants (BEARER_DATABRICKS_PAT, BEARER_DATABRICKS_M2M, BEARER_DATABRICKS_OBO) and factories (oauth2_databricks_authorization_code, oauth2_databricks_obo, openid_connect_databricks, api_key_header). When unset, derived from :attr:`on_behalf_of_user` (bearer scheme with OBO-aware description).",
           "title": "Security Schemes"
         },
         "default_input_modes": {
@@ -286,6 +284,34 @@
           ],
           "default": null,
           "description": "Human-in-the-loop approval configuration for this tool."
+        },
+        "audit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuditModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional tamper-evident audit trail for this tool. Presence of this block enables audit-receipt logging on every invocation; absence leaves the runtime path unchanged. Typically declared once as a YAML anchor and referenced from every tool that should be audited. Composes with human_in_the_loop to produce approval receipts with args-hash binding and fail-closed execution."
+        },
+        "call_limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/ToolCallLimitModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Shortcut to cap how many times this tool may be called. A bare integer sets run_limit (per-invocation) with exit_behavior='continue'; an object gives full control over run_limit/thread_limit/exit_behavior. Applied automatically to every agent that uses this tool, in addition to any explicit tool-call-limit middleware configured on the agent.",
+          "title": "Call Limit"
         },
         "endpoint": {
           "anyOf": [
@@ -572,42 +598,6 @@
       "title": "A2AToolModel",
       "type": "object"
     },
-    "APIKeySecurityScheme": {
-      "description": "Defines a security scheme using an API key.",
-      "properties": {
-        "description": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Description"
-        },
-        "in": {
-          "$ref": "#/$defs/In"
-        },
-        "name": {
-          "title": "Name",
-          "type": "string"
-        },
-        "type": {
-          "const": "apiKey",
-          "default": "apiKey",
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "in",
-        "name"
-      ],
-      "title": "APIKeySecurityScheme",
-      "type": "object"
-    },
     "AgentModel": {
       "additionalProperties": false,
       "description": "Configuration model for an agent in the DAO AI framework.\n\nAgents combine an LLM with tools and middleware to create systems that can\nreason about tasks, decide which tools to use, and iteratively work towards solutions.\n\nMiddleware replaces the previous pre_agent_hook and post_agent_hook patterns,\nproviding a more flexible and composable way to customize agent behavior.",
@@ -631,8 +621,16 @@
           "title": "Description"
         },
         "model": {
-          "$ref": "#/$defs/InferenceEndpointModel",
-          "description": "LLM model configuration (serving endpoint name, temperature, etc.)."
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InferenceEndpointModel"
+            },
+            {
+              "$ref": "#/$defs/GenieAgentModel"
+            }
+          ],
+          "description": "Reasoning model for this agent. Either an ``InferenceEndpointModel`` (a Model Serving chat endpoint) or a ``GenieAgentModel`` (a Genie Agent used as a streaming brain \u2014 typically with ``tools: []`` to make this a Genie specialist sub-agent).",
+          "title": "Model"
         },
         "tools": {
           "description": "Tools available to this agent during reasoning.",
@@ -731,6 +729,22 @@
           "description": "Maximum number of graph supersteps (LLM call + tool execution cycles) allowed per agent invocation. Prevents runaway iteration loops in tool-calling agents. When None, uses LangGraph's default (25).",
           "title": "Recursion Limit"
         },
+        "call_limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/ModelCallLimitModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Shortcut to cap how many model (LLM) calls this agent may make. A bare integer sets run_limit (per-invocation) with exit_behavior='end'; an object gives full control over run_limit/thread_limit/exit_behavior. Registers a ModelCallLimitMiddleware for this agent \u2014 the discoverable, co-located equivalent of hand-wiring ``create_model_call_limit_middleware`` into ``middleware``. The model-call analogue of a tool's ``call_limit``; complements ``recursion_limit`` (the graph-superstep backstop).",
+          "title": "Call Limit"
+        },
         "requires": {
           "description": "Names of prerequisite agents that must have run (i.e. produced an AIMessage tagged with their name) before this agent can be reached via a swarm handoff. When unmet, the handoff tool returns a refusal ToolMessage and 'active_agent' stays unchanged so the LLM can self-correct on its next step. Semantics: any-order, all-of. Currently enforced in the swarm pattern only; the supervisor pattern ignores this field. Cross-agent validation (unknown name, self-reference, cycles in the requires DAG) runs at config-build time.",
           "items": {
@@ -738,6 +752,12 @@
           },
           "title": "Requires",
           "type": "array"
+        },
+        "internal": {
+          "default": false,
+          "description": "Marks this agent as an internal / plumbing agent. Its ``AIMessage`` outputs are filtered out of the conversation history passed to NON-internal (customer-facing) agents' LLM context. Other internal agents still see them \u2014 e.g., a planner can still read a supervisor's intent classification. The agent itself always sees its own prior messages on re-entry.\n\nThe agent still runs, still writes to shared state, and still appears in MLflow traces \u2014 only downstream customer-facing agents' LLM view is scoped away, so internal-plumbing text (intent classifications, routing decisions, working notes) cannot leak as if it were a customer-facing response. Typical use: swarm supervisors, planners, routers; anything whose output is intended for downstream consumption rather than the customer. Composer / response-formatter agents should stay at the default ``False``.",
+          "title": "Internal",
+          "type": "boolean"
         }
       },
       "required": [
@@ -745,6 +765,536 @@
         "model"
       ],
       "title": "AgentModel",
+      "type": "object"
+    },
+    "AiSearchEndpoint": {
+      "additionalProperties": false,
+      "description": "AI Search endpoint that hosts one or more indexes.\n\n(Formerly ``VectorSearchEndpoint``. See :class:`AiSearchEndpointType`.)",
+      "properties": {
+        "name": {
+          "description": "AI Search endpoint name in the workspace.",
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/AiSearchEndpointType",
+          "default": "STANDARD",
+          "description": "Endpoint type: STANDARD or OPTIMIZED_STORAGE."
+        },
+        "target_qps": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Target queries-per-second for the endpoint. STANDARD only. Scales endpoint compute linearly; capacity changes take effect the next time an index on this endpoint is created or synced. Public Preview. Honored at endpoint-creation time only \u2014 if the endpoint already exists, this value is ignored.",
+          "title": "Target Qps"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "AiSearchEndpoint",
+      "type": "object"
+    },
+    "AiSearchEndpointType": {
+      "description": "AI Search endpoint compute profile.\n\n(Formerly ``VectorSearchEndpointType`` \u2014 Databricks rebranded Vector\nSearch to AI Search. The old name remains as an alias for backwards\ncompatibility; it will eventually be deprecated.)",
+      "enum": [
+        "STANDARD",
+        "OPTIMIZED_STORAGE"
+      ],
+      "title": "AiSearchEndpointType",
+      "type": "string"
+    },
+    "AiSearchRetrieverModel": {
+      "additionalProperties": false,
+      "description": "Retriever backed by a Databricks AI Search (formerly Vector Search) index.\n\n(Formerly ``RetrieverModel``. Renamed to disambiguate now that Lakebase\nPostgres has its own retriever config \u2014 see :class:`LakebaseRetrieverModel`.)",
+      "properties": {
+        "columns": {
+          "anyOf": [
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "$ref": "#/$defs/ColumnInfo"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Columns to expose to the LLM as filterable + returnable. Accepts either bare strings (name only \u2014 types are discovered from the index at build time) or ColumnInfo objects that declare name / type / operators / description. Hand-declared ColumnInfo items are authoritative and skip build-time discovery. The two forms may be mixed in one list.",
+          "title": "Columns"
+        },
+        "search_parameters": {
+          "$ref": "#/$defs/SearchParametersModel",
+          "description": "Search tuning: number of results, query type, and metadata filters."
+        },
+        "rerank": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RerankParametersModel"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional FlashRank cross-encoder reranking pass over the retriever's raw hits. Set to ``true`` for defaults, or provide a ``RerankParametersModel`` for a specific model + ``top_n``. For LLM instruction-aware reranking use ``instructed.rerank`` instead.",
+          "title": "Rerank"
+        },
+        "instructed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InstructedRetrieverModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional instructed-retrieval pipeline: LLM decomposes the query into constraint-aware subqueries, runs them in parallel, RRF-merges results, applies an LLM instruction-aware rerank, and (optionally) verifies + retries. Both retriever backends share the pipeline implementation in ``dao_ai.tools.instructed_pipeline``."
+        },
+        "type": {
+          "const": "ai_search",
+          "default": "ai_search",
+          "description": "Discriminator. Must be 'ai_search' (or omitted \u2014 defaults).",
+          "title": "Type",
+          "type": "string"
+        },
+        "vector_store": {
+          "$ref": "#/$defs/AiSearchVectorStoreModel",
+          "description": "AI Search / Vector Search index configuration used for similarity search."
+        }
+      },
+      "required": [
+        "vector_store"
+      ],
+      "title": "AiSearchRetrieverModel",
+      "type": "object"
+    },
+    "AiSearchToolModel": {
+      "additionalProperties": false,
+      "description": "First-class AI Search tool that delegates to ``dao_ai.tools.create_ai_search_tool``.\n\n(Formerly ``VectorSearchToolModel``. Databricks rebranded Vector Search\nto AI Search; the old class name remains as an alias.)\n\nEquivalent to ``type: factory + name: dao_ai.tools.create_ai_search_tool``,\nbut with typed fields. Exactly one of ``retriever`` or ``vector_store`` is\nrequired. Accepts either ``type: ai_search`` (new) or ``type: vector_search``\n(legacy) in YAML.",
+      "properties": {
+        "type": {
+          "default": "ai_search",
+          "description": "Function type discriminator. Accepts 'ai_search' (preferred) or 'vector_search' (legacy alias).",
+          "enum": [
+            "vector_search",
+            "ai_search"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "human_in_the_loop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HumanInTheLoopModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-in-the-loop approval configuration for this tool."
+        },
+        "audit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuditModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional tamper-evident audit trail for this tool. Presence of this block enables audit-receipt logging on every invocation; absence leaves the runtime path unchanged. Typically declared once as a YAML anchor and referenced from every tool that should be audited. Composes with human_in_the_loop to produce approval receipts with args-hash binding and fail-closed execution."
+        },
+        "call_limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/ToolCallLimitModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Shortcut to cap how many times this tool may be called. A bare integer sets run_limit (per-invocation) with exit_behavior='continue'; an object gives full control over run_limit/thread_limit/exit_behavior. Applied automatically to every agent that uses this tool, in addition to any explicit tool-call-limit middleware configured on the agent.",
+          "title": "Call Limit"
+        },
+        "retriever": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AiSearchRetrieverModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Full retriever configuration with search parameters and reranking. Mutually exclusive with vector_store."
+        },
+        "vector_store": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AiSearchVectorStoreModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Direct AI Search vector-store reference (uses default search parameters). Mutually exclusive with retriever."
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tool name visible to the LLM.",
+          "title": "Name"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tool description shown to the LLM during function calling.",
+          "title": "Description"
+        }
+      },
+      "title": "AiSearchToolModel",
+      "type": "object"
+    },
+    "AiSearchVectorStoreModel": {
+      "additionalProperties": false,
+      "description": "Configuration model for a Databricks AI Search vector store.\n\n(Formerly ``VectorStoreModel`` / ``AiSearchIndexModel``. Databricks\nrebranded Vector Search to AI Search; ``AiSearchVectorStoreModel`` is\nthe current name \u2014 chosen to parallel ``LakebaseVectorStoreModel`` so\nboth retriever backends can co-exist under ``resources.vector_stores``.\nBoth legacy names remain as aliases defined at the end of the class\nbody for backwards compatibility.)\n\nSupports two modes:\n1. **Use Existing Index**: Provide only `index` (fully qualified name).\n   Used for querying an existing vector search index at runtime.\n2. **Provisioning Mode**: Provide `source_table` + `embedding_source_column`.\n   Used for creating a new vector search index.\n\nExamples:\n    Minimal configuration (use existing index):\n    ```yaml\n    vector_stores:\n      products_search:\n        index:\n          name: catalog.schema.my_index\n    ```\n\n    Full provisioning configuration:\n    ```yaml\n    vector_stores:\n      products_search:\n        source_table:\n          schema: *my_schema\n          name: products\n        embedding_source_column: description\n        endpoint:\n          name: my_endpoint\n    ```",
+      "properties": {
+        "on_behalf_of_user": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": false,
+          "description": "Use the calling user's identity (OBO). Works in Model Serving and Databricks Apps.",
+          "title": "On Behalf Of User"
+        },
+        "service_principal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ServicePrincipalModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Service principal for OAuth M2M authentication. Expands to client_id and client_secret."
+        },
+        "client_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompositeVariableModel"
+            },
+            {
+              "$ref": "#/$defs/EnvironmentVariableModel"
+            },
+            {
+              "$ref": "#/$defs/SecretVariableModel"
+            },
+            {
+              "$ref": "#/$defs/PrimitiveVariableModel"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "OAuth client ID for service principal authentication.",
+          "title": "Client Id"
+        },
+        "client_secret": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompositeVariableModel"
+            },
+            {
+              "$ref": "#/$defs/EnvironmentVariableModel"
+            },
+            {
+              "$ref": "#/$defs/SecretVariableModel"
+            },
+            {
+              "$ref": "#/$defs/PrimitiveVariableModel"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "OAuth client secret for service principal authentication.",
+          "title": "Client Secret"
+        },
+        "workspace_host": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompositeVariableModel"
+            },
+            {
+              "$ref": "#/$defs/EnvironmentVariableModel"
+            },
+            {
+              "$ref": "#/$defs/SecretVariableModel"
+            },
+            {
+              "$ref": "#/$defs/PrimitiveVariableModel"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Databricks workspace URL (e.g., 'https://my-workspace.cloud.databricks.com').",
+          "title": "Workspace Host"
+        },
+        "pat": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompositeVariableModel"
+            },
+            {
+              "$ref": "#/$defs/EnvironmentVariableModel"
+            },
+            {
+              "$ref": "#/$defs/SecretVariableModel"
+            },
+            {
+              "$ref": "#/$defs/PrimitiveVariableModel"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Personal access token for PAT-based authentication.",
+          "title": "Pat"
+        },
+        "index": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IndexModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Vector search index to query. Required for runtime; auto-generated in provisioning mode."
+        },
+        "source_table": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TableModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Source table for provisioning a new vector search index. Omit when using an existing index."
+        },
+        "embedding_source_column": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Column in the source table containing text to embed. Required in provisioning mode.",
+          "title": "Embedding Source Column"
+        },
+        "embedding_model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InferenceEndpointModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Embedding model endpoint. Defaults to 'databricks-gte-large-en' in provisioning mode."
+        },
+        "endpoint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AiSearchEndpoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Vector search endpoint hosting the index. Auto-detected in provisioning mode."
+        },
+        "source_path": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VolumePathModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Volume path for source data files (alternative to source_table)."
+        },
+        "checkpoint_path": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VolumePathModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Volume path for sync checkpoint storage."
+        },
+        "primary_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Primary key column in the source table. Auto-detected if omitted.",
+          "title": "Primary Key"
+        },
+        "columns": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Columns to include in search results.",
+          "title": "Columns"
+        },
+        "doc_uri": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Column name containing document URIs for provenance tracking.",
+          "title": "Doc Uri"
+        },
+        "type": {
+          "const": "ai_search",
+          "default": "ai_search",
+          "description": "Discriminator. Must be 'ai_search' (or omitted \u2014 defaults).",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "title": "AiSearchVectorStoreModel",
       "type": "object"
     },
     "AppModel": {
@@ -859,12 +1409,6 @@
           "description": "Whether the MLflow AgentServer enables the chat proxy endpoint for Databricks Apps.",
           "title": "Enable Chat Proxy"
         },
-        "mcp_only": {
-          "default": false,
-          "description": "If True, this app:`` block configures an MCP-only deployment (consumed by ``dao-ai generate-mcp`` / ``dao_ai.mcp.server``) and the validators that normally require ``agents`` or a ``registered_model`` are skipped. Use this when you want to set ``app.name`` (which the MCP server reads as ``serverInfo.name`` and as the deployed Databricks App name) without also having to declare a stub agent.",
-          "title": "Mcp Only",
-          "type": "boolean"
-        },
         "environment_vars": {
           "anyOf": [
             {
@@ -941,7 +1485,21 @@
             }
           ],
           "default": "Small",
-          "description": "Model Serving workload size (Small, Medium, Large)."
+          "description": "Compute size for the deployment. Applies to both targets. Model Serving accepts Small/Medium/Large (XLarge is clamped to Large). For the Databricks Apps target this is coerced to the Apps compute_size domain: Small/Medium leave the platform default (MEDIUM, ~2 vCPU / 6 GB \u2014 Apps has no Small tier and existing apps are not resized), Large \u2192 LARGE, XLarge \u2192 XLARGE. Apps compute does not scale to zero."
+        },
+        "workers": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Number of backend worker processes for the Databricks Apps server. Leave UNSET (the default) to auto-size at runtime to the container's available CPUs \u2014 the simplest config: pick the Apps compute size and dao-ai matches the worker count to it. For workers>1 the backend runs under gunicorn with ``preload_app`` so the agent graph is built ONCE in the arbiter and copy-on-write shared across forked workers (cheap memory, and workers are ready immediately rather than each rebuilding the graph \u2014 which on the older uvicorn spawn path exceeded the multi-worker startup window and crash-looped). Set an explicit integer to override the auto-sizing. Emitted as the ``DAO_AI_APP_WORKERS`` env var (only when set) and forwarded to the backend as ``--workers``. Apps-target only (no effect on Model Serving, which manages its own worker pool via workload_size).",
+          "title": "Workers"
         },
         "permissions": {
           "anyOf": [
@@ -1084,15 +1642,23 @@
           "description": "Chat history summarization settings to manage long conversations."
         },
         "code_paths": {
-          "description": "Additional Python file paths bundled with the model artifact.",
+          "description": "Additional Python files/directories (relative to the config file's directory; absolute paths pass through) shipped with EVERY deployment target: Model Serving via ``log_model(code_paths=...)``, Databricks Apps by uploading them next to the config (importable via ``sys.path``), and the ``workflow generate`` job by staging them into the bundle. Use for custom ``type: python`` tool modules or agent code. (Apps bundles also still support hand-packaged code under ``src/<package>/``.)",
           "items": {
             "type": "string"
           },
           "title": "Code Paths",
           "type": "array"
         },
+        "resource_paths": {
+          "description": "Additional Databricks Asset Bundle resource files (``*.yml``, relative to the config file's directory; absolute paths pass through) copied into the generated bundle's ``resources/`` directory, where DABs' ``include: [resources/*.yml]`` merges them at deploy. Use to add your own Jobs, Pipelines, or other resources alongside the generated bundle without editing any generated file \u2014 works identically on the agent, mcp, and workflow nouns. As a convention (like ``src/`` for code), any ``*.yml`` under a ``resources/`` directory colocated with the config is shipped automatically with no declaration here. These are user-owned: copied once and never overwritten by a rebuild (pass ``--overwrite`` to re-copy).",
+          "items": {
+            "type": "string"
+          },
+          "title": "Resource Paths",
+          "type": "array"
+        },
         "pip_requirements": {
-          "description": "Extra pip packages installed in the serving environment.",
+          "description": "Extra pip packages for your custom code, installed alongside dao-ai in every deployment target (Model Serving conda env; Apps/MCP requirements.txt; pipeline job environment).",
           "items": {
             "type": "string"
           },
@@ -1112,18 +1678,6 @@
           "description": "Python version for Model Serving deployment. Defaults to 3.12 which is supported by Databricks Model Serving. This allows deploying from environments with different Python versions (e.g., Databricks Apps with 3.11).",
           "title": "Python Version"
         },
-        "deployment_target": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/DeploymentTarget"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Default deployment target. If not specified, defaults to MODEL_SERVING. Can be overridden via CLI --target flag. Options: 'model_serving' or 'apps'."
-        },
         "trace_location": {
           "anyOf": [
             {
@@ -1135,6 +1689,36 @@
           ],
           "default": null,
           "description": "Unity Catalog location for storing MLflow traces in OTEL-format Delta tables. Accepts a schema reference or 'catalog.schema' string, with an optional ``table_prefix`` to namespace the OTEL tables. When set, ``mlflow.set_experiment(trace_location=UnityCatalog(...))`` is called at startup and at deploy time for both Model Serving and Databricks Apps deployments."
+        },
+        "mcp_server": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/McpServerCapabilitiesModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Server-side MCP capabilities exposed when dao-ai is deployed as an MCP server (``dao-ai agent generate --mode mcp``). Declares static resources, prompt templates, and whether progress + logging notifications are emitted from the agent tool. When None the server publishes only the single agent-as-tool surface with no notifications."
+        },
+        "experiment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExperimentModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Reference an existing MLflow experiment by name or id. Independent of ``service_principal`` and ``trace_location`` \u2014 any combination is a valid config. When omitted, dao-ai uses ``/Users/<deployer_email>/<app.name>`` (create-if-missing). When set, ``MLFLOW_EXPERIMENT_ID`` is injected on the deployed workload \u2014 from ``experiment.id`` when explicit, or resolved via ``experiment.name`` at deploy time."
+        },
+        "manage_permissions": {
+          "default": true,
+          "description": "When True (default), dao-ai attempts UC and MLflow-experiment grants on the runtime service principal at deploy time. Set to False when an admin has already provisioned the SP + experiment + all grants and the deployer lacks GRANT rights \u2014 avoids noisy 403 warnings during deploy.",
+          "title": "Manage Permissions",
+          "type": "boolean"
         },
         "monitoring": {
           "anyOf": [
@@ -1158,7 +1742,7 @@
             }
           ],
           "default": null,
-          "description": "Opt-in background agent configuration. When set, the ResponsesAgent is wrapped so that requests with background=True or custom_inputs.operation are persisted in the referenced Lakebase database. In Databricks Apps, strict Responses API routes (/v1/responses, /v1/responses/{id}, /v1/responses/{id}/cancel) are additionally exposed. See config/examples/19_background_agents/."
+          "description": "Opt-in background agent configuration. When set, the ResponsesAgent is wrapped so that requests with background=True or custom_inputs.operation are persisted in the referenced Lakebase database. In Databricks Apps, strict Responses API routes (/v1/responses, /v1/responses/{id}, /v1/responses/{id}/cancel) are additionally exposed. See examples/18_background_agents/."
         },
         "a2a": {
           "$ref": "#/$defs/A2AModel",
@@ -1228,6 +1812,34 @@
           "default": null,
           "description": "Human-in-the-loop approval configuration for this tool."
         },
+        "audit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuditModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional tamper-evident audit trail for this tool. Presence of this block enables audit-receipt logging on every invocation; absence leaves the runtime path unchanged. Typically declared once as a YAML anchor and referenced from every tool that should be audited. Composes with human_in_the_loop to produce approval receipts with args-hash binding and fail-closed execution."
+        },
+        "call_limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/ToolCallLimitModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Shortcut to cap how many times this tool may be called. A bare integer sets run_limit (per-invocation) with exit_behavior='continue'; an object gives full control over run_limit/thread_limit/exit_behavior. Applied automatically to every agent that uses this tool, in addition to any explicit tool-call-limit middleware configured on the agent.",
+          "title": "Call Limit"
+        },
         "app": {
           "$ref": "#/$defs/DatabricksAppModel",
           "description": "Databricks App resource to call. Required. dao-ai dispatches via DatabricksOpenAI(workspace_client=...) using model='apps/<name>'. OBO is auto-derived from app.on_behalf_of_user. MCP apps (mcp- prefix) are rejected \u2014 use type: mcp instead."
@@ -1282,43 +1894,35 @@
       "title": "AppToolModel",
       "type": "object"
     },
-    "AuthorizationCodeOAuthFlow": {
-      "description": "Defines configuration details for the OAuth 2.0 Authorization Code flow.",
+    "AuditModel": {
+      "additionalProperties": false,
+      "description": "Configuration for tamper-evident audit receipts on tool invocations.\n\nPresence of this block on a tool's ``function`` enables auditing for that\ntool. When absent, no audit behavior is added and the runtime path is\nbit-for-bit unchanged. Typically declared once as a YAML anchor\n(``audit: &audit_sink { ... }``) and referenced from every tool that\nshould be audited (``audit: *audit_sink``).\n\nReceipts are written to a Lakebase table specified by ``database`` and\n``table``; the destination table is created idempotently on first use\nwith an append-only trigger. Audit works with or without\n``human_in_the_loop`` on the same tool:\n\n- Tool with ``audit`` only: an execution receipt is recorded on every\n  tool invocation (who/what/when/args_hash).\n- Tool with ``audit`` and ``human_in_the_loop``: the receipt is enriched\n  with approval fields (decision, approver, nonce, args_hash binding)\n  and the tool call is aborted fail-closed if the args hash differs\n  between interrupt time and execution time.",
       "properties": {
-        "authorizationUrl": {
-          "title": "Authorizationurl",
+        "database": {
+          "$ref": "#/$defs/DatabaseModel",
+          "description": "Lakebase database that stores audit receipts and, when combined with human_in_the_loop, single-use approval nonces. Reuse the same DatabaseModel anchor used for the HITL checkpointer to avoid provisioning a second Lakebase."
+        },
+        "table": {
+          "default": "audit_receipts",
+          "description": "Table name (unqualified) for audit receipts within the configured Lakebase database. Must match the Postgres unquoted-identifier grammar ``^[A-Za-z_][A-Za-z0-9_]*$`` and be at most 48 characters so derived identifiers (indexes, trigger names, function name \u2014 all suffixed with up to 15 characters) stay within Postgres' 63-char identifier limit. The table is created idempotently on first write.",
+          "maxLength": 48,
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "title": "Table",
           "type": "string"
         },
-        "refreshUrl": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Refreshurl"
-        },
-        "scopes": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "title": "Scopes",
-          "type": "object"
-        },
-        "tokenUrl": {
-          "title": "Tokenurl",
-          "type": "string"
+        "nonce_ttl_seconds": {
+          "default": 300,
+          "description": "Server-issued nonce lifetime (seconds) for approvals. Resume attempts arriving after this window are rejected fail-closed. Only applies when the same tool also has human_in_the_loop set.",
+          "maximum": 3600,
+          "minimum": 30,
+          "title": "Nonce Ttl Seconds",
+          "type": "integer"
         }
       },
       "required": [
-        "authorizationUrl",
-        "scopes",
-        "tokenUrl"
+        "database"
       ],
-      "title": "AuthorizationCodeOAuthFlow",
+      "title": "AuditModel",
       "type": "object"
     },
     "BackendModel": {
@@ -1563,40 +2167,6 @@
       "title": "CheckpointerModel",
       "type": "object"
     },
-    "ClientCredentialsOAuthFlow": {
-      "description": "Defines configuration details for the OAuth 2.0 Client Credentials flow.",
-      "properties": {
-        "refreshUrl": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Refreshurl"
-        },
-        "scopes": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "title": "Scopes",
-          "type": "object"
-        },
-        "tokenUrl": {
-          "title": "Tokenurl",
-          "type": "string"
-        }
-      },
-      "required": [
-        "scopes",
-        "tokenUrl"
-      ],
-      "title": "ClientCredentialsOAuthFlow",
-      "type": "object"
-    },
     "ColumnInfo": {
       "additionalProperties": false,
       "description": "Column metadata for dynamic schema generation in structured output.\n\nWhen provided, column information is embedded directly into the JSON schema\nthat with_structured_output sends to the LLM, improving filter accuracy.\n\nThe optional ``description`` field lets users annotate a column with semantic\ncontext (e.g. example values, business meaning).  Descriptions are embedded\ninto JSON schemas and prompt context that pipeline components (decomposition,\nrouting, verification, reranking) generate from the column metadata.",
@@ -1608,12 +2178,13 @@
         },
         "type": {
           "default": "string",
-          "description": "Column data type for value validation",
+          "description": "Column data type. ``array`` denotes an ARRAY<primitive> column on the index; on Databricks VS Standard endpoints these filter via element containment (equality only). The element type is irrelevant for filtering, so a single ``array`` value covers ARRAY<STRING>, ARRAY<INT>, etc.",
           "enum": [
             "string",
             "number",
             "boolean",
-            "datetime"
+            "datetime",
+            "array"
           ],
           "title": "Type",
           "type": "string"
@@ -2271,6 +2842,7 @@
         "description": {
           "anyOf": [
             {
+              "maxLength": 200,
               "type": "string"
             },
             {
@@ -2346,8 +2918,42 @@
             }
           ],
           "default": "databricks_postgres",
-          "description": "Database name within the PostgreSQL server.",
+          "description": "PostgreSQL-level database name (used in connection strings / ``PGDATABASE`` at runtime). Distinct from ``database_id``, which is the Databricks resource id used in Apps resource paths. Convention for auto-provisioned Lakebase projects is underscored (``databricks_postgres``); for custom projects the pg-level name can be anything (e.g. ``vllm_analytics``). As an escape hatch, if this value is set to a full resource path (starting with ``projects/``), it takes precedence over ``database_id`` when constructing the Apps resource binding.",
           "title": "Database"
+        },
+        "database_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompositeVariableModel"
+            },
+            {
+              "$ref": "#/$defs/EnvironmentVariableModel"
+            },
+            {
+              "$ref": "#/$defs/SecretVariableModel"
+            },
+            {
+              "$ref": "#/$defs/PrimitiveVariableModel"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Databricks Lakebase resource id \u2014 the hyphenated identifier at the end of the resource path ``projects/<project>/branches/<branch>/databases/<database_id>``. Distinct from ``database`` (the pg-level DB name). When left unset (the common case) the bundle generator auto-detects the resource id by calling ``postgres.list_databases()`` and matching by pg-name, then returning the resource's ``.name``. Set explicitly when you want to skip that lookup (e.g. offline bundle generation) or to point at a specific custom-provisioned database resource. Set the value to whatever appears as ``database_id`` under ``databricks api get /api/2.0/postgres/projects/<p>/branches/<b>/databases``. If unset AND the SDK lookup fails, the resolver falls back to ``databricks-postgres`` (Databricks' auto-provisioning default) and logs a WARNING.",
+          "title": "Database Id"
         },
         "port": {
           "anyOf": [
@@ -2967,7 +3573,7 @@
             }
           ],
           "default": null,
-          "description": "System prompt prepended to deepagents' base prompt. Inline string or MLflow ``PromptModel`` (resolved via ``make_prompt``).",
+          "description": "System prompt prepended to deepagents' base prompt. Inline string or ``PromptModel`` (resolved via ``make_prompt``).",
           "title": "System Prompt"
         },
         "middleware": {
@@ -3119,16 +3725,6 @@
       },
       "title": "DeepAgentModel",
       "type": "object"
-    },
-    "DeploymentTarget": {
-      "description": "Target platform for agent deployment.",
-      "enum": [
-        "model_serving",
-        "apps",
-        "both"
-      ],
-      "title": "DeploymentTarget",
-      "type": "string"
     },
     "Entitlement": {
       "description": "Access control entitlements for serving endpoints and apps.",
@@ -3353,6 +3949,88 @@
       "title": "EvaluationModel",
       "type": "object"
     },
+    "ExperimentModel": {
+      "additionalProperties": false,
+      "description": "Reference an MLflow experiment by name and/or id.\n\nMirrors the ``WarehouseModel`` idiom (`config.py:1310`): both ``name``\nand ``id`` are optional but at least one is required. Actual resolution\nis lazy \u2014 the id-from-name lookup (and optional create) happens in\n:meth:`ensure_resolved`, not at config-load time, so this model is safe\nto construct in environments without an active MLflow client.\n\nPrecedence:\n    * ``id`` wins when both are set \u2014 used directly, no MLflow lookup.\n    * ``name`` triggers ``mlflow.get_experiment_by_name(name)``; if\n      missing and ``create_if_not_exists`` is True (default), the\n      experiment is created and its id captured back into ``self.id``.\n\nIndependent of ``service_principal`` and ``trace_location`` \u2014 any\ncombination of the three is a valid config. When ``AppModel.experiment``\nis omitted entirely, dao-ai falls back to the historical default:\n``/Users/<deployer_email>/<app.name>`` (create-if-missing).",
+      "properties": {
+        "name": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompositeVariableModel"
+            },
+            {
+              "$ref": "#/$defs/EnvironmentVariableModel"
+            },
+            {
+              "$ref": "#/$defs/SecretVariableModel"
+            },
+            {
+              "$ref": "#/$defs/PrimitiveVariableModel"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Full workspace path of the MLflow experiment (e.g. ``/Shared/team/agent_traces``). When ``id`` is unset, dao-ai resolves the id from this name at deploy time \u2014 creating the experiment if missing (see ``create_if_not_exists``).",
+          "title": "Name"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompositeVariableModel"
+            },
+            {
+              "$ref": "#/$defs/EnvironmentVariableModel"
+            },
+            {
+              "$ref": "#/$defs/SecretVariableModel"
+            },
+            {
+              "$ref": "#/$defs/PrimitiveVariableModel"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Numeric MLflow experiment id. When set, takes precedence over ``name`` and is used verbatim (no MLflow lookup, no create). Use when an admin has pre-provisioned + linked the experiment and the deployer knows the id.",
+          "title": "Id"
+        },
+        "create_if_not_exists": {
+          "default": true,
+          "description": "When True (default), ``ensure_resolved()`` creates the experiment at ``name`` when ``id`` is unset and the name does not resolve. Set to False when an admin has already provisioned the experiment and the deployer lacks create rights on the parent workspace path.",
+          "title": "Create If Not Exists",
+          "type": "boolean"
+        }
+      },
+      "title": "ExperimentModel",
+      "type": "object"
+    },
     "FactoryFunctionModel": {
       "additionalProperties": false,
       "description": "A tool created by calling a factory function with optional arguments.",
@@ -3375,6 +4053,34 @@
           ],
           "default": null,
           "description": "Human-in-the-loop approval configuration for this tool."
+        },
+        "audit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuditModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional tamper-evident audit trail for this tool. Presence of this block enables audit-receipt logging on every invocation; absence leaves the runtime path unchanged. Typically declared once as a YAML anchor and referenced from every tool that should be audited. Composes with human_in_the_loop to produce approval receipts with args-hash binding and fail-closed execution."
+        },
+        "call_limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/ToolCallLimitModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Shortcut to cap how many times this tool may be called. A bare integer sets run_limit (per-invocation) with exit_behavior='continue'; an object gives full control over run_limit/thread_limit/exit_behavior. Applied automatically to every agent that uses this tool, in addition to any explicit tool-call-limit middleware configured on the agent.",
+          "title": "Call Limit"
         },
         "name": {
           "description": "Fully qualified factory function name that returns a tool or list of tools.",
@@ -3642,6 +4348,27 @@
         }
       },
       "title": "FunctionModel",
+      "type": "object"
+    },
+    "GenieAgentModel": {
+      "additionalProperties": false,
+      "description": "A Genie Agent used as an agent's reasoning model (streaming brain).\n\nWraps a :class:`GenieRoomModel` and exposes the same duck-typed surface\n``AgentModel``/``OBOModelMiddleware`` expect from a model resource, so a\nplain agent with no tools becomes a natively-streaming \"Genie specialist\"\nthat a supervisor can route to like any other sub-agent.\n\nUnlike :class:`InferenceEndpointModel`, a Genie Agent is not a serving\nendpoint: :meth:`as_chat_model` returns a\n:class:`dao_ai.genie.agent_chat_model.GenieAgentChatModel` that streams the\nGenie Agent Mode API (``POST /api/2.0/genie/agents/{agent_id}/responses``)\nrather than a ``ChatDatabricks`` pointed at ``/serving-endpoints``. This is\na wrapper (composition), not a subclass of ``InferenceEndpointModel`` \u2014 a\nGenie Agent has no ``temperature``/``max_tokens``/``ai_gateway`` semantics\nand must never be substitutable into embedding/judge/rerank slots.\n\nAuthentication and OBO are delegated wholesale to the wrapped\n``genie_room`` (an :class:`IsDatabricksResource`), so there is exactly one\nOBO flag (``genie_room.on_behalf_of_user``) and no chance of a second flag\ndrifting out of sync.",
+      "properties": {
+        "genie_room": {
+          "$ref": "#/$defs/GenieRoomModel",
+          "description": "Genie space/agent to invoke. Accepts either ``space_id`` or ``agent_id`` (aliases) for the 32-char hex identifier, and carries the warehouse and OBO (``on_behalf_of_user``) configuration."
+        },
+        "timeout_seconds": {
+          "default": 300,
+          "description": "httpx client timeout in seconds for the streaming call. The Databricks server-side response timeout is 90 minutes.",
+          "title": "Timeout Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "genie_room"
+      ],
+      "title": "GenieAgentModel",
       "type": "object"
     },
     "GenieBenchmarkQuestion": {
@@ -4465,6 +5192,7 @@
         "description": {
           "anyOf": [
             {
+              "maxLength": 200,
               "type": "string"
             },
             {
@@ -4506,7 +5234,7 @@
             }
           ],
           "default": null,
-          "description": "Databricks-assigned Genie space identifier. The only field guaranteed unique by the platform; titles are not enforced unique. Lifecycle: (a) Reference mode \u2014 set by the user in YAML; readable immediately. (b) Spec mode \u2014 left None, populated by .create() once the space is provisioned. Downstream consumers reading *room_anchor.space_id must wait until .create() has run. Required when on_behalf_of_user is true (name-based lookup cannot authenticate at Model Serving startup).",
+          "description": "Databricks-assigned Genie space identifier. The only field guaranteed unique by the platform; titles are not enforced unique. Also accepted under the alias ``agent_id`` \u2014 Databricks renamed Genie Spaces to Genie Agents, and the Agent Mode API refers to the same 32-char hex value as ``agent_id``. Both YAML keys resolve to this attribute. Lifecycle: (a) Reference mode \u2014 set by the user in YAML; readable immediately. (b) Spec mode \u2014 left None, populated by .create() once the space is provisioned. Downstream consumers reading *room_anchor.space_id must wait until .create() has run. Required when on_behalf_of_user is true (name-based lookup cannot authenticate at Model Serving startup).",
           "title": "Space Id"
         },
         "parent_path": {
@@ -4924,6 +5652,34 @@
           "default": null,
           "description": "Human-in-the-loop approval configuration for this tool."
         },
+        "audit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuditModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional tamper-evident audit trail for this tool. Presence of this block enables audit-receipt logging on every invocation; absence leaves the runtime path unchanged. Typically declared once as a YAML anchor and referenced from every tool that should be audited. Composes with human_in_the_loop to produce approval receipts with args-hash binding and fail-closed execution."
+        },
+        "call_limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/ToolCallLimitModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Shortcut to cap how many times this tool may be called. A bare integer sets run_limit (per-invocation) with exit_behavior='continue'; an object gives full control over run_limit/thread_limit/exit_behavior. Applied automatically to every agent that uses this tool, in addition to any explicit tool-call-limit middleware configured on the agent.",
+          "title": "Call Limit"
+        },
         "genie_room": {
           "$ref": "#/$defs/GenieRoomModel",
           "description": "Genie space configuration."
@@ -4964,6 +5720,12 @@
           "default": false,
           "description": "Truncate large query results returned by Genie.",
           "title": "Truncate Results",
+          "type": "boolean"
+        },
+        "verbatim": {
+          "default": false,
+          "description": "When true, instruct the calling LLM to pass the user's question to Genie exactly as asked \u2014 no rephrasing, decomposition, or added qualifiers. Shapes the tool description and the question-argument annotation. Default false preserves the existing 'ask simple, clear questions' behavior.",
+          "title": "Verbatim",
           "type": "boolean"
         },
         "lru_cache": {
@@ -5170,53 +5932,9 @@
       "title": "GuidelineModel",
       "type": "object"
     },
-    "HTTPAuthSecurityScheme": {
-      "description": "Defines a security scheme using HTTP authentication.",
-      "properties": {
-        "bearerFormat": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Bearerformat"
-        },
-        "description": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Description"
-        },
-        "scheme": {
-          "title": "Scheme",
-          "type": "string"
-        },
-        "type": {
-          "const": "http",
-          "default": "http",
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "scheme"
-      ],
-      "title": "HTTPAuthSecurityScheme",
-      "type": "object"
-    },
     "HandoffRouteModel": {
       "additionalProperties": false,
-      "description": "Configuration model for a handoff route in a swarm.\n\nA handoff route specifies a target agent and whether the handoff should be\ndeterministic (always route to this agent) or agentic (LLM decides via tool call).\n\nWhen ``is_deterministic`` is ``True``, the source agent will **always** transfer\ncontrol to this target agent after completing its turn, without requiring the\nLLM to invoke a handoff tool. This is useful for pipeline-style workflows\nwhere the routing order is predetermined.\n\nWhen ``is_deterministic`` is ``False`` (the default), a handoff tool is created\nfor the target agent and the LLM decides when to invoke it. This is the\nstandard agentic handoff behavior.\n\nExample YAML::\n\n    handoffs:\n      triage_agent:\n        - agent: billing_agent\n          is_deterministic: true\n      billing_agent:\n        - support_agent            # shorthand for agentic handoff",
+      "description": "Configuration model for a handoff route in a swarm.\n\nA single entry expresses either a **single-target** handoff or a\n**parallel fan-out cohort**. These two shapes are mutually exclusive on\nthe same entry.\n\nSingle-target handoff \u2014 set ``agent`` and optionally ``is_deterministic``:\n\n- **Agentic** (default): a handoff tool is created for the target agent\n  and the LLM decides when to invoke it via a tool call.\n- **Deterministic** (``is_deterministic=True``): control always transfers\n  to this agent after the source agent completes its turn, without LLM\n  tool-call routing.\n\nParallel fan-out cohort \u2014 set ``agents`` (list) and ``join``:\n\n- A per-sibling parallel handoff tool is created for each entry in\n  ``agents``. When the LLM invokes multiple of these tools in a single\n  turn, LangGraph schedules the targeted siblings in the same superstep\n  (true concurrent execution). All siblings converge on the shared\n  ``join`` agent via a static edge in the parent graph; superstep\n  semantics run the join exactly once after every fired sibling\n  completes.\n\nExample YAML \u2014 mixed shapes on one source::\n\n    handoffs:\n      triage_agent:\n        - agents:\n            - pricing_agent\n            - inventory_agent\n            - policy_agent\n          join: synthesizer_agent            # shared join for the cohort\n        - escalation_agent                    # agentic single-target\n        - agent: emergency_agent\n          is_deterministic: true              # deterministic single-target\n\nValidation (enforced at config load time):\n\n- ``agent`` and ``agents`` are mutually exclusive; exactly one must be set.\n- ``agents`` requires ``join``; ``join`` requires ``agents``.\n- ``is_deterministic`` is only valid on single-target entries.",
       "properties": {
         "agent": {
           "anyOf": [
@@ -5225,21 +5943,61 @@
             },
             {
               "type": "string"
+            },
+            {
+              "type": "null"
             }
           ],
-          "description": "The target agent to hand off to, specified as an AgentModel or agent name string.",
+          "default": null,
+          "description": "Single-target handoff. Set this OR ``agents`` (mutually exclusive).",
           "title": "Agent"
         },
         "is_deterministic": {
           "default": false,
-          "description": "When true, the handoff is deterministic: control always transfers to this agent after the source agent completes its turn, without LLM tool-call routing. When false (default), a handoff tool is created and the LLM decides when to invoke it.",
+          "description": "Single-target only. When true, control always transfers to ``agent`` after the source completes its turn, without LLM tool-call routing. When false (default), a handoff tool is created and the LLM decides when to invoke it. Ignored on cohort entries (``agents``).",
           "title": "Is Deterministic",
           "type": "boolean"
+        },
+        "agents": {
+          "anyOf": [
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AgentModel"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Parallel fan-out cohort \u2014 the sibling agents the source may invoke concurrently in a single LLM turn. Requires ``join``. Mutually exclusive with ``agent``.",
+          "title": "Agents"
+        },
+        "join": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentModel"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Shared join agent for a parallel fan-out cohort. All fired siblings in ``agents`` converge here via a static edge; the join runs exactly once after all siblings complete. Required when ``agents`` is set; must be omitted otherwise.",
+          "title": "Join"
         }
       },
-      "required": [
-        "agent"
-      ],
       "title": "HandoffRouteModel",
       "type": "object"
     },
@@ -5277,50 +6035,6 @@
       },
       "title": "HumanInTheLoopModel",
       "type": "object"
-    },
-    "ImplicitOAuthFlow": {
-      "description": "Defines configuration details for the OAuth 2.0 Implicit flow.",
-      "properties": {
-        "authorizationUrl": {
-          "title": "Authorizationurl",
-          "type": "string"
-        },
-        "refreshUrl": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Refreshurl"
-        },
-        "scopes": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "title": "Scopes",
-          "type": "object"
-        }
-      },
-      "required": [
-        "authorizationUrl",
-        "scopes"
-      ],
-      "title": "ImplicitOAuthFlow",
-      "type": "object"
-    },
-    "In": {
-      "description": "The location of the API key.",
-      "enum": [
-        "cookie",
-        "header",
-        "query"
-      ],
-      "title": "In",
-      "type": "string"
     },
     "IndexModel": {
       "additionalProperties": false,
@@ -5684,6 +6398,7 @@
         "description": {
           "anyOf": [
             {
+              "maxLength": 200,
               "type": "string"
             },
             {
@@ -5703,8 +6418,8 @@
               "type": "null"
             }
           ],
-          "default": 0.1,
-          "description": "Sampling temperature controlling output randomness (0.0 = deterministic, 1.0 = creative).",
+          "default": null,
+          "description": "Sampling temperature. When unset, dao-ai omits `temperature` from the outbound payload entirely, so the serving endpoint uses its own default. This is required by reasoning-mode endpoints (e.g. Anthropic Sonnet 5) that reject the parameter outright. Set explicitly (e.g. 0.1 for deterministic, 1.0 for creative) to override the endpoint default.",
           "title": "Temperature"
         },
         "max_tokens": {
@@ -5716,9 +6431,23 @@
               "type": "null"
             }
           ],
-          "default": 8192,
-          "description": "Maximum number of tokens in the model response.",
+          "default": null,
+          "description": "Maximum tokens in the model response. When unset, dao-ai omits `max_tokens` from the outbound payload so the serving endpoint uses its own default. Set explicitly to cap output length. Ignored by the Responses API (endpoint enforces its own limit).",
           "title": "Max Tokens"
+        },
+        "extra_params": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Extra request parameters forwarded verbatim to the serving endpoint via the chat client's ``extra_params`` (e.g. ``{reasoning_effort: low}`` on gpt-oss reasoning models to cap the reasoning preamble and cut latency, or other endpoint-specific knobs). Passed on both the standard and AI-Gateway paths.",
+          "title": "Extra Params"
         },
         "fallbacks": {
           "anyOf": [
@@ -5808,6 +6537,34 @@
           ],
           "default": null,
           "description": "Human-in-the-loop approval configuration for this tool."
+        },
+        "audit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuditModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional tamper-evident audit trail for this tool. Presence of this block enables audit-receipt logging on every invocation; absence leaves the runtime path unchanged. Typically declared once as a YAML anchor and referenced from every tool that should be audited. Composes with human_in_the_loop to produce approval receipts with args-hash binding and fail-closed execution."
+        },
+        "call_limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/ToolCallLimitModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Shortcut to cap how many times this tool may be called. A bare integer sets run_limit (per-invocation) with exit_behavior='continue'; an object gives full control over run_limit/thread_limit/exit_behavior. Applied automatically to every agent that uses this tool, in addition to any explicit tool-call-limit middleware configured on the agent.",
+          "title": "Call Limit"
         },
         "code": {
           "description": "Python code defining a tool function decorated with @tool",
@@ -5950,6 +6707,302 @@
       "title": "InstructionAwareRerankModel",
       "type": "object"
     },
+    "LakebaseRetrieverModel": {
+      "additionalProperties": false,
+      "description": "Full Lakebase retriever config \u2014 vector store plus search parameters.",
+      "properties": {
+        "columns": {
+          "anyOf": [
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "$ref": "#/$defs/ColumnInfo"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Columns to expose to the LLM as filterable + returnable. Accepts either bare strings (name only \u2014 types are discovered from the index at build time) or ColumnInfo objects that declare name / type / operators / description. Hand-declared ColumnInfo items are authoritative and skip build-time discovery. The two forms may be mixed in one list.",
+          "title": "Columns"
+        },
+        "search_parameters": {
+          "$ref": "#/$defs/SearchParametersModel",
+          "description": "Search tuning: number of results, query type, and metadata filters."
+        },
+        "rerank": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RerankParametersModel"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional FlashRank cross-encoder reranking pass over the retriever's raw hits. Set to ``true`` for defaults, or provide a ``RerankParametersModel`` for a specific model + ``top_n``. For LLM instruction-aware reranking use ``instructed.rerank`` instead.",
+          "title": "Rerank"
+        },
+        "instructed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InstructedRetrieverModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional instructed-retrieval pipeline: LLM decomposes the query into constraint-aware subqueries, runs them in parallel, RRF-merges results, applies an LLM instruction-aware rerank, and (optionally) verifies + retries. Both retriever backends share the pipeline implementation in ``dao_ai.tools.instructed_pipeline``."
+        },
+        "type": {
+          "const": "lakebase_search",
+          "default": "lakebase_search",
+          "description": "Discriminator. Must be 'lakebase_search'.",
+          "title": "Type",
+          "type": "string"
+        },
+        "vector_store": {
+          "$ref": "#/$defs/LakebaseVectorStoreModel",
+          "description": "Lakebase table + columns + embedding model."
+        }
+      },
+      "required": [
+        "vector_store"
+      ],
+      "title": "LakebaseRetrieverModel",
+      "type": "object"
+    },
+    "LakebaseSearchToolModel": {
+      "additionalProperties": false,
+      "description": "First-class Lakebase retrieval tool that delegates to ``dao_ai.tools.create_lakebase_search_tool``.\n\nRetrieves from a Databricks Lakebase Postgres table using the\n``lakebase_vector`` and (optionally) ``lakebase_text`` extensions.\nExactly one of ``retriever`` or ``vector_store`` is required.",
+      "properties": {
+        "type": {
+          "const": "lakebase_search",
+          "default": "lakebase_search",
+          "description": "Function type discriminator. Must be 'lakebase_search'.",
+          "title": "Type",
+          "type": "string"
+        },
+        "human_in_the_loop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HumanInTheLoopModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-in-the-loop approval configuration for this tool."
+        },
+        "audit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuditModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional tamper-evident audit trail for this tool. Presence of this block enables audit-receipt logging on every invocation; absence leaves the runtime path unchanged. Typically declared once as a YAML anchor and referenced from every tool that should be audited. Composes with human_in_the_loop to produce approval receipts with args-hash binding and fail-closed execution."
+        },
+        "call_limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/ToolCallLimitModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Shortcut to cap how many times this tool may be called. A bare integer sets run_limit (per-invocation) with exit_behavior='continue'; an object gives full control over run_limit/thread_limit/exit_behavior. Applied automatically to every agent that uses this tool, in addition to any explicit tool-call-limit middleware configured on the agent.",
+          "title": "Call Limit"
+        },
+        "retriever": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LakebaseRetrieverModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Full Lakebase retriever configuration with search parameters. Mutually exclusive with ``vector_store``."
+        },
+        "vector_store": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LakebaseVectorStoreModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Direct Lakebase table reference (uses default search parameters). Mutually exclusive with ``retriever``."
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tool name visible to the LLM.",
+          "title": "Name"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tool description shown to the LLM during function calling.",
+          "title": "Description"
+        }
+      },
+      "title": "LakebaseSearchToolModel",
+      "type": "object"
+    },
+    "LakebaseVectorStoreModel": {
+      "additionalProperties": false,
+      "description": "Configuration for a Databricks Lakebase Postgres table used for retrieval.\n\nPoints at a table that has ``lakebase_vector`` (and optionally\n``lakebase_text``) extensions installed and appropriate indexes\nbuilt. Call :meth:`provision` to idempotently create the extensions,\ntable, and indexes if they don't exist yet.\n\nExample (existing table, hybrid-ready):\n```yaml\nvector_store:\n  database:\n    project: my-lakebase-project\n  table: kb_articles\n  content_column: passage\n  embedding_column: embedding\n  tsvector_column: passage_tsv\n  embedding_model: databricks-gte-large-en\n  metadata_columns: [category, source_url]\n  bm25_index_name: kb_articles_passage_bm25\n  distance_metric: cosine\n```",
+      "properties": {
+        "type": {
+          "const": "lakebase_search",
+          "default": "lakebase_search",
+          "description": "Discriminator. Must be 'lakebase_search'.",
+          "title": "Type",
+          "type": "string"
+        },
+        "database": {
+          "$ref": "#/$defs/DatabaseModel",
+          "description": "Lakebase (or PostgreSQL) database connection. Reuses the existing DatabaseModel \u2014 pool + auth handled by ``dao_ai.memory.postgres`` pool managers."
+        },
+        "schema_name": {
+          "default": "public",
+          "description": "Postgres schema containing the retrieval table.",
+          "title": "Schema Name",
+          "type": "string"
+        },
+        "table": {
+          "description": "Source table with vector (and optionally tsvector) columns.",
+          "title": "Table",
+          "type": "string"
+        },
+        "id_column": {
+          "default": "id",
+          "description": "Primary-key column exposed as ``Document.metadata['id']``.",
+          "title": "Id Column",
+          "type": "string"
+        },
+        "content_column": {
+          "description": "Text column returned as ``Document.page_content``.",
+          "title": "Content Column",
+          "type": "string"
+        },
+        "embedding_column": {
+          "description": "``VECTOR(N)`` column indexed by ``lakebase_ann``. Dimension must match the embedding model.",
+          "title": "Embedding Column",
+          "type": "string"
+        },
+        "tsvector_column": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "``tsvector`` column indexed by ``lakebase_bm25``. Required for BM25 and HYBRID query types.",
+          "title": "Tsvector Column"
+        },
+        "metadata_columns": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Additional columns surfaced on ``Document.metadata``.",
+          "title": "Metadata Columns"
+        },
+        "embedding_model": {
+          "$ref": "#/$defs/InferenceEndpointModel",
+          "description": "Embedding endpoint used to embed the query at retrieval time. Accepts a bare endpoint name (e.g. ``databricks-gte-large-en``) which is coerced to ``InferenceEndpointModel(name=<str>)``."
+        },
+        "bm25_index_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Regclass name required by ``to_bm25query(..., <index>::regclass)``. Auto-derived from ``<schema>.<table>_<tsvector_column>_bm25`` if omitted.",
+          "title": "Bm25 Index Name"
+        },
+        "distance_metric": {
+          "default": "cosine",
+          "description": "Vector distance operator: ``cosine`` (``<=>`` / ``vector_cosine_ops``), ``l2`` (``<->`` / ``vector_l2_ops``), ``ip`` (``<#>`` / ``vector_ip_ops``).",
+          "enum": [
+            "cosine",
+            "l2",
+            "ip"
+          ],
+          "title": "Distance Metric",
+          "type": "string"
+        },
+        "tsv_language": {
+          "default": "english",
+          "description": "Text-search dictionary passed to ``to_tsvector(<lang>, ...)``.",
+          "title": "Tsv Language",
+          "type": "string"
+        }
+      },
+      "required": [
+        "database",
+        "table",
+        "content_column",
+        "embedding_column",
+        "embedding_model"
+      ],
+      "title": "LakebaseVectorStoreModel",
+      "type": "object"
+    },
     "LogLevel": {
       "description": "Logging verbosity level.",
       "enum": [
@@ -5961,6 +7014,43 @@
       ],
       "title": "LogLevel",
       "type": "string"
+    },
+    "McpCapabilitiesModel": {
+      "additionalProperties": false,
+      "description": "Advanced MCP capabilities for an MCP client (McpFunctionModel).\n\nWhen None (the default on McpFunctionModel), the classic\nMultiServerMCPClient path runs with no callbacks or interceptors \u2014\nguaranteeing byte-for-byte behavior parity with the pre-capabilities\nversion.\n\nWhen set, dao-ai wires langchain-mcp-adapters ``Callbacks`` and\n``ToolCallInterceptor`` middleware around the client.",
+      "properties": {
+        "progress": {
+          "default": false,
+          "description": "Consume progress notifications from the MCP server; forward as MLflow span events on the enclosing tool span.",
+          "title": "Progress",
+          "type": "boolean"
+        },
+        "elicitation": {
+          "anyOf": [
+            {
+              "enum": [
+                "hitl",
+                "reject"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Handle server-initiated elicitation/create. 'hitl' raises a LangGraph interrupt whose resume value becomes the ElicitResult; 'reject' returns action='cancel' without prompting.",
+          "title": "Elicitation"
+        },
+        "structured_output": {
+          "default": true,
+          "description": "Prefer CallToolResult.structuredContent and expand resource_link items into MLflow span attributes via a ToolCallInterceptor. Additive only; falls back to text extraction when structuredContent is absent.",
+          "title": "Structured Output",
+          "type": "boolean"
+        }
+      },
+      "title": "McpCapabilitiesModel",
+      "type": "object"
     },
     "McpFunctionModel": {
       "additionalProperties": false,
@@ -6146,6 +7236,34 @@
           "default": null,
           "description": "Human-in-the-loop approval configuration for this tool."
         },
+        "audit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuditModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional tamper-evident audit trail for this tool. Presence of this block enables audit-receipt logging on every invocation; absence leaves the runtime path unchanged. Typically declared once as a YAML anchor and referenced from every tool that should be audited. Composes with human_in_the_loop to produce approval receipts with args-hash binding and fail-closed execution."
+        },
+        "call_limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/ToolCallLimitModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Shortcut to cap how many times this tool may be called. A bare integer sets run_limit (per-invocation) with exit_behavior='continue'; an object gives full control over run_limit/thread_limit/exit_behavior. Applied automatically to every agent that uses this tool, in addition to any explicit tool-call-limit middleware configured on the agent.",
+          "title": "Call Limit"
+        },
         "transport": {
           "$ref": "#/$defs/TransportType",
           "default": "streamable_http",
@@ -6316,7 +7434,7 @@
         "vector_search": {
           "anyOf": [
             {
-              "$ref": "#/$defs/VectorStoreModel"
+              "$ref": "#/$defs/AiSearchVectorStoreModel"
             },
             {
               "type": "null"
@@ -6397,9 +7515,176 @@
           "default": null,
           "description": "Per-MCP-server `_meta` parameters (MCP spec). Sent as `_meta` on every tools/call request to this server. Common Databricks keys: warehouse_id (DBSQL); num_results, filters, query_type, columns, score_threshold, include_score, columns_to_rerank (Vector Search). Values support AnyVariable (env vars, secrets, defaults).",
           "title": "Meta"
+        },
+        "capabilities": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/McpCapabilitiesModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Advanced MCP capabilities (progress, logging, elicitation, structured output, sampling, roots). When None the classic MultiServerMCPClient path is used with no callbacks or interceptors \u2014 zero regression from the pre-capabilities behavior. See McpCapabilitiesModel."
         }
       },
       "title": "McpFunctionModel",
+      "type": "object"
+    },
+    "McpPromptArgumentModel": {
+      "additionalProperties": false,
+      "description": "A single argument on an McpPromptModel.",
+      "properties": {
+        "name": {
+          "description": "Argument name \u2014 must match a {placeholder} in the template.",
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What the argument represents. Shown to clients requesting the prompt.",
+          "title": "Description"
+        },
+        "required": {
+          "default": false,
+          "description": "Whether the client must supply this argument on prompts/get. Optional args are empty-string when omitted.",
+          "title": "Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "McpPromptArgumentModel",
+      "type": "object"
+    },
+    "McpPromptModel": {
+      "additionalProperties": false,
+      "description": "A prompt template exposed by dao-ai's own MCP server via ``prompts/list``.\n\nClients call ``prompts/get`` with argument values; the server returns the\nrendered template as a single user-role message. Placeholders in the\ntemplate use Python format-string syntax, e.g. ``{customer_name}``.",
+      "properties": {
+        "name": {
+          "description": "Prompt identifier used on prompts/list and prompts/get.",
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What the prompt does \u2014 surfaced in prompts/list.",
+          "title": "Description"
+        },
+        "template": {
+          "description": "Prompt template with Python format-string placeholders (e.g. 'Hello, {name}!').",
+          "title": "Template",
+          "type": "string"
+        },
+        "arguments": {
+          "description": "Arguments the client can supply on prompts/get. Empty list means the template takes no arguments.",
+          "items": {
+            "$ref": "#/$defs/McpPromptArgumentModel"
+          },
+          "title": "Arguments",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "template"
+      ],
+      "title": "McpPromptModel",
+      "type": "object"
+    },
+    "McpResourceModel": {
+      "additionalProperties": false,
+      "description": "A static resource exposed by dao-ai's own MCP server via ``resources/list``.\n\nResources are read-only URIs the server publishes for client discovery\n(system prompts, curated document snippets, etc). Content is served as\ntext \u2014 for binary payloads, register at the server-side rather than\ndeclaring here.",
+      "properties": {
+        "uri": {
+          "description": "Resource URI advertised on resources/list, e.g. 'dao-ai://prompts/system'.",
+          "title": "Uri",
+          "type": "string"
+        },
+        "name": {
+          "description": "Human-readable resource name shown in client UIs.",
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What the resource contains \u2014 surfaced in the resources/list response.",
+          "title": "Description"
+        },
+        "mime_type": {
+          "default": "text/plain",
+          "description": "MIME type of the resource payload. Defaults to text/plain.",
+          "title": "Mime Type",
+          "type": "string"
+        },
+        "content": {
+          "description": "Static text content returned by the server on resources/read for this URI.",
+          "title": "Content",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "name",
+        "content"
+      ],
+      "title": "McpResourceModel",
+      "type": "object"
+    },
+    "McpServerCapabilitiesModel": {
+      "additionalProperties": false,
+      "description": "Advanced capabilities emitted BY dao-ai when deployed as an MCP server.\n\nClient-side capabilities are on ``McpFunctionModel.capabilities``. This\nmodel is the server-side complement \u2014 declaring what the dao-ai MCP\nserver itself publishes and how it reports progress/logging to callers.\n\nWhen None on ``AppModel`` (the default), dao-ai's MCP server publishes\nonly the single agent-as-tool surface \u2014 no static resources or prompts,\nno progress notifications.",
+      "properties": {
+        "progress": {
+          "default": true,
+          "description": "Emit progress notifications from LangGraph astream_events during agent execution. Requires the caller to supply a progressToken via _meta on tools/call.",
+          "title": "Progress",
+          "type": "boolean"
+        },
+        "resources": {
+          "description": "Static resources published via resources/list. Empty list means no resources are advertised.",
+          "items": {
+            "$ref": "#/$defs/McpResourceModel"
+          },
+          "title": "Resources",
+          "type": "array"
+        },
+        "prompts": {
+          "description": "Prompt templates published via prompts/list. Empty list means no prompts are advertised.",
+          "items": {
+            "$ref": "#/$defs/McpPromptModel"
+          },
+          "title": "Prompts",
+          "type": "array"
+        }
+      },
+      "title": "McpServerCapabilitiesModel",
       "type": "object"
     },
     "MemoryExtractionModel": {
@@ -6589,6 +7874,52 @@
       "title": "MiddlewareModel",
       "type": "object"
     },
+    "ModelCallLimitModel": {
+      "additionalProperties": false,
+      "description": "Configuration for capping how many LLM (model) calls an agent may make.\n\nThe model-call analogue of :class:`ToolCallLimitModel`. Presence of this\nblock on an agent's ``call_limit`` registers a ``ModelCallLimitMiddleware``\nfor that agent, bounding the ReAct loop directly \u2014 a more discoverable,\nco-located alternative to hand-wiring\n``dao_ai.middleware.create_model_call_limit_middleware`` into the agent's\n``middleware`` list. Complements :attr:`AgentModel.recursion_limit` (the\ngraph-superstep backstop): ``run_limit`` is the graceful per-invocation cap.\n\nA bare integer is accepted as shorthand for ``run_limit`` (see\n``AgentModel.call_limit``); the object form below gives full control. At\nleast one of ``run_limit`` or ``thread_limit`` must be set. This maps to\n``create_model_call_limit_middleware``.\n\nUnlike the tool variant, ``exit_behavior`` only accepts ``'end'`` (default)\nor ``'error'`` \u2014 a model-call limit has no per-tool ``'continue'`` semantics\n(there is no alternative tool to fall back to).",
+      "properties": {
+        "run_limit": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Maximum number of model (LLM) calls this agent may make within a single invocation (one user message). Resets each run and requires no checkpointer. Alias: ``turn_limit``.",
+          "title": "Run Limit"
+        },
+        "thread_limit": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Maximum number of model (LLM) calls this agent may make across an entire conversation (thread). Requires a checkpointer, which DAO AI agents have via memory. Alias: ``conversation_limit``.",
+          "title": "Thread Limit"
+        },
+        "exit_behavior": {
+          "default": "end",
+          "description": "Behavior when a limit is reached: 'end' stops execution gracefully (recommended); 'error' raises immediately. Unlike tool-call limits, 'continue' is not supported for model-call limits.",
+          "enum": [
+            "error",
+            "end"
+          ],
+          "title": "Exit Behavior",
+          "type": "string"
+        }
+      },
+      "title": "ModelCallLimitModel",
+      "type": "object"
+    },
     "MonitoringModel": {
       "additionalProperties": false,
       "description": "Configuration for production monitoring of GenAI scorers.\n\nControls which scorers are registered and at what sampling rates against\nproduction traces stored in Unity Catalog via the MLflow 3 scorer\nlifecycle API.\n\nAttributes:\n    sample_rate: Sampling rate for built-in scorers. Defaults to 1.0 (100%).\n    scorers: Optional list of built-in scorer names to enable. When omitted,\n        all built-in scorers are registered (safety, completeness,\n        relevance_to_query, tool_call_efficiency).\n    guidelines: Optional list of guideline configurations for Guidelines\n        scorers used in production monitoring.\n    guidelines_sample_rate: Sampling rate for Guidelines scorers, which\n        invoke an LLM judge per trace and are more expensive. Defaults\n        to 0.5 (50%).",
@@ -6644,175 +7975,16 @@
       "title": "MonitoringModel",
       "type": "object"
     },
-    "MutualTLSSecurityScheme": {
-      "description": "Defines a security scheme using mTLS authentication.",
-      "properties": {
-        "description": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Description"
-        },
-        "type": {
-          "const": "mutualTLS",
-          "default": "mutualTLS",
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "title": "MutualTLSSecurityScheme",
-      "type": "object"
-    },
-    "OAuth2SecurityScheme": {
-      "description": "Defines a security scheme using OAuth 2.0.",
-      "properties": {
-        "description": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Description"
-        },
-        "flows": {
-          "$ref": "#/$defs/OAuthFlows"
-        },
-        "oauth2MetadataUrl": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Oauth2Metadataurl"
-        },
-        "type": {
-          "const": "oauth2",
-          "default": "oauth2",
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "flows"
-      ],
-      "title": "OAuth2SecurityScheme",
-      "type": "object"
-    },
-    "OAuthFlows": {
-      "description": "Defines the configuration for the supported OAuth 2.0 flows.",
-      "properties": {
-        "authorizationCode": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AuthorizationCodeOAuthFlow"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "clientCredentials": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ClientCredentialsOAuthFlow"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "implicit": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ImplicitOAuthFlow"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "password": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PasswordOAuthFlow"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        }
-      },
-      "title": "OAuthFlows",
-      "type": "object"
-    },
-    "OpenIdConnectSecurityScheme": {
-      "description": "Defines a security scheme using OpenID Connect.",
-      "properties": {
-        "description": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Description"
-        },
-        "openIdConnectUrl": {
-          "title": "Openidconnecturl",
-          "type": "string"
-        },
-        "type": {
-          "const": "openIdConnect",
-          "default": "openIdConnect",
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "openIdConnectUrl"
-      ],
-      "title": "OpenIdConnectSecurityScheme",
-      "type": "object"
-    },
     "OptimizationsModel": {
       "additionalProperties": false,
-      "description": "Container for prompt and cache threshold optimization configurations.",
+      "description": "Container for cache threshold optimization configurations and the\ntraining datasets used by optimization and offline-evaluation runs.",
       "properties": {
         "training_datasets": {
           "additionalProperties": {
             "$ref": "#/$defs/EvaluationDatasetModel"
           },
-          "description": "Named training datasets used by optimization runs.",
+          "description": "Named training datasets used by optimization and evaluation runs.",
           "title": "Training Datasets",
-          "type": "object"
-        },
-        "prompt_optimizations": {
-          "additionalProperties": {
-            "$ref": "#/$defs/PromptOptimizationModel"
-          },
-          "description": "Named prompt optimization configurations using GEPA.",
-          "title": "Prompt Optimizations",
           "type": "object"
         },
         "cache_threshold_optimizations": {
@@ -6893,10 +8065,31 @@
           ],
           "title": "Output Mode",
           "type": "string"
+        },
+        "interrupt_model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InferenceEndpointModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "LLM used to parse a user's natural-language Human-in-the-Loop interrupt response (approve/reject/edit) into structured decisions. When unset, dao-ai derives it from the router: the supervisor's model, else the swarm default agent's model, else the first declared agent's model. Set this to pin a specific endpoint for interrupt parsing (e.g. a cheaper/faster model). The resolved choice and its source are logged at build time."
         }
       },
       "title": "OrchestrationModel",
       "type": "object"
+    },
+    "ParamSource": {
+      "description": "Where a SQL statement parameter's value comes from at runtime.",
+      "enum": [
+        "llm",
+        "context"
+      ],
+      "title": "ParamSource",
+      "type": "string"
     },
     "ParameterDeclarationModel": {
       "additionalProperties": false,
@@ -6927,43 +8120,15 @@
           "default": null,
           "description": "Default value if not provided at load time. Omit to make required.",
           "title": "Default"
+        },
+        "provided": {
+          "default": false,
+          "description": "When true, this parameter's value is supplied DYNAMICALLY at run time rather than at config-load time \u2014 analogous to a build tool's 'provided' dependency scope (furnished by the runtime environment). Most commonly it comes from an upstream job task's taskValues (e.g. a Genie space id created by the workflow's provision-genie task), but the flag is generic and independent of any consumer. At load time an unsupplied `provided` param resolves to an empty string (or its `default`, if given) instead of raising missing-required, so ${var.NAME} references load cleanly before the real value exists. The workflow staging path leaves such refs unresolved (see write_pipeline_bundle) so the run-time step can fill them in; non-workflow deploy paths (apps, mcp, model_serving) have no such step and reject an unsupplied, defaultless `provided` param rather than deploy a broken binding.",
+          "title": "Provided",
+          "type": "boolean"
         }
       },
       "title": "ParameterDeclarationModel",
-      "type": "object"
-    },
-    "PasswordOAuthFlow": {
-      "description": "Defines configuration details for the OAuth 2.0 Resource Owner Password flow.",
-      "properties": {
-        "refreshUrl": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Refreshurl"
-        },
-        "scopes": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "title": "Scopes",
-          "type": "object"
-        },
-        "tokenUrl": {
-          "title": "Tokenurl",
-          "type": "string"
-        }
-      },
-      "required": [
-        "scopes",
-        "tokenUrl"
-      ],
-      "title": "PasswordOAuthFlow",
       "type": "object"
     },
     "PermissionModel": {
@@ -7058,22 +8223,10 @@
     },
     "PromptModel": {
       "additionalProperties": false,
-      "description": "A prompt backed by the MLflow Prompt Registry with versioning and alias support.",
+      "description": "A named, reusable prompt defined inline in configuration.\n\nPrompts are first-class config objects so they can be declared once and\nreferenced as YAML anchors/aliases by agents, guardrails, and supervisors.\nThe template text is carried inline; there is no registry round-trip.",
       "properties": {
-        "schema": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SchemaModel"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Unity Catalog schema qualifying the prompt name (catalog.schema.name)."
-        },
         "name": {
-          "description": "Prompt name in the MLflow Prompt Registry.",
+          "description": "Identifier for the prompt, used as a label in logs and traces.",
           "title": "Name",
           "type": "string"
         },
@@ -7087,139 +8240,20 @@
             }
           ],
           "default": null,
-          "description": "Human-readable description stored with the prompt in the registry.",
+          "description": "Human-readable description of the prompt.",
           "title": "Description"
         },
-        "default_template": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Inline template text registered when auto_register is true and no registry entry exists.",
-          "title": "Default Template"
-        },
-        "alias": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Prompt alias to load (e.g., 'latest', 'champion'). Mutually exclusive with version.",
-          "title": "Alias"
-        },
-        "version": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Specific prompt version number to load. Mutually exclusive with alias.",
-          "title": "Version"
-        },
-        "tags": {
-          "anyOf": [
-            {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Key-value tags attached to the prompt version in the registry.",
-          "title": "Tags"
-        },
-        "auto_register": {
-          "default": false,
-          "description": "Whether to automatically register the default_template to the prompt registry. If False, the prompt will only be loaded from the registry (never created/updated). Defaults to True for backward compatibility.",
-          "title": "Auto Register",
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "name"
-      ],
-      "title": "PromptModel",
-      "type": "object"
-    },
-    "PromptOptimizationModel": {
-      "additionalProperties": false,
-      "description": "Configuration for prompt optimization using GEPA.\n\nGEPA (Generative Evolution of Prompts and Agents) is an evolutionary\noptimizer that uses reflective mutation to improve prompts based on\nevaluation feedback.\n\nExample:\n    prompt_optimization:\n      name: optimize_my_prompt\n      prompt: *my_prompt\n      agent: *my_agent\n      dataset: *my_training_dataset\n      reflection_model: databricks-gpt-5-4-mini\n      num_candidates: 50",
-      "properties": {
-        "name": {
-          "description": "Unique name for this optimization run.",
-          "title": "Name",
+        "template": {
+          "description": "The prompt template text, with optional {variable} placeholders.",
+          "title": "Template",
           "type": "string"
-        },
-        "prompt": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PromptModel"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Prompt to optimize. If omitted, uses the agent's prompt."
-        },
-        "agent": {
-          "$ref": "#/$defs/AgentModel",
-          "description": "Agent whose prompt is being optimized."
-        },
-        "dataset": {
-          "$ref": "#/$defs/EvaluationDatasetModel",
-          "description": "Training dataset with input/expectation pairs for fitness evaluation."
-        },
-        "reflection_model": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "$ref": "#/$defs/InferenceEndpointModel"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "LLM used for reflective mutation during GEPA optimization.",
-          "title": "Reflection Model"
-        },
-        "num_candidates": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": 50,
-          "description": "Number of candidate prompts to evaluate per optimization run.",
-          "title": "Num Candidates"
         }
       },
       "required": [
         "name",
-        "agent",
-        "dataset"
+        "template"
       ],
-      "title": "PromptOptimizationModel",
+      "title": "PromptModel",
       "type": "object"
     },
     "ProviderModel": {
@@ -7266,6 +8300,34 @@
           ],
           "default": null,
           "description": "Human-in-the-loop approval configuration for this tool."
+        },
+        "audit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuditModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional tamper-evident audit trail for this tool. Presence of this block enables audit-receipt logging on every invocation; absence leaves the runtime path unchanged. Typically declared once as a YAML anchor and referenced from every tool that should be audited. Composes with human_in_the_loop to produce approval receipts with args-hash binding and fail-closed execution."
+        },
+        "call_limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/ToolCallLimitModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Shortcut to cap how many times this tool may be called. A bare integer sets run_limit (per-invocation) with exit_behavior='continue'; an object gives full control over run_limit/thread_limit/exit_behavior. Applied automatically to every agent that uses this tool, in addition to any explicit tool-call-limit middleware configured on the agent.",
+          "title": "Call Limit"
         },
         "name": {
           "description": "Fully qualified Python function name (e.g., 'my_package.tools.my_tool').",
@@ -7383,9 +8445,16 @@
         },
         "vector_stores": {
           "additionalProperties": {
-            "$ref": "#/$defs/VectorStoreModel"
+            "oneOf": [
+              {
+                "$ref": "#/$defs/AiSearchVectorStoreModel"
+              },
+              {
+                "$ref": "#/$defs/LakebaseVectorStoreModel"
+              }
+            ]
           },
-          "description": "Vector search index configurations for semantic retrieval.",
+          "description": "Named vector-store configurations, keyed by name. Each entry is a discriminated union \u2014 the ``type`` field selects between ``AiSearchVectorStoreModel`` (default, `type: ai_search`) and ``LakebaseVectorStoreModel`` (`type: lakebase_search`). Existing YAMLs that omit ``type`` continue to parse as AI Search vector stores.",
           "title": "Vector Stores",
           "type": "object"
         },
@@ -7497,68 +8566,6 @@
         }
       },
       "title": "ResponseFormatModel",
-      "type": "object"
-    },
-    "RetrieverModel": {
-      "additionalProperties": false,
-      "description": "Retriever combining a vector store with search parameters, reranking, and instructed retrieval.",
-      "properties": {
-        "vector_store": {
-          "$ref": "#/$defs/VectorStoreModel",
-          "description": "Vector search index configuration used for similarity search."
-        },
-        "columns": {
-          "anyOf": [
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Columns to return from search results. Defaults to the vector store's columns.",
-          "title": "Columns"
-        },
-        "search_parameters": {
-          "$ref": "#/$defs/SearchParametersModel",
-          "description": "Search tuning: number of results, query type, and metadata filters."
-        },
-        "rerank": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RerankParametersModel"
-            },
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Optional reranking configuration. Set to true for defaults, or provide RerankParametersModel for custom settings.",
-          "title": "Rerank"
-        },
-        "instructed": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/InstructedRetrieverModel"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Optional instructed retrieval with query decomposition, instruction-aware reranking, routing, and verification."
-        }
-      },
-      "required": [
-        "vector_store"
-      ],
-      "title": "RetrieverModel",
       "type": "object"
     },
     "RouterModel": {
@@ -7753,6 +8760,34 @@
           ],
           "default": null,
           "description": "Human-in-the-loop approval configuration for this tool."
+        },
+        "audit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuditModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional tamper-evident audit trail for this tool. Presence of this block enables audit-receipt logging on every invocation; absence leaves the runtime path unchanged. Typically declared once as a YAML anchor and referenced from every tool that should be audited. Composes with human_in_the_loop to produce approval receipts with args-hash binding and fail-closed execution."
+        },
+        "call_limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/ToolCallLimitModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Shortcut to cap how many times this tool may be called. A bare integer sets run_limit (per-invocation) with exit_behavior='continue'; an object gives full control over run_limit/thread_limit/exit_behavior. Applied automatically to every agent that uses this tool, in addition to any explicit tool-call-limit middleware configured on the agent.",
+          "title": "Call Limit"
         }
       },
       "title": "SearchToolModel",
@@ -7789,26 +8824,6 @@
       ],
       "title": "SecretVariableModel",
       "type": "object"
-    },
-    "SecurityScheme": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/APIKeySecurityScheme"
-        },
-        {
-          "$ref": "#/$defs/HTTPAuthSecurityScheme"
-        },
-        {
-          "$ref": "#/$defs/OAuth2SecurityScheme"
-        },
-        {
-          "$ref": "#/$defs/OpenIdConnectSecurityScheme"
-        },
-        {
-          "$ref": "#/$defs/MutualTLSSecurityScheme"
-        }
-      ],
-      "title": "SecurityScheme"
     },
     "ServicePrincipalModel": {
       "description": "Databricks service principal credentials for OAuth M2M authentication.",
@@ -7904,6 +8919,34 @@
           "default": null,
           "description": "Human-in-the-loop approval configuration for this tool."
         },
+        "audit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuditModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional tamper-evident audit trail for this tool. Presence of this block enables audit-receipt logging on every invocation; absence leaves the runtime path unchanged. Typically declared once as a YAML anchor and referenced from every tool that should be audited. Composes with human_in_the_loop to produce approval receipts with args-hash binding and fail-closed execution."
+        },
+        "call_limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/ToolCallLimitModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Shortcut to cap how many times this tool may be called. A bare integer sets run_limit (per-invocation) with exit_behavior='continue'; an object gives full control over run_limit/thread_limit/exit_behavior. Applied automatically to every agent that uses this tool, in addition to any explicit tool-call-limit middleware configured on the agent.",
+          "title": "Call Limit"
+        },
         "endpoint": {
           "anyOf": [
             {
@@ -7934,7 +8977,7 @@
               "type": "boolean"
             }
           ],
-          "description": "Model Serving endpoint to call. Accepts either an endpoint name string (sugar) or a full InferenceEndpointModel with temperature / max_tokens / ai_gateway / on_behalf_of_user. For a UC-registered agent endpoint or a Knowledge Assistant this is the endpoint name (e.g., 'ka-customer-reviews', 'hardware_store_dao'). For FMAPI it's the foundation model endpoint name (e.g., 'databricks-claude-sonnet-4').",
+          "description": "Model Serving endpoint to call. Accepts either an endpoint name string (sugar) or a full InferenceEndpointModel with temperature / max_tokens / ai_gateway / on_behalf_of_user. For a UC-registered agent endpoint or a Knowledge Assistant this is the endpoint name (e.g., 'ka-customer-reviews', 'hardware_store_dao'). For FMAPI it's the foundation model endpoint name (e.g., 'databricks-claude-sonnet-4-5').",
           "title": "Endpoint"
         },
         "api": {
@@ -8040,6 +9083,211 @@
         "path"
       ],
       "title": "SkillModel",
+      "type": "object"
+    },
+    "SqlToolModel": {
+      "additionalProperties": false,
+      "description": "First-class SQL tool that delegates to ``dao_ai.tools.sql.create_execute_statement_tool``.\n\nEquivalent to ``type: factory + name:\ndao_ai.tools.sql.create_execute_statement_tool``, but with typed fields. Runs\na fixed SQL statement (optionally with bound ``params``) against a SQL\nwarehouse or a Lakebase / Postgres database. Exactly one of ``warehouse`` or\n``database`` is required. Parameter values are bound natively (``:name`` for a\nwarehouse, ``%(name)s`` for Lakebase) \u2014 never interpolated into the SQL.",
+      "properties": {
+        "type": {
+          "const": "sql",
+          "default": "sql",
+          "description": "Function type discriminator. Must be 'sql'.",
+          "title": "Type",
+          "type": "string"
+        },
+        "human_in_the_loop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HumanInTheLoopModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-in-the-loop approval configuration for this tool."
+        },
+        "audit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuditModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional tamper-evident audit trail for this tool. Presence of this block enables audit-receipt logging on every invocation; absence leaves the runtime path unchanged. Typically declared once as a YAML anchor and referenced from every tool that should be audited. Composes with human_in_the_loop to produce approval receipts with args-hash binding and fail-closed execution."
+        },
+        "call_limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/ToolCallLimitModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Shortcut to cap how many times this tool may be called. A bare integer sets run_limit (per-invocation) with exit_behavior='continue'; an object gives full control over run_limit/thread_limit/exit_behavior. Applied automatically to every agent that uses this tool, in addition to any explicit tool-call-limit middleware configured on the agent.",
+          "title": "Call Limit"
+        },
+        "warehouse": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WarehouseModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "SQL warehouse to run the statement against (use ':name' bind markers). Mutually exclusive with 'database'; exactly one is required."
+        },
+        "database": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DatabaseModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Lakebase / Postgres database to run the statement against (use '%(name)s' bind markers). Mutually exclusive with 'warehouse'; exactly one is required."
+        },
+        "statement": {
+          "description": "SQL statement to execute.",
+          "title": "Statement",
+          "type": "string"
+        },
+        "params": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/StatementParam"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional bound parameters. 'llm'-sourced params appear in the tool schema; 'context'-sourced params bind from the runtime Context.",
+          "title": "Params"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tool name visible to the LLM. Defaults to 'execute_sql_tool'.",
+          "title": "Name"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tool description shown to the LLM during function calling.",
+          "title": "Description"
+        }
+      },
+      "required": [
+        "statement"
+      ],
+      "title": "SqlToolModel",
+      "type": "object"
+    },
+    "StatementParam": {
+      "additionalProperties": false,
+      "description": "A single bound parameter for a SQL statement tool.\n\nValues are bound natively (warehouse: ``:name`` markers; Lakebase / Postgres:\n``%(name)s`` markers) \u2014 never interpolated into the SQL string. ``source``\ndecides where the value comes from: ``llm`` params are surfaced in the tool\nschema the model sees, while ``context`` params are resolved server-side from\nthe runtime ``Context`` and are never exposed to the model.",
+      "properties": {
+        "name": {
+          "description": "Parameter/marker name as it appears in the SQL statement.",
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "default": "string",
+          "description": "Declared value type; shapes the LLM-facing tool schema.",
+          "enum": [
+            "string",
+            "int",
+            "float",
+            "bool"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/ParamSource",
+          "default": "llm",
+          "description": "Value source: 'llm' (model supplies it, appears in the tool schema) or 'context' (bound from runtime Context, hidden from the model)."
+        },
+        "required": {
+          "default": true,
+          "description": "Whether a value must be present; a missing required value errors.",
+          "title": "Required",
+          "type": "boolean"
+        },
+        "default": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Fallback value applied when the parameter is not supplied.",
+          "title": "Default"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human/LLM-facing description of the parameter.",
+          "title": "Description"
+        },
+        "context_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "For source='context': the Context attribute to read. Defaults to the parameter 'name' when omitted.",
+          "title": "Context Key"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "StatementParam",
       "type": "object"
     },
     "StoreModel": {
@@ -8551,6 +9799,53 @@
       "title": "TableModel",
       "type": "object"
     },
+    "ToolCallLimitModel": {
+      "additionalProperties": false,
+      "description": "Configuration for capping how many times a tool may be called.\n\nPresence of this block on a tool's ``function`` registers a\n``ToolCallLimitMiddleware`` for that tool on every agent that uses it, so\nthe limit follows the tool rather than being re-declared on each agent's\n``middleware`` list. Typically declared once as a YAML anchor\n(``call_limit: &tool_limit { ... }``) and referenced from every tool that\nshould share the same cap.\n\nA bare integer is accepted as shorthand for ``run_limit`` with\n``exit_behavior='continue'`` (see ``BaseFunctionModel.call_limit``); the\nobject form below gives full control. At least one of ``run_limit`` or\n``thread_limit`` must be set. This maps to LangChain's\n``ToolCallLimitMiddleware`` via ``create_tool_call_limit_middleware``.",
+      "properties": {
+        "run_limit": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Maximum number of times this tool may be called within a single agent invocation (one user message). Resets each run and requires no checkpointer. Alias: ``turn_limit``.",
+          "title": "Run Limit"
+        },
+        "thread_limit": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Maximum number of times this tool may be called across an entire conversation (thread). Requires a checkpointer, which DAO AI agents have via memory. Alias: ``conversation_limit``.",
+          "title": "Thread Limit"
+        },
+        "exit_behavior": {
+          "default": "continue",
+          "description": "Behavior when a limit is reached: 'continue' blocks the call and returns an error message so the agent can try another approach (recommended); 'error' raises immediately; 'end' stops execution gracefully (single-tool scenarios only).",
+          "enum": [
+            "continue",
+            "error",
+            "end"
+          ],
+          "title": "Exit Behavior",
+          "type": "string"
+        }
+      },
+      "title": "ToolCallLimitModel",
+      "type": "object"
+    },
     "ToolModel": {
       "additionalProperties": false,
       "description": "A named tool binding an identifier to a function implementation.",
@@ -8581,7 +9876,13 @@
               "$ref": "#/$defs/GenieToolModel"
             },
             {
-              "$ref": "#/$defs/VectorSearchToolModel"
+              "$ref": "#/$defs/AiSearchToolModel"
+            },
+            {
+              "$ref": "#/$defs/LakebaseSearchToolModel"
+            },
+            {
+              "$ref": "#/$defs/SqlToolModel"
             },
             {
               "$ref": "#/$defs/SearchToolModel"
@@ -8612,7 +9913,7 @@
     },
     "TraceLocationModel": {
       "additionalProperties": false,
-      "description": "Unity Catalog location for storing MLflow traces in OTEL-format Delta tables.\n\nWhen configured on AppModel, traces are stored in UC Delta tables via\n``mlflow.set_experiment(experiment_id=..., trace_location=UnityCatalog(...))``.\nProvide an optional ``table_prefix`` to namespace the OTEL tables when\nmultiple agents share a single UC schema. Without a prefix, MLflow uses\nthe literal default ``mlflow_experiment_trace`` \u2014 table names become\n``<catalog>.<schema>.mlflow_experiment_trace_otel_{spans,logs,metrics,annotations}``\n(see ``mlflow.entities.trace_location._UC_SCHEMA_DEFAULT_SPANS_TABLE_NAME``).\nAll experiments linked to the same schema with no prefix end up writing\nto the same shared table set, distinguished by the ``experiment_id``\ncolumn inside the tables \u2014 convenient for cross-experiment analytics,\nbut ambiguous if you want per-app isolation. Set ``table_prefix`` to\nnamespace the tables per agent (e.g. ``table_prefix: sales_genie`` yields\n``<catalog>.<schema>.sales_genie_otel_spans``).\n\ndao-ai does NOT include the OTEL trace tables in the model's auth_policy\nor App resources list because the table names depend on the configured\n``table_prefix`` and aren't fully predictable at deploy time. Instead,\nusers grant the deployed serving identity USE_CATALOG + USE_SCHEMA +\nSELECT + MODIFY on the trace schema as a one-time post-deploy step\n(mirrors the Apps SP grant pattern documented in README).",
+      "description": "Unity Catalog location for storing MLflow traces in OTEL-format Delta tables.\n\nWhen configured on ``AppModel``, traces are stored in UC Delta tables via\n``mlflow.set_experiment(experiment_id=..., trace_location=UnityCatalog(...))``.\nMLflow materializes four Delta tables per (schema, prefix) pair:\n``<catalog>.<schema>.<prefix>_otel_{spans,logs,metrics,annotations}``.\n\nWhen ``table_prefix`` is not explicitly set, MLflow falls back to the\n``experiment_id`` at runtime \u2014 producing a per-experiment table set\nout of the box (e.g. ``2931483616868130_otel_spans``). Set\n``table_prefix`` to namespace tables when multiple experiments share\na single UC schema and you want each agent's traces in its own table\nset (e.g. ``table_prefix: sales_genie`` yields\n``sales_genie_otel_spans``).\n\nDeploy ordering:\n\n1. ``_link_experiment_trace_location`` calls\n   ``mlflow.set_experiment(trace_location=UnityCatalog(...))``,\n   which materializes the four OTEL tables on the configured\n   warehouse (auto-starts STOPPED warehouses; waits up to 1200s).\n2. ``build_auth_policy`` then includes the four tables in the\n   deployed model's ``SystemAuthPolicy.resources`` via\n   :meth:`as_resources`, so ``agents.deploy`` auto-grants the\n   Model Serving SP USE_CATALOG / USE_SCHEMA / SELECT / MODIFY\n   on each table \u2014 no manual post-deploy ``GRANT`` step required.",
       "properties": {
         "schema": {
           "$ref": "#/$defs/SchemaModel",
@@ -8724,6 +10025,34 @@
           ],
           "default": null,
           "description": "Human-in-the-loop approval configuration for this tool."
+        },
+        "audit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuditModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional tamper-evident audit trail for this tool. Presence of this block enables audit-receipt logging on every invocation; absence leaves the runtime path unchanged. Typically declared once as a YAML anchor and referenced from every tool that should be audited. Composes with human_in_the_loop to produce approval receipts with args-hash binding and fail-closed execution."
+        },
+        "call_limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "$ref": "#/$defs/ToolCallLimitModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Shortcut to cap how many times this tool may be called. A bare integer sets run_limit (per-invocation) with exit_behavior='continue'; an object gives full control over run_limit/thread_limit/exit_behavior. Applied automatically to every agent that uses this tool, in addition to any explicit tool-call-limit middleware configured on the agent.",
+          "title": "Call Limit"
         },
         "resource": {
           "$ref": "#/$defs/FunctionModel",
@@ -8841,422 +10170,6 @@
         }
       },
       "title": "UnityCatalogFunctionSqlTestModel",
-      "type": "object"
-    },
-    "VectorSearchEndpoint": {
-      "additionalProperties": false,
-      "description": "Vector search endpoint that hosts one or more vector search indexes.",
-      "properties": {
-        "name": {
-          "description": "Vector search endpoint name in the workspace.",
-          "title": "Name",
-          "type": "string"
-        },
-        "type": {
-          "$ref": "#/$defs/VectorSearchEndpointType",
-          "default": "STANDARD",
-          "description": "Endpoint type: STANDARD or OPTIMIZED_STORAGE."
-        },
-        "target_qps": {
-          "anyOf": [
-            {
-              "exclusiveMinimum": 0,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Target queries-per-second for the endpoint. STANDARD only. Scales endpoint compute linearly; capacity changes take effect the next time an index on this endpoint is created or synced. Public Preview. Honored at endpoint-creation time only \u2014 if the endpoint already exists, this value is ignored.",
-          "title": "Target Qps"
-        }
-      },
-      "required": [
-        "name"
-      ],
-      "title": "VectorSearchEndpoint",
-      "type": "object"
-    },
-    "VectorSearchEndpointType": {
-      "description": "Vector search endpoint compute profile.",
-      "enum": [
-        "STANDARD",
-        "OPTIMIZED_STORAGE"
-      ],
-      "title": "VectorSearchEndpointType",
-      "type": "string"
-    },
-    "VectorSearchToolModel": {
-      "additionalProperties": false,
-      "description": "First-class Vector Search tool that delegates to ``dao_ai.tools.create_vector_search_tool``.\n\nEquivalent to ``type: factory + name: dao_ai.tools.create_vector_search_tool``,\nbut with typed fields. Exactly one of ``retriever`` or ``vector_store`` is\nrequired.",
-      "properties": {
-        "type": {
-          "const": "vector_search",
-          "default": "vector_search",
-          "description": "Function type discriminator. Must be 'vector_search'.",
-          "title": "Type",
-          "type": "string"
-        },
-        "human_in_the_loop": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/HumanInTheLoopModel"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Human-in-the-loop approval configuration for this tool."
-        },
-        "retriever": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RetrieverModel"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Full retriever configuration with search parameters and reranking. Mutually exclusive with vector_store."
-        },
-        "vector_store": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/VectorStoreModel"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Direct vector store reference (uses default search parameters). Mutually exclusive with retriever."
-        },
-        "name": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Tool name visible to the LLM.",
-          "title": "Name"
-        },
-        "description": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Tool description shown to the LLM during function calling.",
-          "title": "Description"
-        }
-      },
-      "title": "VectorSearchToolModel",
-      "type": "object"
-    },
-    "VectorStoreModel": {
-      "additionalProperties": false,
-      "description": "Configuration model for a Databricks Vector Search store.\n\nSupports two modes:\n1. **Use Existing Index**: Provide only `index` (fully qualified name).\n   Used for querying an existing vector search index at runtime.\n2. **Provisioning Mode**: Provide `source_table` + `embedding_source_column`.\n   Used for creating a new vector search index.\n\nExamples:\n    Minimal configuration (use existing index):\n    ```yaml\n    vector_stores:\n      products_search:\n        index:\n          name: catalog.schema.my_index\n    ```\n\n    Full provisioning configuration:\n    ```yaml\n    vector_stores:\n      products_search:\n        source_table:\n          schema: *my_schema\n          name: products\n        embedding_source_column: description\n        endpoint:\n          name: my_endpoint\n    ```",
-      "properties": {
-        "on_behalf_of_user": {
-          "anyOf": [
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": false,
-          "description": "Use the calling user's identity (OBO). Works in Model Serving and Databricks Apps.",
-          "title": "On Behalf Of User"
-        },
-        "service_principal": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ServicePrincipalModel"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Service principal for OAuth M2M authentication. Expands to client_id and client_secret."
-        },
-        "client_id": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CompositeVariableModel"
-            },
-            {
-              "$ref": "#/$defs/EnvironmentVariableModel"
-            },
-            {
-              "$ref": "#/$defs/SecretVariableModel"
-            },
-            {
-              "$ref": "#/$defs/PrimitiveVariableModel"
-            },
-            {
-              "type": "string"
-            },
-            {
-              "type": "integer"
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "OAuth client ID for service principal authentication.",
-          "title": "Client Id"
-        },
-        "client_secret": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CompositeVariableModel"
-            },
-            {
-              "$ref": "#/$defs/EnvironmentVariableModel"
-            },
-            {
-              "$ref": "#/$defs/SecretVariableModel"
-            },
-            {
-              "$ref": "#/$defs/PrimitiveVariableModel"
-            },
-            {
-              "type": "string"
-            },
-            {
-              "type": "integer"
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "OAuth client secret for service principal authentication.",
-          "title": "Client Secret"
-        },
-        "workspace_host": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CompositeVariableModel"
-            },
-            {
-              "$ref": "#/$defs/EnvironmentVariableModel"
-            },
-            {
-              "$ref": "#/$defs/SecretVariableModel"
-            },
-            {
-              "$ref": "#/$defs/PrimitiveVariableModel"
-            },
-            {
-              "type": "string"
-            },
-            {
-              "type": "integer"
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Databricks workspace URL (e.g., 'https://my-workspace.cloud.databricks.com').",
-          "title": "Workspace Host"
-        },
-        "pat": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CompositeVariableModel"
-            },
-            {
-              "$ref": "#/$defs/EnvironmentVariableModel"
-            },
-            {
-              "$ref": "#/$defs/SecretVariableModel"
-            },
-            {
-              "$ref": "#/$defs/PrimitiveVariableModel"
-            },
-            {
-              "type": "string"
-            },
-            {
-              "type": "integer"
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Personal access token for PAT-based authentication.",
-          "title": "Pat"
-        },
-        "index": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/IndexModel"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Vector search index to query. Required for runtime; auto-generated in provisioning mode."
-        },
-        "source_table": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TableModel"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Source table for provisioning a new vector search index. Omit when using an existing index."
-        },
-        "embedding_source_column": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Column in the source table containing text to embed. Required in provisioning mode.",
-          "title": "Embedding Source Column"
-        },
-        "embedding_model": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/InferenceEndpointModel"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Embedding model endpoint. Defaults to 'databricks-gte-large-en' in provisioning mode."
-        },
-        "endpoint": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/VectorSearchEndpoint"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Vector search endpoint hosting the index. Auto-detected in provisioning mode."
-        },
-        "source_path": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/VolumePathModel"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Volume path for source data files (alternative to source_table)."
-        },
-        "checkpoint_path": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/VolumePathModel"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Volume path for sync checkpoint storage."
-        },
-        "primary_key": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Primary key column in the source table. Auto-detected if omitted.",
-          "title": "Primary Key"
-        },
-        "columns": {
-          "anyOf": [
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Columns to include in search results.",
-          "title": "Columns"
-        },
-        "doc_uri": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Column name containing document URIs for provenance tracking.",
-          "title": "Doc Uri"
-        }
-      },
-      "title": "VectorStoreModel",
       "type": "object"
     },
     "VerifierModel": {
@@ -9699,6 +10612,7 @@
         "description": {
           "anyOf": [
             {
+              "maxLength": 200,
               "type": "string"
             },
             {
@@ -9748,11 +10662,12 @@
       "type": "object"
     },
     "WorkloadSize": {
-      "description": "Model Serving workload size controlling compute resources.",
+      "description": "Compute size controlling deployment resources.\n\nShared by both deployment targets. Model Serving accepts Small/Medium/Large\nnatively; XLarge is an Apps-only tier (Databricks Apps supports MEDIUM,\nLARGE, XLARGE and has no Small tier). When XLarge is used with the Model\nServing target it is clamped to Large (its largest size).",
       "enum": [
         "Small",
         "Medium",
-        "Large"
+        "Large",
+        "XLarge"
       ],
       "title": "WorkloadSize",
       "type": "string"
@@ -9845,9 +10760,16 @@
     },
     "retrievers": {
       "additionalProperties": {
-        "$ref": "#/$defs/RetrieverModel"
+        "oneOf": [
+          {
+            "$ref": "#/$defs/AiSearchRetrieverModel"
+          },
+          {
+            "$ref": "#/$defs/LakebaseRetrieverModel"
+          }
+        ]
       },
-      "description": "Named retriever configurations combining a vector store with search parameters and optional reranking.",
+      "description": "Named retriever configurations, keyed by name. Each entry is a discriminated union \u2014 the ``type`` field selects between ``AiSearchRetrieverModel`` (default, `type: ai_search`) and ``LakebaseRetrieverModel`` (`type: lakebase_search`). Existing YAMLs that omit ``type`` continue to parse as AI Search retrievers.",
       "title": "Retrievers",
       "type": "object"
     },
@@ -9891,7 +10813,7 @@
       "additionalProperties": {
         "$ref": "#/$defs/PromptModel"
       },
-      "description": "Named prompt definitions backed by the MLflow Prompt Registry.",
+      "description": "Named, reusable prompt definitions referenced by agents via YAML anchors.",
       "title": "Prompts",
       "type": "object"
     },

@@ -122,6 +122,8 @@ import {
   LakebaseMode,
   VariableModel,
   VectorStoreModel,
+  AiSearchVectorStoreModel,
+  LakebaseVectorStoreModel,
   SchemaModel,
   SkillModel,
   VolumePathModel,
@@ -4480,6 +4482,21 @@ function DatabasesPanel({ showForm, setShowForm, editingKey, setEditingKey, onCl
 // =============================================================================
 interface VectorStoreFormData {
   refName: string;
+  // dao-ai 0.2.x: backend selector. 'ai_search' = Databricks AI Search index
+  // (the classic form below); 'lakebase_search' = a Lakebase Postgres table.
+  storeType: 'ai_search' | 'lakebase_search';
+  // --- Lakebase (type: lakebase_search) fields ---
+  lakebaseDatabaseRef: string;   // reference key into resources.databases
+  lakebaseSchemaName: string;    // default "public"
+  lakebaseTable: string;
+  lakebaseIdColumn: string;      // default "id"
+  lakebaseContentColumn: string;
+  lakebaseEmbeddingColumn: string;
+  lakebaseTsvectorColumn: string;
+  lakebaseMetadataColumns: string;   // comma-separated
+  lakebaseEmbeddingModel: string;    // model ref key or bare endpoint name
+  lakebaseDistanceMetric: 'cosine' | 'l2' | 'ip';
+  lakebaseTsvLanguage: string;       // default "english"
   // Configuration mode: 'use_existing' (just reference an existing index) or 'provision' (create new from source table)
   configMode: 'use_existing' | 'provision';
   // Endpoint (optional - auto-detected if not specified)
@@ -4544,6 +4561,18 @@ interface VectorStoreFormData {
 
 const defaultVectorStoreForm: VectorStoreFormData = {
   refName: '',
+  storeType: 'ai_search',
+  lakebaseDatabaseRef: '',
+  lakebaseSchemaName: 'public',
+  lakebaseTable: '',
+  lakebaseIdColumn: 'id',
+  lakebaseContentColumn: '',
+  lakebaseEmbeddingColumn: '',
+  lakebaseTsvectorColumn: '',
+  lakebaseMetadataColumns: '',
+  lakebaseEmbeddingModel: '',
+  lakebaseDistanceMetric: 'cosine',
+  lakebaseTsvLanguage: 'english',
   configMode: 'use_existing',  // Default to simpler mode
   endpointSource: 'select',  // Default to selecting from list
   endpoint_name: '',
@@ -4909,6 +4938,7 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
   const { config, addVectorStore, updateVectorStore, removeVectorStore } = useConfigStore();
   const vectorStores = config.resources?.vector_stores || {};
   const configuredModels = config.resources?.models || {};
+  const configuredDatabases = config.resources?.databases || {};
   const configuredSchemas = config.schemas || {};
   const configuredVolumes = config.resources?.volumes || {};
   const variables = config.variables || {};
@@ -5007,12 +5037,65 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
   
   const handleEdit = (key: string) => {
     scrollToAsset(key);
-    const vs = vectorStores[key];
-    if (vs) {
+    const vsAny = vectorStores[key];
+
+    // dao-ai 0.2.x: Lakebase stores use a dedicated sub-form. Populate its
+    // fields and open the form, then return before the AI Search parsing.
+    if ((vsAny as LakebaseVectorStoreModel)?.type === 'lakebase_search') {
+      const lvs = vsAny as LakebaseVectorStoreModel;
+      // After yaml.load, `database` is either a string ref (rare) or a resolved
+      // inline object. Match a resolved object back to a configured database key
+      // by identity (project / instance_name / host / name) so the dropdown
+      // preselects and the save path re-emits the *alias.
+      let dbRef = '';
+      if (typeof lvs.database === 'string') {
+        dbRef = lvs.database.startsWith('*') ? lvs.database.slice(1) : lvs.database;
+      } else if (lvs.database) {
+        const d = lvs.database as DatabaseModel;
+        dbRef = Object.entries(configuredDatabases).find(([, cd]) =>
+          (d.project !== undefined && cd.project === d.project) ||
+          (d.instance_name !== undefined && cd.instance_name === d.instance_name) ||
+          (d.host !== undefined && cd.host === d.host) ||
+          (d.name !== undefined && cd.name === d.name),
+        )?.[0] || '';
+      }
+      // embedding_model may be a bare endpoint-name string or a resolved model
+      // object; match a resolved object back to a configured model key.
+      let emRef = '';
+      if (typeof lvs.embedding_model === 'string') {
+        emRef = lvs.embedding_model.startsWith('*') ? lvs.embedding_model.slice(1) : lvs.embedding_model;
+      } else if (lvs.embedding_model) {
+        const emName = (lvs.embedding_model as { name?: string }).name;
+        emRef = (emName && Object.entries(configuredModels).find(([, m]) => m.name === emName)?.[0]) || emName || '';
+      }
+      setFormData({
+        ...defaultVectorStoreForm,
+        refName: key,
+        storeType: 'lakebase_search',
+        lakebaseDatabaseRef: dbRef,
+        lakebaseSchemaName: lvs.schema_name || 'public',
+        lakebaseTable: lvs.table || '',
+        lakebaseIdColumn: lvs.id_column || 'id',
+        lakebaseContentColumn: lvs.content_column || '',
+        lakebaseEmbeddingColumn: lvs.embedding_column || '',
+        lakebaseTsvectorColumn: lvs.tsvector_column || '',
+        lakebaseMetadataColumns: (lvs.metadata_columns || []).join(', '),
+        lakebaseEmbeddingModel: emRef,
+        lakebaseDistanceMetric: lvs.distance_metric || 'cosine',
+        lakebaseTsvLanguage: lvs.tsv_language || 'english',
+      });
+      setEditingKey(key);
+      setShowForm(true);
+      return;
+    }
+
+    // AI Search: the rich provisioning form below is AI-Search-specific.
+    const vs = vsAny as AiSearchVectorStoreModel;
+    if (vsAny) {
       // Check if the index schema matches a configured schema
       const indexSchemaRef = Object.entries(configuredSchemas).find(
-        ([_, schema]) => 
-          schema.catalog_name === vs.index?.schema?.catalog_name && 
+        ([_, schema]) =>
+          schema.catalog_name === vs.index?.schema?.catalog_name &&
           schema.schema_name === vs.index?.schema?.schema_name
       );
       // Check if the source table schema matches a configured schema
@@ -5124,6 +5207,8 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
       const endpointExistsInList = endpointName && vsEndpoints?.some(ep => ep.name === endpointName);
       
       setFormData({
+        ...defaultVectorStoreForm,
+        storeType: 'ai_search',
         refName: key,
         configMode,
         endpointSource: endpointName && !endpointExistsInList ? 'manual' : 'select',
@@ -5144,7 +5229,7 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
         embedding_source_column: vs.embedding_source_column || '',
         columns: vs.columns || [],
         doc_uri: vs.doc_uri || '',
-        embedding_model: vs.embedding_model?.name || 'databricks-gte-large-en',
+        embedding_model: (typeof vs.embedding_model === 'string' ? vs.embedding_model : vs.embedding_model?.name) || 'databricks-gte-large-en',
         sourcePathEnabled,
         sourcePathSchemaSource,
         sourcePathSchemaRef,
@@ -5175,7 +5260,48 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
   const handleSave = () => {
     // Parse columns from input
     const columns = columnsInput.split(',').map(c => c.trim()).filter(c => c);
-    
+
+    // dao-ai 0.2.x: Lakebase (Postgres) vector store — a distinct discriminated
+    // shape. Build and commit it, then return before the AI Search path.
+    if (formData.storeType === 'lakebase_search') {
+      const metaCols = formData.lakebaseMetadataColumns
+        .split(',').map(c => c.trim()).filter(c => c);
+      const lvs: LakebaseVectorStoreModel = {
+        type: 'lakebase_search',
+        // reference into resources.databases (emitted as a YAML alias)
+        database: `__REF__${formData.lakebaseDatabaseRef}` as unknown as string,
+        ...(formData.lakebaseSchemaName && formData.lakebaseSchemaName !== 'public' && { schema_name: formData.lakebaseSchemaName }),
+        table: formData.lakebaseTable,
+        ...(formData.lakebaseIdColumn && formData.lakebaseIdColumn !== 'id' && { id_column: formData.lakebaseIdColumn }),
+        content_column: formData.lakebaseContentColumn,
+        embedding_column: formData.lakebaseEmbeddingColumn,
+        ...(formData.lakebaseTsvectorColumn && { tsvector_column: formData.lakebaseTsvectorColumn }),
+        ...(metaCols.length > 0 && { metadata_columns: metaCols }),
+        // model ref key (emitted as alias) or bare endpoint name
+        embedding_model: (configuredModels[formData.lakebaseEmbeddingModel]
+          ? (`__REF__${formData.lakebaseEmbeddingModel}` as unknown as string)
+          : formData.lakebaseEmbeddingModel),
+        ...(formData.lakebaseDistanceMetric && formData.lakebaseDistanceMetric !== 'cosine' && { distance_metric: formData.lakebaseDistanceMetric }),
+        ...(formData.lakebaseTsvLanguage && formData.lakebaseTsvLanguage !== 'english' && { tsv_language: formData.lakebaseTsvLanguage }),
+      };
+      if (editingKey) {
+        if (editingKey !== formData.refName) {
+          removeVectorStore(editingKey);
+          addVectorStore(formData.refName, lvs);
+        } else {
+          updateVectorStore(editingKey, lvs);
+        }
+      } else {
+        addVectorStore(formData.refName, lvs);
+      }
+      setShowForm(false);
+      setEditingKey(null);
+      setFormData(defaultVectorStoreForm);
+      setColumnsInput('');
+      onClose();
+      return;
+    }
+
     // Initialize model with common fields
     const vs: VectorStoreModel = {
       on_behalf_of_user: formData.on_behalf_of_user || undefined,
@@ -5361,9 +5487,16 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
       {/* Existing Resources */}
       {Object.keys(vectorStores).length > 0 && (
         <div className="space-y-2 mb-4">
-          {Object.entries(vectorStores).map(([key, vs]) => (
-            <div 
-              key={key} 
+          {Object.entries(vectorStores).map(([key, vsAny]) => {
+            // dao-ai 0.2.x: card is type-aware. Lakebase stores show table info
+            // and delegate auth to their database (no auth badges); AI Search
+            // stores show endpoint/index and their own auth badges.
+            const isLakebase = (vsAny as LakebaseVectorStoreModel).type === 'lakebase_search';
+            const lvs = vsAny as LakebaseVectorStoreModel;
+            const avs = vsAny as AiSearchVectorStoreModel;
+            return (
+            <div
+              key={key}
               className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700 cursor-pointer hover:bg-slate-800/70 transition-colors"
               onClick={() => handleEdit(key)}
             >
@@ -5372,30 +5505,37 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
                 <div>
                   <p className="font-medium text-slate-200">{key}</p>
                   <p className="text-xs text-slate-500">
-                    {vs.endpoint?.name || 'No endpoint'} • {vs.index?.name || 'No index'}
+                    {isLakebase
+                      ? `Lakebase • ${lvs.schema_name || 'public'}.${lvs.table || '(no table)'}`
+                      : `${avs.endpoint?.name || 'No endpoint'} • ${avs.index?.name || 'No index'}`}
                   </p>
                 </div>
               </div>
               <div className="flex items-center space-x-2">
-                {vs.on_behalf_of_user && (
+                {isLakebase && (
+                  <Badge variant="info" title="Lakebase (Postgres) retrieval">
+                    Lakebase
+                  </Badge>
+                )}
+                {!isLakebase && avs.on_behalf_of_user && (
                   <Badge variant="success" title="On Behalf of User">
                     <User className="w-3 h-3 mr-1" />
                     OBO
                   </Badge>
                 )}
-                {!vs.on_behalf_of_user && vs.service_principal && (
+                {!isLakebase && !avs.on_behalf_of_user && avs.service_principal && (
                   <Badge variant="info" title="Service Principal">
                     <Key className="w-3 h-3 mr-1" />
                     SP
                   </Badge>
                 )}
-                {!vs.on_behalf_of_user && (vs.client_id || vs.client_secret) && (
+                {!isLakebase && !avs.on_behalf_of_user && (avs.client_id || avs.client_secret) && (
                   <Badge variant="warning" title="OAuth2 / M2M">
                     <Key className="w-3 h-3 mr-1" />
                     OAuth
                   </Badge>
                 )}
-                {!vs.on_behalf_of_user && vs.pat && (
+                {!isLakebase && !avs.on_behalf_of_user && avs.pat && (
                   <Badge variant="default" title="Personal Access Token">
                     <Key className="w-3 h-3 mr-1" />
                     PAT
@@ -5409,7 +5549,8 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
                 </Button>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -5430,8 +5571,72 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
             hint="Type naturally - spaces become underscores"
             required
           />
-          
-          {/* Configuration Mode Toggle */}
+
+          {/* dao-ai 0.2.x: backend selector — Databricks AI Search vs Lakebase Postgres */}
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-slate-300">Backend</label>
+            <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5">
+              <button
+                type="button"
+                onClick={() => setFormData({ ...formData, storeType: 'ai_search' })}
+                className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${formData.storeType === 'ai_search' ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40' : 'text-slate-400 border border-transparent hover:text-slate-300'}`}
+              >
+                AI Search
+              </button>
+              <button
+                type="button"
+                onClick={() => setFormData({ ...formData, storeType: 'lakebase_search' })}
+                className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${formData.storeType === 'lakebase_search' ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40' : 'text-slate-400 border border-transparent hover:text-slate-300'}`}
+              >
+                Lakebase
+              </button>
+            </div>
+          </div>
+
+          {/* Lakebase (type: lakebase_search) sub-form */}
+          {formData.storeType === 'lakebase_search' && (
+            <div className="space-y-3 p-4 bg-slate-900/40 rounded-lg border border-slate-700">
+              <p className="text-xs text-slate-500">A Lakebase (Postgres) table with pgvector / tsvector columns. References a configured database under Resources → Databases.</p>
+              <Select
+                label="Database"
+                options={[{ value: '', label: 'Select database...' }, ...Object.keys(configuredDatabases).map(k => ({ value: k, label: k }))]}
+                value={formData.lakebaseDatabaseRef}
+                onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, lakebaseDatabaseRef: e.target.value })}
+              />
+              <div className="grid grid-cols-2 gap-3">
+                <Input label="Schema" value={formData.lakebaseSchemaName} onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, lakebaseSchemaName: e.target.value })} placeholder="public" />
+                <Input label="Table" value={formData.lakebaseTable} onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, lakebaseTable: e.target.value })} placeholder="documents" required />
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <Input label="ID Column" value={formData.lakebaseIdColumn} onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, lakebaseIdColumn: e.target.value })} placeholder="id" />
+                <Input label="Content Column" value={formData.lakebaseContentColumn} onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, lakebaseContentColumn: e.target.value })} placeholder="content" required />
+                <Input label="Embedding Column" value={formData.lakebaseEmbeddingColumn} onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, lakebaseEmbeddingColumn: e.target.value })} placeholder="embedding" required />
+              </div>
+              <Input label="TSVector Column (optional)" value={formData.lakebaseTsvectorColumn} onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, lakebaseTsvectorColumn: e.target.value })} placeholder="content_tsv — enables hybrid full-text search" />
+              <Input label="Metadata Columns (optional, comma-separated)" value={formData.lakebaseMetadataColumns} onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, lakebaseMetadataColumns: e.target.value })} placeholder="title, url, category" />
+              <Select
+                label="Embedding Model"
+                options={[{ value: '', label: 'Select or type endpoint...' }, ...Object.keys(configuredModels).map(k => ({ value: k, label: k }))]}
+                value={formData.lakebaseEmbeddingModel}
+                onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, lakebaseEmbeddingModel: e.target.value })}
+                hint="A configured model reference, or a bare serving-endpoint name"
+              />
+              <Input label="Embedding Model (endpoint name)" value={configuredModels[formData.lakebaseEmbeddingModel] ? '' : formData.lakebaseEmbeddingModel} onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, lakebaseEmbeddingModel: e.target.value })} placeholder="databricks-gte-large-en (leave blank if a reference is selected above)" />
+              <div className="grid grid-cols-2 gap-3">
+                <Select
+                  label="Distance Metric"
+                  options={[{ value: 'cosine', label: 'cosine' }, { value: 'l2', label: 'l2' }, { value: 'ip', label: 'ip' }]}
+                  value={formData.lakebaseDistanceMetric}
+                  onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, lakebaseDistanceMetric: e.target.value as 'cosine' | 'l2' | 'ip' })}
+                />
+                <Input label="TSV Language" value={formData.lakebaseTsvLanguage} onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, lakebaseTsvLanguage: e.target.value })} placeholder="english" />
+              </div>
+            </div>
+          )}
+
+          {/* Configuration Mode Toggle (AI Search only) */}
+          {formData.storeType === 'ai_search' && (
+          <>
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <label className="text-sm font-medium text-slate-300">Configuration Mode</label>
@@ -6010,7 +6215,7 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
           </>
           )}
           
-          {/* Authentication Section - applies to both modes */}
+          {/* Authentication Section - AI Search only (Lakebase delegates auth to its database) */}
           <ResourceAuthSection
             formData={formData}
             setFormData={setFormData as any}
@@ -6018,7 +6223,9 @@ function VectorStoresPanel({ showForm, setShowForm, editingKey, setEditingKey, o
             servicePrincipals={servicePrincipals}
             variableNames={Object.keys(variables)}
           />
-          
+          </>
+          )}
+
           {/* Duplicate reference name warning */}
           {formData.refName && isRefNameDuplicate(formData.refName, config, editingKey) && (
             <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">

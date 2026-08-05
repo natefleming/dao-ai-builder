@@ -192,7 +192,9 @@ export default function DeploymentPanel({ onClose }: DeploymentPanelProps) {
       const response = await fetch('/api/deploy/validate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ config: sanitizedConfig }),
+        // dao-ai 0.2.x: deployment target is a deploy-action param, no longer in
+        // the config YAML — send it alongside the config.
+        body: JSON.stringify({ config: sanitizedConfig, target: deploymentTarget }),
       });
       
       // Check content type to handle HTML error pages

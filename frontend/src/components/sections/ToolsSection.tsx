@@ -243,7 +243,9 @@ const TOOL_TYPES = [
   { value: 'unity_catalog', label: 'Unity Catalog Function' },
   { value: 'mcp', label: 'MCP Server' },
   { value: 'genie', label: 'Genie (shortcut)' },
-  { value: 'vector_search', label: 'Vector Search (shortcut)' },
+  { value: 'vector_search', label: 'AI Search (shortcut)' },
+  { value: 'lakebase_search', label: 'Lakebase Search (shortcut)' },
+  { value: 'sql', label: 'SQL Statement (shortcut)' },
   { value: 'search', label: 'Web Search (shortcut)' },
   { value: 'app', label: 'Databricks App (shortcut)' },
   { value: 'serving_endpoint', label: 'Serving Endpoint (shortcut)' },
@@ -752,7 +754,7 @@ export default function ToolsSection() {
   const [formData, setFormData] = useState({
     refName: '', // YAML key (reference name) - independent of tool name
     name: '',    // Tool's internal name
-    type: 'factory' as 'factory' | 'python' | 'unity_catalog' | 'mcp' | 'inline' | 'genie' | 'vector_search' | 'search' | 'app' | 'serving_endpoint' | 'a2a',
+    type: 'factory' as 'factory' | 'python' | 'unity_catalog' | 'mcp' | 'inline' | 'genie' | 'vector_search' | 'lakebase_search' | 'sql' | 'search' | 'app' | 'serving_endpoint' | 'a2a',
     functionName: '',
     customFunctionName: '',
     args: '{}',
@@ -842,6 +844,21 @@ export default function ToolsSection() {
     vsVectorIndex: '', // For manual vector store config
     vsVectorCatalog: '',
     vsVectorSchema: '',
+    // Lakebase Search shortcut (dao-ai 0.2.x): retriever XOR vector_store, both Lakebase-backed.
+    lakebaseSearchSourceType: 'retriever' as 'retriever' | 'vector_store',
+    lakebaseRetrieverRefName: '',
+    lakebaseVectorStoreRefName: '',
+    // SQL Statement shortcut (dao-ai 0.2.x): warehouse XOR database, plus a statement.
+    // (Distinct from the legacy factory execute-statement fields sqlWarehouseRefName/sqlStatement.)
+    sqlToolBackendType: 'warehouse' as 'warehouse' | 'database',
+    sqlToolWarehouseRefName: '',
+    sqlToolDatabaseRefName: '',
+    sqlToolStatement: '',
+    // Governance (dao-ai 0.2.x): per-tool call_limit + audit. Apply to any tool type.
+    toolCallLimit: '',
+    toolAuditEnabled: false,
+    toolAuditDatabaseRef: '',
+    toolAuditTable: '',
     // For Unity Catalog function - with resource source
     schemaSource: 'configured' as ResourceSource, // Default to configured
     schemaRefName: '', // Reference to configured schema
@@ -1034,6 +1051,33 @@ export default function ToolsSection() {
       if (database.name && db.name === database.name) return key;
     }
     return null;
+  };
+
+  // Match a resolved (post yaml.load) database object back to a configured
+  // database key by any identifying field, returning '' when unmatched.
+  const matchDatabaseKey = (database: unknown): string => {
+    if (typeof database === 'string') {
+      return database.startsWith('*') ? database.slice(1) : database.replace(/^__REF__/, '');
+    }
+    const d = (database || {}) as { name?: string; project?: string; instance_name?: string; host?: unknown };
+    for (const [key, cd] of Object.entries(configuredDatabases)) {
+      if (d.project !== undefined && cd.project === d.project) return key;
+      if (d.instance_name !== undefined && cd.instance_name === d.instance_name) return key;
+      if (d.name !== undefined && cd.name === d.name) return key;
+      if (d.host !== undefined && getVariableDisplayValue(cd.host) === getVariableDisplayValue(d.host)) return key;
+    }
+    return '';
+  };
+
+  // Match a resolved warehouse object back to a configured warehouse key.
+  const matchWarehouseKey = (warehouse: unknown): string => {
+    if (typeof warehouse === 'string') {
+      return warehouse.startsWith('*') ? warehouse.slice(1) : warehouse.replace(/^__REF__/, '');
+    }
+    return findConfiguredWarehouse((warehouse || {}) as { warehouse_id?: unknown })
+      || (((warehouse || {}) as { name?: string }).name
+        && Object.entries(configuredWarehouses).find(([, wh]) => wh.name === (warehouse as { name?: string }).name)?.[0])
+      || '';
   };
 
   const findConfiguredFunction = (func: { name?: string; schema?: { catalog_name?: string; schema_name?: string } }): string | null => {
@@ -1827,6 +1871,28 @@ export default function ToolsSection() {
       if (formData.shortcutDescription) fn.description = formData.shortcutDescription;
       if (hitlConfig) fn.human_in_the_loop = hitlConfig;
       functionConfig = fn;
+    } else if (formData.type === 'lakebase_search') {
+      const fn: any = { type: 'lakebase_search' };
+      if (formData.lakebaseSearchSourceType === 'retriever' && formData.lakebaseRetrieverRefName) {
+        fn.retriever = `__REF__${formData.lakebaseRetrieverRefName}`;
+      } else if (formData.lakebaseVectorStoreRefName) {
+        fn.vector_store = `__REF__${formData.lakebaseVectorStoreRefName}`;
+      }
+      if (formData.name) fn.name = formData.name;
+      if (formData.shortcutDescription) fn.description = formData.shortcutDescription;
+      if (hitlConfig) fn.human_in_the_loop = hitlConfig;
+      functionConfig = fn;
+    } else if (formData.type === 'sql') {
+      const fn: any = { type: 'sql', statement: formData.sqlToolStatement };
+      if (formData.sqlToolBackendType === 'warehouse' && formData.sqlToolWarehouseRefName) {
+        fn.warehouse = `__REF__${formData.sqlToolWarehouseRefName}`;
+      } else if (formData.sqlToolBackendType === 'database' && formData.sqlToolDatabaseRefName) {
+        fn.database = `__REF__${formData.sqlToolDatabaseRefName}`;
+      }
+      if (formData.name) fn.name = formData.name;
+      if (formData.shortcutDescription) fn.description = formData.shortcutDescription;
+      if (hitlConfig) fn.human_in_the_loop = hitlConfig;
+      functionConfig = fn;
     } else if (formData.type === 'search') {
       const fn: any = { type: 'search' };
       if (formData.name) fn.name = formData.name;
@@ -1877,6 +1943,21 @@ export default function ToolsSection() {
       functionConfig = fn;
     } else {
       functionConfig = funcName;
+    }
+
+    // dao-ai 0.2.x: audit + call_limit apply to any object-form tool function.
+    if (typeof functionConfig === 'object' && functionConfig !== null) {
+      const fc = functionConfig as Record<string, any>;
+      const limit = formData.toolCallLimit ? parseInt(formData.toolCallLimit) : undefined;
+      if (limit && !Number.isNaN(limit)) {
+        fc.call_limit = limit;
+      }
+      if (formData.toolAuditEnabled && formData.toolAuditDatabaseRef) {
+        fc.audit = {
+          database: `__REF__${formData.toolAuditDatabaseRef}`,
+          ...(formData.toolAuditTable && formData.toolAuditTable !== 'audit_receipts' && { table: formData.toolAuditTable }),
+        };
+      }
     }
 
     const toolConfig = {
@@ -1993,6 +2074,17 @@ export default function ToolsSection() {
       vsVectorIndex: '',
       vsVectorCatalog: '',
       vsVectorSchema: '',
+      lakebaseSearchSourceType: 'retriever',
+      lakebaseRetrieverRefName: '',
+      lakebaseVectorStoreRefName: '',
+      sqlToolBackendType: 'warehouse',
+      sqlToolWarehouseRefName: '',
+      sqlToolDatabaseRefName: '',
+      sqlToolStatement: '',
+      toolCallLimit: '',
+      toolAuditEnabled: false,
+      toolAuditDatabaseRef: '',
+      toolAuditTable: '',
       schemaSource: 'configured',
       schemaRefName: '',
       ucCatalog: '',
@@ -2168,7 +2260,29 @@ export default function ToolsSection() {
           allowReject: allowedDecisions.includes('reject'),
         });
       }
-      
+
+      // dao-ai 0.2.x: load common governance fields (audit + call_limit) that
+      // apply to any object-form tool function, regardless of type.
+      const gov = func as { call_limit?: number | { run_limit?: number }; audit?: { database?: unknown; table?: string } };
+      const callLimitVal = typeof gov.call_limit === 'number'
+        ? String(gov.call_limit)
+        : (gov.call_limit?.run_limit != null ? String(gov.call_limit.run_limit) : '');
+      let auditDbRef = '';
+      if (gov.audit && typeof gov.audit.database === 'string') {
+        const d = gov.audit.database;
+        auditDbRef = d.startsWith('*') ? d.slice(1) : (d.startsWith('__REF__') ? d.replace('__REF__', '') : d);
+      } else if (gov.audit && gov.audit.database) {
+        // Resolved inline object (post yaml.load): match back to a database key.
+        auditDbRef = matchDatabaseKey(gov.audit.database);
+      }
+      setFormData(prev => ({
+        ...prev,
+        toolCallLimit: callLimitVal,
+        toolAuditEnabled: !!gov.audit,
+        toolAuditDatabaseRef: auditDbRef,
+        toolAuditTable: gov.audit?.table || '',
+      }));
+
       if (funcType === 'factory' && 'args' in func) {
         const factoryFunc = func as { name?: string; args?: Record<string, unknown> };
         const funcName = factoryFunc.name || '';
@@ -2219,9 +2333,10 @@ export default function ToolsSection() {
               index?: { name?: string }; 
               source_table?: { schema?: { catalog_name?: string; schema_name?: string } };
             };
-            // Try to find a matching configured vector store
+            // Try to find a matching configured vector store (AI Search stores
+            // have an `index`; Lakebase stores don't, so they won't match here).
             const matchingVsKey = Object.entries(configuredVectorStores).find(
-              ([, store]) => store.index?.name === vs.index?.name
+              ([, store]) => (store as { index?: { name?: string } }).index?.name === vs.index?.name
             )?.[0];
             if (matchingVsKey) {
               vectorStoreRefName = matchingVsKey;
@@ -3701,6 +3816,42 @@ export default function ToolsSection() {
           retrieverRefName: retIsRef ? f.retriever.slice(1) : '',
           vectorStoreRefName: vsIsRef ? f.vector_store.slice(1) : '',
           vectorSearchSourceType: retIsRef ? 'retriever' : (vsIsRef ? 'vector_store' : 'retriever'),
+        }));
+      } else if (funcType === 'lakebase_search') {
+        const f = func as any;
+        // retriever / vector_store arrive as string refs or resolved objects.
+        const retRef = typeof f.retriever === 'string'
+          ? (f.retriever.startsWith('*') ? f.retriever.slice(1) : f.retriever)
+          : (f.retriever ? (findConfiguredRetriever(f.retriever) || '') : '');
+        const vsRef = typeof f.vector_store === 'string'
+          ? (f.vector_store.startsWith('*') ? f.vector_store.slice(1) : f.vector_store)
+          : (f.vector_store
+              ? (Object.entries(configuredVectorStores).find(([, s]) =>
+                  JSON.stringify(s) === JSON.stringify(f.vector_store)
+                  || ((s as any).table !== undefined && (s as any).table === f.vector_store.table))?.[0] || '')
+              : '');
+        setFormData(prev => ({
+          ...prev,
+          refName: key,
+          name: tool.name,
+          type: 'lakebase_search',
+          shortcutDescription: f.description || '',
+          lakebaseRetrieverRefName: retRef,
+          lakebaseVectorStoreRefName: vsRef,
+          lakebaseSearchSourceType: f.vector_store && !f.retriever ? 'vector_store' : 'retriever',
+        }));
+      } else if (funcType === 'sql') {
+        const f = func as any;
+        setFormData(prev => ({
+          ...prev,
+          refName: key,
+          name: tool.name,
+          type: 'sql',
+          shortcutDescription: f.description || '',
+          sqlToolStatement: f.statement || '',
+          sqlToolBackendType: f.database ? 'database' : 'warehouse',
+          sqlToolWarehouseRefName: matchWarehouseKey(f.warehouse),
+          sqlToolDatabaseRefName: matchDatabaseKey(f.database),
         }));
       } else if (funcType === 'search') {
         const f = func as any;
@@ -6258,6 +6409,46 @@ def my_tool(param: str) -> str:
             </div>
           )}
 
+          {/* dao-ai 0.2.x: Governance (call_limit + audit) — available for all tool types */}
+          {formData.type !== 'python' && (
+          <div className="space-y-3 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+            <h4 className="text-sm font-medium text-slate-300">Governance <span className="text-xs text-slate-500 font-normal">(optional)</span></h4>
+            <Input
+              label="Call Limit"
+              value={formData.toolCallLimit}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, toolCallLimit: e.target.value.replace(/[^0-9]/g, '') })}
+              placeholder="Max calls per run (blank = unlimited)"
+              hint="Caps how many times this tool may be called per agent run"
+            />
+            <label className="flex items-center space-x-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={formData.toolAuditEnabled}
+                onChange={(e) => setFormData({ ...formData, toolAuditEnabled: e.target.checked })}
+                className="rounded border-slate-600 bg-slate-800 text-violet-500 focus:ring-violet-500"
+              />
+              <span className="text-sm text-slate-300">Enable audit receipts</span>
+              <span className="text-xs text-slate-500">(tamper-evident log to a Lakebase table)</span>
+            </label>
+            {formData.toolAuditEnabled && (
+              <div className="grid grid-cols-2 gap-3 pl-6">
+                <Select
+                  label="Audit Database"
+                  options={[{ value: '', label: 'Select database...' }, ...configuredDatabaseOptions]}
+                  value={formData.toolAuditDatabaseRef}
+                  onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, toolAuditDatabaseRef: e.target.value })}
+                />
+                <Input
+                  label="Audit Table"
+                  value={formData.toolAuditTable}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, toolAuditTable: e.target.value })}
+                  placeholder="audit_receipts"
+                />
+              </div>
+            )}
+          </div>
+          )}
+
           {/* Human In The Loop Configuration - Available for all tool types */}
           <div className="space-y-3">
             <button
@@ -7563,6 +7754,111 @@ def my_tool(param: str) -> str:
                   onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, vectorStoreRefName: e.target.value })}
                 />
               )}
+              <Textarea
+                label="Description (optional)"
+                value={formData.shortcutDescription}
+                onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFormData({ ...formData, shortcutDescription: e.target.value })}
+                placeholder="Tool description shown to the LLM"
+              />
+            </div>
+          )}
+
+          {/* Lakebase Search shortcut (dao-ai 0.2.x first-class tool type) */}
+          {formData.type === 'lakebase_search' && (
+            <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+              <h4 className="text-sm font-medium text-slate-300">Lakebase Search Shortcut</h4>
+              <p className="text-xs text-slate-500">Emits a <code>type: lakebase_search</code> tool backed by a Lakebase (Postgres) table. Pick exactly one of a Lakebase Retriever or a Lakebase Vector Store.</p>
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-slate-300">Source</label>
+                <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, lakebaseSearchSourceType: 'retriever', lakebaseVectorStoreRefName: '' })}
+                    className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${formData.lakebaseSearchSourceType === 'retriever' ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40' : 'text-slate-400 border border-transparent hover:text-slate-300'}`}
+                  >
+                    Retriever
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, lakebaseSearchSourceType: 'vector_store', lakebaseRetrieverRefName: '' })}
+                    className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${formData.lakebaseSearchSourceType === 'vector_store' ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40' : 'text-slate-400 border border-transparent hover:text-slate-300'}`}
+                  >
+                    Vector Store
+                  </button>
+                </div>
+              </div>
+              {formData.lakebaseSearchSourceType === 'retriever' ? (
+                <Select
+                  label="Retriever"
+                  options={[{ value: '', label: 'Select retriever...' }, ...configuredRetrieverOptions]}
+                  value={formData.lakebaseRetrieverRefName}
+                  onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, lakebaseRetrieverRefName: e.target.value })}
+                  hint="Choose a retriever whose backend is a Lakebase vector store"
+                />
+              ) : (
+                <Select
+                  label="Vector Store"
+                  options={[{ value: '', label: 'Select vector store...' }, ...configuredVectorStoreOptions]}
+                  value={formData.lakebaseVectorStoreRefName}
+                  onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, lakebaseVectorStoreRefName: e.target.value })}
+                  hint="Choose a lakebase_search vector store"
+                />
+              )}
+              <Textarea
+                label="Description (optional)"
+                value={formData.shortcutDescription}
+                onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFormData({ ...formData, shortcutDescription: e.target.value })}
+                placeholder="Tool description shown to the LLM"
+              />
+            </div>
+          )}
+
+          {/* SQL Statement shortcut (dao-ai 0.2.x first-class tool type) */}
+          {formData.type === 'sql' && (
+            <div className="space-y-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+              <h4 className="text-sm font-medium text-slate-300">SQL Statement Shortcut</h4>
+              <p className="text-xs text-slate-500">Emits a <code>type: sql</code> tool that runs a parameterized SQL statement against a SQL warehouse or a Lakebase database. Parameters are bound natively (never string-interpolated). Edit the emitted YAML to add typed <code>params</code>.</p>
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-slate-300">Backend</label>
+                <div className="inline-flex rounded-lg bg-slate-900/50 p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, sqlToolBackendType: 'warehouse', sqlToolDatabaseRefName: '' })}
+                    className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${formData.sqlToolBackendType === 'warehouse' ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40' : 'text-slate-400 border border-transparent hover:text-slate-300'}`}
+                  >
+                    SQL Warehouse
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, sqlToolBackendType: 'database', sqlToolWarehouseRefName: '' })}
+                    className={`px-3 py-1 text-xs rounded-md font-medium transition-all duration-150 ${formData.sqlToolBackendType === 'database' ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40' : 'text-slate-400 border border-transparent hover:text-slate-300'}`}
+                  >
+                    Lakebase Database
+                  </button>
+                </div>
+              </div>
+              {formData.sqlToolBackendType === 'warehouse' ? (
+                <Select
+                  label="Warehouse"
+                  options={[{ value: '', label: 'Select warehouse...' }, ...configuredWarehouseOptions]}
+                  value={formData.sqlToolWarehouseRefName}
+                  onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, sqlToolWarehouseRefName: e.target.value })}
+                />
+              ) : (
+                <Select
+                  label="Database"
+                  options={[{ value: '', label: 'Select database...' }, ...configuredDatabaseOptions]}
+                  value={formData.sqlToolDatabaseRefName}
+                  onChange={(e: ChangeEvent<HTMLSelectElement>) => setFormData({ ...formData, sqlToolDatabaseRefName: e.target.value })}
+                />
+              )}
+              <Textarea
+                label="SQL Statement"
+                value={formData.sqlToolStatement}
+                onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFormData({ ...formData, sqlToolStatement: e.target.value })}
+                placeholder="SELECT * FROM catalog.schema.table WHERE id = :id"
+                required
+              />
               <Textarea
                 label="Description (optional)"
                 value={formData.shortcutDescription}
