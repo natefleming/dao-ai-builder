@@ -3,7 +3,9 @@ name = "dao-ai-builder"
 version = "0.1.0"
 description = "Visual configuration builder for Databricks Agent-Orchestrated Applications (DAO-AI) with real-time YAML generation, deployment management, and interactive testing"
 readme = "README.md"
-requires-python = ">=3.11"
+# dao-ai 0.2.11 raised its floor to Python >=3.12, so the app (which resolves
+# dao-ai from PyPI at deploy) must match or the Apps uv build fails to resolve.
+requires-python = ">=3.12"
 dependencies = [
     "flask>=3.0.0",
     "gunicorn>=21.0.0",
