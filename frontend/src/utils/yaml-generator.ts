@@ -747,7 +747,8 @@ function formatModelReference(model: any, definedModels: Record<string, any>, ba
       ...(model.on_behalf_of_user !== undefined && { on_behalf_of_user: model.on_behalf_of_user }),
       ...(model.use_responses_api !== undefined && { use_responses_api: model.use_responses_api }),
       ...(model.disable_streaming !== undefined && { disable_streaming: model.disable_streaming }),
-      ...(model.ai_gateway !== undefined && { ai_gateway: model.ai_gateway }),
+      ...((model.use_ai_gateway ?? (model as any).ai_gateway) !== undefined && { use_ai_gateway: model.use_ai_gateway ?? (model as any).ai_gateway }),
+      ...(model.schema && { schema: { catalog_name: model.schema.catalog_name, schema_name: model.schema.schema_name } }),
       ...(model.fallbacks && model.fallbacks.length > 0 && { fallbacks: model.fallbacks }),
       ...(model.extra_params && Object.keys(model.extra_params).length > 0 && { extra_params: model.extra_params }),
     };
@@ -1674,7 +1675,9 @@ function formatToolFunction(func: ToolFunctionModel, toolKey?: string, definedCo
       if (f.max_consecutive_cache_hits !== undefined && f.max_consecutive_cache_hits !== null) {
         result.max_consecutive_cache_hits = f.max_consecutive_cache_hits;
       }
-      if (f.verbatim === true) result.verbatim = true;
+      // dao-ai 0.2.11+: verbatim was renamed to preserve_question (accept legacy on emit).
+      if (f.preserve_question === true || (f as any).verbatim === true) result.preserve_question = true;
+      if (f.include_example_questions === true) result.include_example_questions = true;
       if (f.lru_cache) result.lru_cache = f.lru_cache;
       if (f.context_aware_cache) result.context_aware_cache = f.context_aware_cache;
       if (f.in_memory_context_aware_cache) result.in_memory_context_aware_cache = f.in_memory_context_aware_cache;
@@ -2188,6 +2191,9 @@ export function generateYAML(config: AppConfig): string {
     yamlConfig.service_principals = {};
     Object.entries(config.service_principals).forEach(([key, sp]) => {
       yamlConfig.service_principals[key] = {
+        // dao-ai 0.2.11+: optional display name + description.
+        ...(sp.name && { name: sp.name }),
+        ...(sp.description && { description: sp.description }),
         client_id: formatCredential(sp.client_id),
         client_secret: formatCredential(sp.client_secret),
       };
@@ -2254,7 +2260,8 @@ export function generateYAML(config: AppConfig): string {
           ...(llm.on_behalf_of_user !== undefined && { on_behalf_of_user: llm.on_behalf_of_user }),
           ...(llm.use_responses_api !== undefined && { use_responses_api: llm.use_responses_api }),
           ...(llm.disable_streaming !== undefined && { disable_streaming: llm.disable_streaming }),
-          ...(llm.ai_gateway !== undefined && { ai_gateway: llm.ai_gateway }),
+          ...((llm.use_ai_gateway ?? (llm as any).ai_gateway) !== undefined && { use_ai_gateway: llm.use_ai_gateway ?? (llm as any).ai_gateway }),
+          ...(llm.schema && { schema: formatSchemaReference(llm.schema, config.schemas || {}, `resources.${EMIT_KEY}.${key}.schema`) }),
           ...(formattedFallbacks && formattedFallbacks.length > 0 && { fallbacks: formattedFallbacks }),
           ...formatResourceAuth(llm, `resources.${EMIT_KEY}.${key}`),
         };
@@ -3174,6 +3181,9 @@ export function generateYAML(config: AppConfig): string {
         ...(middlewareValue && middlewareValue.length > 0 && { middleware: middlewareValue }),
         ...(promptValue && { prompt: promptValue }),
         ...(agent.handoff_prompt && { handoff_prompt: agent.handoff_prompt }),
+        // dao-ai 0.2.11+: Genie-brain-under-supervisor handback. Emit only when
+        // explicitly set (null/undefined means "default hand back").
+        ...(agent.handoff != null && { handoff: agent.handoff }),
         ...(responseFormatValue && { response_format: responseFormatValue }),
         ...(agent.recursion_limit != null && { recursion_limit: agent.recursion_limit }),
         // dao-ai 0.2.x: cap LLM calls; filter internal agents; handoff prereqs.

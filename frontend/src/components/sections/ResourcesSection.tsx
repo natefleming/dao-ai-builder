@@ -560,6 +560,8 @@ function ModelsPanel() {
     useResponseApi: false,
     disableStreaming: false,
     aiGateway: false,
+    ucCatalog: '',
+    ucSchema: '',
     fallbacks: [] as string[],
     // Authentication fields
     authMethod: 'default' as 'default' | 'service_principal' | 'oauth' | 'pat',
@@ -593,6 +595,8 @@ function ModelsPanel() {
       useResponseApi: false,
       disableStreaming: false,
       aiGateway: false,
+      ucCatalog: '',
+      ucSchema: '',
       fallbacks: [],
       authMethod: 'default',
       servicePrincipalRef: '',
@@ -639,7 +643,9 @@ function ModelsPanel() {
       onBehalfOfUser: llm.on_behalf_of_user ?? false,
       useResponseApi: llm.use_responses_api ?? false,
       disableStreaming: llm.disable_streaming ?? false,
-      aiGateway: llm.ai_gateway ?? false,
+      aiGateway: llm.use_ai_gateway ?? (llm as any).ai_gateway ?? false,
+      ucCatalog: typeof llm.schema?.catalog_name === 'string' ? llm.schema.catalog_name : '',
+      ucSchema: typeof llm.schema?.schema_name === 'string' ? llm.schema.schema_name : '',
       fallbacks: convertedFallbacks,
       ...authData,
     });
@@ -654,7 +660,7 @@ function ModelsPanel() {
     }
     
     const hasAuth = authData.authMethod !== 'default';
-    setShowAdvanced(!!(llm.on_behalf_of_user || llm.use_responses_api || llm.disable_streaming || llm.ai_gateway || (llm.fallbacks && llm.fallbacks.length > 0) || hasAuth));
+    setShowAdvanced(!!(llm.on_behalf_of_user || llm.use_responses_api || llm.disable_streaming || llm.use_ai_gateway || (llm as any).ai_gateway || llm.schema || (llm.fallbacks && llm.fallbacks.length > 0) || hasAuth));
     setIsModalOpen(true);
   };
 
@@ -694,7 +700,15 @@ function ModelsPanel() {
       }
 
       if (formData.aiGateway) {
-        modelConfig.ai_gateway = true;
+        modelConfig.use_ai_gateway = true;
+        // UC-securable model name (e.g. system.ai.claude-sonnet-4-5): only
+        // addressable on the gateway, so it's gated on use_ai_gateway.
+        if (formData.ucCatalog && formData.ucSchema) {
+          modelConfig.schema = {
+            catalog_name: formData.ucCatalog,
+            schema_name: formData.ucSchema,
+          };
+        }
       }
 
       if (formData.fallbacks.length > 0) {
@@ -1021,20 +1035,47 @@ function ModelsPanel() {
                 </p>
               </div>
 
-              {/* AI Gateway (dao-ai 0.1.77+) */}
+              {/* AI Gateway (dao-ai 0.2.11+: renamed from ai_gateway to use_ai_gateway) */}
               <div className="space-y-2">
                 <label className="flex items-center space-x-2 cursor-pointer">
                   <input
                     type="checkbox"
                     checked={formData.aiGateway}
-                    onChange={(e) => setFormData({ ...formData, aiGateway: e.target.checked, useResponseApi: e.target.checked ? false : formData.useResponseApi })}
+                    onChange={(e) => setFormData({ ...formData, aiGateway: e.target.checked, ucCatalog: e.target.checked ? formData.ucCatalog : '', ucSchema: e.target.checked ? formData.ucSchema : '' })}
                     className="rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500"
                   />
                   <span className="text-sm text-slate-300">Route through AI Gateway</span>
                 </label>
                 <p className="text-xs text-slate-500 ml-6">
-                  Send requests to <code>/ai-gateway/mlflow/v1/chat/completions</code> instead of <code>/serving-endpoints/&lt;name&gt;/invocations</code>. The model <code>name</code> is sent as the OpenAI-style model id. Incompatible with Response API; structured output requires <em>Disable streaming</em>.
+                  Send requests to <code>/ai-gateway/mlflow/v1</code> instead of <code>/serving-endpoints/&lt;name&gt;/invocations</code>. The model <code>name</code> is sent as the OpenAI-style model id. Foundation Model and UC-securable models only (never a custom serving endpoint). Composes with Response API.
                 </p>
+                {formData.aiGateway && (
+                  <div className="ml-6 grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">UC catalog <span className="text-slate-600">(optional)</span></label>
+                      <input
+                        type="text"
+                        value={formData.ucCatalog}
+                        onChange={(e) => setFormData({ ...formData, ucCatalog: e.target.value })}
+                        placeholder="system"
+                        className="w-full px-2 py-1 text-sm rounded border-slate-600 bg-slate-800 text-slate-200 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">UC schema <span className="text-slate-600">(optional)</span></label>
+                      <input
+                        type="text"
+                        value={formData.ucSchema}
+                        onChange={(e) => setFormData({ ...formData, ucSchema: e.target.value })}
+                        placeholder="ai"
+                        className="w-full px-2 py-1 text-sm rounded border-slate-600 bg-slate-800 text-slate-200 focus:ring-blue-500"
+                      />
+                    </div>
+                    <p className="col-span-2 text-xs text-slate-500">
+                      Set both to address a UC-securable model as a short <code>name</code> (resolves to <code>&lt;catalog&gt;.&lt;schema&gt;.&lt;name&gt;</code>, e.g. <code>system.ai.claude-sonnet-4-5</code>). Leave blank to pass a serving endpoint or already-qualified name in <code>name</code>.
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Fallbacks */}

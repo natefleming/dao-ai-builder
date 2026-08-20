@@ -38,6 +38,17 @@ export type VariableModel =
 export type VariableValue = VariableModel | string | number | boolean;
 
 export interface ServicePrincipalModel {
+  /**
+   * dao-ai 0.2.11+: workspace display name of the service principal. Used by
+   * `dao-ai service-principal provision` to create or reuse the SP; defaults
+   * to `<app.name>-<key>`. Set explicitly to bind to an existing SP.
+   */
+  name?: string | null;
+  /**
+   * dao-ai 0.2.11+: what this service principal is for. Documentation only —
+   * never sent to the workspace (the SP API has no description field).
+   */
+  description?: string | null;
   client_id: VariableValue;
   client_secret: VariableValue;
 }
@@ -76,19 +87,37 @@ export interface InferenceEndpointModel {
   temperature?: number;
   max_tokens?: number;
   on_behalf_of_user?: boolean;
-  use_responses_api?: boolean;  // Use Responses API for ResponsesAgent endpoints
+  /**
+   * Use the Responses API instead of chat completions. Composes with
+   * `use_ai_gateway` (`/ai-gateway/mlflow/v1/responses`). Per-model caveat:
+   * OpenAI-family models work end to end, but gpt-oss-120b / claude-sonnet-4-5
+   * omit token-usage details and langchain then fails — use chat completions
+   * for those. Also, the gateway's /responses layer cannot parse tool calls,
+   * so pair it with `use_ai_gateway` only for agents that call no tools.
+   */
+  use_responses_api?: boolean;
   /** Required when the Foundation Model endpoint has output guardrails enabled */
   disable_streaming?: boolean;
   /**
-   * dao-ai 0.1.77+: route through the Databricks AI Gateway
-   * (`/ai-gateway/mlflow/v1/chat/completions`) instead of
-   * `/serving-endpoints/<name>/invocations`. When true, `name` is sent
-   * as the OpenAI-style model id in the request body. AI Gateway is
-   * OpenAI-compatible chat completions only — not for embeddings,
-   * Responses API, or non-chat endpoints. Incompatible with
-   * `use_responses_api`.
+   * dao-ai 0.2.11+: route through the Databricks AI Gateway
+   * (`/ai-gateway/mlflow/v1`) instead of `/serving-endpoints/<name>/invocations`.
+   * When true, `name` is sent as the OpenAI-style model id in the request body.
+   * Serves both `/chat/completions` and `/responses`, so this composes with
+   * `use_responses_api`. Addresses Foundation Model and UC-securable models
+   * only, never a custom serving endpoint; not for embeddings or non-chat
+   * endpoints. Renamed from `ai_gateway` (the legacy YAML key is still accepted
+   * on import and will be removed in a future major release).
    */
-  ai_gateway?: boolean;
+  use_ai_gateway?: boolean;
+  /**
+   * dao-ai 0.2.11+: schema qualifying a UC-securable model name for models
+   * addressed through the Unity AI Gateway as UC securables (e.g. catalog
+   * `system`, schema `ai`). When set, `name` is the short model name and the
+   * full name resolves to `<catalog>.<schema>.<name>`. Omit it to pass a
+   * serving endpoint name — or an already-qualified model name — in `name`
+   * directly. Requires `use_ai_gateway: true`.
+   */
+  schema?: SchemaModel | null;
   fallbacks?: (string | InferenceEndpointModel)[];
   /** dao-ai 0.1.72+: best-of-N + LLM-as-judge wrapper. */
   best_of_n?: BestOfNConfig;
@@ -738,8 +767,19 @@ export interface GenieFunctionModel extends ToolAuditableFields {
   description?: string;
   persist_conversation?: boolean;          // default: true
   truncate_results?: boolean;              // default: false
-  /** dao-ai 0.2.x+: return Genie's answer verbatim (skip LLM post-processing). */
-  verbatim?: boolean;
+  /**
+   * dao-ai 0.2.11+: instruct the calling LLM to pass the user's question to
+   * Genie exactly as asked — no rephrasing, decomposition, or added qualifiers.
+   * Constrains the question sent *to* Genie, not Genie's answer. Default false.
+   * Renamed from `verbatim` (migrated on import).
+   */
+  preserve_question?: boolean;
+  /**
+   * dao-ai 0.2.11+: when true, append the Genie space's example questions to
+   * the tool description, giving a supervisor concrete routing signal. Opt-in
+   * in every case — default false never appends them.
+   */
+  include_example_questions?: boolean;
   lru_cache?: GenieLRUCacheParametersModel;
   context_aware_cache?: GenieContextAwareCacheParametersModel;
   in_memory_context_aware_cache?: GenieInMemoryContextAwareCacheParametersModel;
@@ -1050,6 +1090,17 @@ export interface AgentModel {
   guardrails?: GuardrailModel[];
   prompt?: string | PromptModel;
   handoff_prompt?: string;
+  /**
+   * dao-ai 0.2.11+: only meaningful when `model` is a Genie space
+   * (GenieAgentModel) used as a worker under a SUPERVISOR. Makes the Genie
+   * brain hand control back deterministically after it answers so the
+   * supervisor can chain another agent in the same turn. Under a supervisor
+   * this is the DEFAULT (null and true both hand back); set `handoff: false`
+   * to make the brain a terminal sink. No effect outside the supervisor
+   * pattern or for non-Genie models. Distinct from `handoff_prompt` and the
+   * swarm-level `HandoffRouteModel` routing.
+   */
+  handoff?: boolean | null;
   middleware?: MiddlewareModel[];
   response_format?: ResponseFormatModel | string;
   /**

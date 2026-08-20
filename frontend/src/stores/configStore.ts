@@ -35,16 +35,47 @@ import {
  * `resources.llms` → `resources.models` so the rest of the store / UI
  * only ever sees the canonical shape.
  */
+// dao-ai 0.2.11 renamed two config fields. `ai_gateway` -> `use_ai_gateway`
+// still has a YAML alias in dao-ai, but `verbatim` -> `preserve_question` does
+// NOT, so imported legacy YAML must be normalized to the canonical keys the
+// editors and generator now use. Walks the whole tree since inline
+// InferenceEndpointModels appear in many places (resources.models, agent
+// models, embedding models, serving-endpoint tools, fallbacks).
+function renameLegacyFields(node: unknown): void {
+  if (Array.isArray(node)) {
+    node.forEach(renameLegacyFields);
+    return;
+  }
+  if (!node || typeof node !== 'object') return;
+  const obj = node as Record<string, unknown>;
+  // InferenceEndpointModel: ai_gateway -> use_ai_gateway
+  if ('ai_gateway' in obj && !('use_ai_gateway' in obj)) {
+    obj.use_ai_gateway = obj.ai_gateway;
+    delete obj.ai_gateway;
+  }
+  // GenieToolModel: verbatim -> preserve_question
+  if (obj.type === 'genie' && 'verbatim' in obj && !('preserve_question' in obj)) {
+    obj.preserve_question = obj.verbatim;
+    delete obj.verbatim;
+  }
+  Object.values(obj).forEach(renameLegacyFields);
+}
+
 function migrateLegacyConfig(config: AppConfig): AppConfig {
-  if (!config?.resources) return config;
+  if (!config) return config;
+  // Clone so the deep field-rename pass never mutates the caller's object.
+  const migrated: AppConfig = structuredClone(config);
+  renameLegacyFields(migrated);
+
+  if (!migrated.resources) return migrated;
   // Cast through `any` because the legacy `llms` key is not part of the
   // current TS type — this is the input-migration shim that bridges old
   // YAML to the canonical `models` shape.
-  const r = config.resources as Record<string, unknown>;
+  const r = migrated.resources as Record<string, unknown>;
   if (r.llms && !r.models) {
     const { llms: _legacy, ...rest } = r;
     return {
-      ...config,
+      ...migrated,
       resources: { ...rest, models: _legacy } as AppConfig['resources'],
     };
   }
@@ -52,11 +83,11 @@ function migrateLegacyConfig(config: AppConfig): AppConfig {
   if (r.llms && r.models) {
     const { llms: _legacy, ...rest } = r;
     return {
-      ...config,
+      ...migrated,
       resources: rest as AppConfig['resources'],
     };
   }
-  return config;
+  return migrated;
 }
 
 // Cache for DAO AI version
