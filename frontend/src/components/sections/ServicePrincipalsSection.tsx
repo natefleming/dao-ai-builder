@@ -71,6 +71,8 @@ type SPCredentialSource = 'manual' | 'variable';
 
 interface SPFormData {
   refName: string;
+  name: string;
+  description: string;
   clientIdSource: SPCredentialSource;
   clientSecretSource: SPCredentialSource;
   client_id: string;
@@ -81,6 +83,8 @@ interface SPFormData {
 
 const defaultSPForm: SPFormData = {
   refName: '',
+  name: '',
+  description: '',
   clientIdSource: 'variable',
   clientSecretSource: 'variable',
   client_id: '',
@@ -136,6 +140,8 @@ export default function ServicePrincipalsSection() {
 
       setFormData({
         refName: key,
+        name: safeString(sp.name),
+        description: safeString(sp.description),
         clientIdSource: ci.source,
         clientSecretSource: cs.source,
         client_id: ci.manual,
@@ -157,7 +163,9 @@ export default function ServicePrincipalsSection() {
         ? `*${formData.clientSecretVariable}`
         : formData.client_secret,
     };
-    
+    if (formData.name.trim()) sp.name = formData.name.trim();
+    if (formData.description.trim()) sp.description = formData.description.trim();
+
     if (editingKey) {
       if (editingKey !== formData.refName) {
         removeServicePrincipal(editingKey);
@@ -269,7 +277,23 @@ export default function ServicePrincipalsSection() {
               hint="Type naturally - spaces become underscores"
               required
             />
-            
+
+            <Input
+              label="Display Name"
+              value={formData.name}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, name: e.target.value })}
+              placeholder="<app.name>-<key>"
+              hint="Optional. Workspace display name used by `dao-ai service-principal provision` to create or reuse the SP. Defaults to <app.name>-<key>; set it to bind to an existing SP."
+            />
+
+            <Input
+              label="Description"
+              value={formData.description}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, description: e.target.value })}
+              placeholder="What this service principal is for"
+              hint="Optional. Documentation only — never sent to the workspace."
+            />
+
             {/* Client ID */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">

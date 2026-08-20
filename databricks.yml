@@ -9,6 +9,9 @@ sync:
     - app.yaml
     - main.py
     - requirements.txt
+    # dao-ai 0.2.11 requires Python >=3.12; the Apps uv build selects the
+    # interpreter from .python-version, so it must be synced.
+    - .python-version
     - backend/**
     - static/**
     - schemas/**

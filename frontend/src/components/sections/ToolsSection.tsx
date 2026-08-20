@@ -766,6 +766,8 @@ export default function ToolsSection() {
     genieSpaceId: '',
     geniePersistConversation: true, // Default to true per factory function
     genieTruncateResults: false, // Default to false per factory function
+    geniePreserveQuestion: false, // dao-ai 0.2.11+: pass the question to Genie verbatim
+    genieIncludeExampleQuestions: false, // dao-ai 0.2.11+: opt-in, default off
     // Genie LRU Cache
     genieLruCacheEnabled: false,
     genieLruCacheCapacity: 1000,
@@ -1858,6 +1860,8 @@ export default function ToolsSection() {
       if (formData.shortcutDescription) fn.description = formData.shortcutDescription;
       if (formData.geniePersistConversation === false) fn.persist_conversation = false;
       if (formData.genieTruncateResults === true) fn.truncate_results = true;
+      if (formData.geniePreserveQuestion === true) fn.preserve_question = true;
+      if (formData.genieIncludeExampleQuestions === true) fn.include_example_questions = true;
       if (hitlConfig) fn.human_in_the_loop = hitlConfig;
       functionConfig = fn;
     } else if (formData.type === 'vector_search') {
@@ -2001,6 +2005,8 @@ export default function ToolsSection() {
       genieSpaceId: '',
       geniePersistConversation: true,
       genieTruncateResults: false,
+      geniePreserveQuestion: false,
+      genieIncludeExampleQuestions: false,
       // Genie LRU Cache
       genieLruCacheEnabled: false,
       genieLruCacheCapacity: 1000,
@@ -3802,6 +3808,8 @@ export default function ToolsSection() {
           genieSource: isRef ? 'configured' : 'configured',
           geniePersistConversation: f.persist_conversation !== false,
           genieTruncateResults: f.truncate_results === true,
+          geniePreserveQuestion: f.preserve_question === true,
+          genieIncludeExampleQuestions: f.include_example_questions === true,
         }));
       } else if (funcType === 'vector_search') {
         const f = func as any;
@@ -7709,6 +7717,30 @@ def my_tool(param: str) -> str:
                   <div>
                     <span className="text-sm text-slate-200 group-hover:text-white">Truncate Results</span>
                     <p className="text-xs text-slate-500">Truncate large query results to fit within token limits</p>
+                  </div>
+                </label>
+                <label className="flex items-start gap-3 cursor-pointer group">
+                  <input
+                    type="checkbox"
+                    checked={formData.geniePreserveQuestion}
+                    onChange={(e) => setFormData({ ...formData, geniePreserveQuestion: e.target.checked })}
+                    className="mt-0.5 w-4 h-4 rounded border-slate-600 bg-slate-800 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-900"
+                  />
+                  <div>
+                    <span className="text-sm text-slate-200 group-hover:text-white">Preserve Question</span>
+                    <p className="text-xs text-slate-500">Pass the user's question to Genie exactly as asked — no rephrasing or decomposition (default: off)</p>
+                  </div>
+                </label>
+                <label className="flex items-start gap-3 cursor-pointer group">
+                  <input
+                    type="checkbox"
+                    checked={formData.genieIncludeExampleQuestions}
+                    onChange={(e) => setFormData({ ...formData, genieIncludeExampleQuestions: e.target.checked })}
+                    className="mt-0.5 w-4 h-4 rounded border-slate-600 bg-slate-800 text-violet-500 focus:ring-violet-500 focus:ring-offset-slate-900"
+                  />
+                  <div>
+                    <span className="text-sm text-slate-200 group-hover:text-white">Include Example Questions</span>
+                    <p className="text-xs text-slate-500">Append the Genie space's example questions to the tool description for supervisor routing (default: off)</p>
                   </div>
                 </label>
               </div>

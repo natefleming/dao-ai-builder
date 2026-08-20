@@ -392,6 +392,9 @@ function AgentModal({
     modelKey: '',
     genieRoomRef: '',              // reference key into resources.genie_rooms
     genieTimeoutSeconds: '',       // optional; blank = dao-ai default (300)
+    // dao-ai 0.2.11+: Genie-brain-under-supervisor handback. 'default' = null
+    // (hand back), 'true'/'false' set it explicitly. Only meaningful for genie.
+    handoff: 'default' as 'default' | 'true' | 'false',
     // dao-ai 0.2.x: cap LLM calls (blank = unset) and mark internal/helper agents.
     callLimit: '',
     internal: false,
@@ -591,6 +594,7 @@ function AgentModal({
         promptRef,
         prompt: inlinePrompt,
         handoffPrompt: editingAgent.handoff_prompt || '',
+        handoff: editingAgent.handoff === true ? 'true' as const : editingAgent.handoff === false ? 'false' as const : 'default' as const,
         selectedTools: selectedToolsList,
         selectedGuardrails: selectedGuardrailsList,
         selectedMiddleware: selectedMiddlewareList,
@@ -610,6 +614,7 @@ function AgentModal({
         promptRef,
         prompt: inlinePrompt,
         handoffPrompt: editingAgent.handoff_prompt || '',
+        handoff: editingAgent.handoff === true ? 'true' as const : editingAgent.handoff === false ? 'false' as const : 'default' as const,
         selectedTools: [...selectedToolsList],
         selectedGuardrails: [...selectedGuardrailsList],
         selectedMiddleware: [...selectedMiddlewareList],
@@ -633,6 +638,7 @@ function AgentModal({
         modelKey: '',
         genieRoomRef: '',
         genieTimeoutSeconds: '',
+        handoff: 'default' as 'default' | 'true' | 'false',
         callLimit: '',
         internal: false,
         promptRef: '',
@@ -700,6 +706,9 @@ function AgentModal({
       model: agentModel,
       prompt: promptValue,
       handoff_prompt: formData.handoffPrompt || undefined,
+      // dao-ai 0.2.11+: only emit handoff for a Genie-brain agent and only when
+      // set explicitly (default/null means "hand back under a supervisor").
+      ...(formData.modelSource === 'genie' && formData.handoff !== 'default' && { handoff: formData.handoff === 'true' }),
       tools: formData.selectedTools.map((key) => tools[key]).filter(Boolean),
       guardrails: formData.selectedGuardrails.map((key) => guardrails[key]).filter(Boolean),
       middleware: formData.selectedMiddleware.map((key) => middleware[key]).filter(Boolean),
@@ -734,6 +743,7 @@ function AgentModal({
     if (formData.modelKey !== initialFormData.modelKey) return true;
     if (formData.prompt !== initialFormData.prompt) return true;
     if (formData.handoffPrompt !== initialFormData.handoffPrompt) return true;
+    if (formData.handoff !== initialFormData.handoff) return true;
     if (formData.promptRef !== initialFormData.promptRef) return true;
     if (promptSource !== initialPromptSource) return true;
     
@@ -822,6 +832,21 @@ function AgentModal({
                   value={formData.genieTimeoutSeconds}
                   onChange={(e: ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, genieTimeoutSeconds: e.target.value.replace(/[^0-9]/g, '') })}
                 />
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium text-slate-300 mb-1">Supervisor handoff</label>
+                  <Select
+                    options={[
+                      { value: 'default', label: 'Default — hand back to supervisor' },
+                      { value: 'true', label: 'Hand back (true)' },
+                      { value: 'false', label: 'Terminal sink — do not hand back (false)' },
+                    ]}
+                    value={formData.handoff}
+                    onChange={(e) => setFormData({ ...formData, handoff: e.target.value as 'default' | 'true' | 'false' })}
+                  />
+                  <p className="text-xs text-slate-500 mt-1">
+                    Only applies when this Genie space runs as a worker under a supervisor. Default hands control back so the supervisor can chain another agent in the same turn; choose <em>terminal sink</em> to end the turn after it answers.
+                  </p>
+                </div>
               </div>
             )}
           </div>

@@ -3,45 +3,28 @@ name = "dao-ai-builder"
 version = "0.1.0"
 description = "Visual configuration builder for Databricks Agent-Orchestrated Applications (DAO-AI) with real-time YAML generation, deployment management, and interactive testing"
 readme = "README.md"
-requires-python = ">=3.11"
+# dao-ai 0.2.11 raised its floor to Python >=3.12, so the app (which resolves
+# dao-ai from PyPI at deploy) must match or the Apps uv build fails to resolve.
+requires-python = ">=3.12"
 dependencies = [
     "flask>=3.0.0",
     "gunicorn>=21.0.0",
-    # Pin floor is the latest PyPI-resolvable release (0.2.5); the vendored JSON
-    # schema tracks local 0.2.6, which is not yet published. A deployed Databricks
-    # App resolves dao-ai from PyPI, so the floor must be resolvable. The 0.2.6
-    # changes the builder reflects are forward-compatible with 0.2.5:
-    #   * PromptModel cleanup — REMOVED `schema` and `tags` (and `full_name`);
-    #     a prompt is now just name/description/template. (extra="forbid", so
-    #     the builder must not emit schema/tags.)
-    #   * deploy_agent(target=...) renamed to deploy_agent(mode=...).
-    # Key changes since 0.1.99 the builder emits/consumes:
-    #   * Vector Search family renamed to "AI Search" (fully back-compat):
-    #     resources.vector_stores + retrievers are now discriminated on `type`
-    #     (`ai_search` default, or `lakebase_search` — new Lakebase Postgres
-    #     backend: LakebaseVectorStoreModel / LakebaseRetrieverModel). Tool
-    #     `type: vector_search` stays accepted as a legacy alias for `ai_search`.
-    #   * New tool types: `type: sql` (SqlToolModel: warehouse XOR database +
-    #     typed StatementParams) and `type: lakebase_search`.
-    #   * Every tool gains `audit` (AuditModel) + `call_limit` (ToolCallLimitModel).
-    #     AgentModel gains `call_limit` (ModelCallLimitModel) + `internal`, and
-    #     its `model` may be a GenieAgentModel (Genie space as the brain).
-    #   * AppModel: REMOVED `deployment_target` (now a deploy-action param /
-    #     ServingMode, not config) and `mcp_only`; ADDED `experiment`
-    #     (ExperimentModel), `manage_permissions`, `mcp_server`
-    #     (McpServerCapabilitiesModel), `resource_paths`, `workers`.
-    #   * PromptModel: MLflow Prompt Registry + GEPA removed — `template` is now
-    #     required and inline; `alias`/`version`/`auto_register`/`default_template`
-    #     are gone (and in 0.2.6 also `schema`/`tags`). OptimizationsModel dropped
-    #     `prompt_optimizations`.
-    #   * Misc: OrchestrationModel.interrupt_model, HandoffRouteModel fan-out
-    #     (`agents`/`join`), McpFunctionModel.capabilities, GenieToolModel.verbatim,
-    #     ParameterDeclarationModel.provided, InferenceEndpointModel.extra_params,
-    #     DatabaseModel.database_id.
-    # (Retained from earlier: 0.1.99 first-class shortcut tool types; 0.1.80 A2A
-    # v0.3; 0.1.77 ai_gateway; 0.1.75 resources.llms -> resources.models;
-    # 0.1.99 long_running -> background.)
-    "dao-ai>=0.2.5",
+    # Pin floor is the published release the vendored JSON schema tracks (0.2.11).
+    # A deployed Databricks App resolves dao-ai from PyPI, so the floor must be
+    # resolvable. Field-level changes since 0.2.10 the builder emits/consumes:
+    #   * InferenceEndpointModel: `ai_gateway` renamed to `use_ai_gateway` (dao-ai
+    #     keeps a YAML alias; the builder migrates old configs on import and emits
+    #     the new key). New `schema` (SchemaModel) qualifies a UC-securable model
+    #     name (e.g. system.ai.claude-sonnet-4-5) and requires use_ai_gateway.
+    #     use_ai_gateway now COMPOSES with use_responses_api (was rejected before).
+    #   * GenieToolModel: `verbatim` renamed to `preserve_question` (NO YAML alias
+    #     — the builder migrates on import). New `include_example_questions` (bool,
+    #     default false, opt-in in every case).
+    #   * AgentModel: new `handoff` (bool|null) — Genie-brain-under-supervisor
+    #     deterministic handback; distinct from handoff_prompt / swarm handoffs.
+    #   * ServicePrincipalModel: new optional `name` (display-name override) and
+    #     `description` (documentation only).
+    "dao-ai>=0.2.11",
     "databricks-sdk>=0.74.0",
     "mlflow[databricks]>=3.8.1",
     "python-dotenv>=1.2.1",
